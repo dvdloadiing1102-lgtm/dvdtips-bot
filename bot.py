@@ -40,13 +40,19 @@ def get_scores(sport_key):
         return []
 
 def save_bets(bets):
-    with open(BETS_FILE, 'w') as f:
-        json.dump(bets, f)
+    try:
+        with open(BETS_FILE, 'w') as f:
+            json.dump(bets, f)
+    except:
+        pass
 
 def load_bets():
     if os.path.exists(BETS_FILE):
-        with open(BETS_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(BETS_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return []
     return []
 
 def select_bets(odds_data, count=20):
@@ -149,6 +155,14 @@ async def postar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=reply_markup, parse_mode='Markdown')
         await update.message.reply_text("✅ 20 Bilhetes postados no canal!")
 
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == 'gen_bilhetes':
+        text, reply_markup = await create_tip_message()
+        if text:
+            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode='Markdown')
+
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler('start', start))
@@ -156,6 +170,7 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(button_handler))
     
     job_queue = application.job_queue
-    job_queue.run_daily(check_results, time=datetime.time(hour=23, minute=0))
+    if job_queue:
+        job_queue.run_daily(check_results, time=datetime.time(hour=23, minute=0))
     
     application.run_polling()
