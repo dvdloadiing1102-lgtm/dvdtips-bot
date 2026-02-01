@@ -18,6 +18,13 @@ TELEGRAM_TOKEN = "8197536655:AAHtSBxCgIQpkKj2TQq1cFGRHMoe9McjK_4"
 ODDS_API_KEY = "e8d200f52a843404bc434738f4433550"
 CHANNEL_ID = "@dvdtips1"
 
+# --- LISTAS DE LIGAS PRINCIPAIS ---
+MAJOR_LEAGUES = [
+    'soccer_epl', 'soccer_brazil_campeonato', 'soccer_spain_la_liga', 
+    'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_uefa_champs_league',
+    'basketball_nba'
+]
+
 # --- LISTAS DE JOGADORES PARA PROPS ---
 NBA_PLAYERS = ["LeBron James", "Stephen Curry", "Kevin Durant", "Giannis Antetokounmpo", "Luka Doncic", "Jayson Tatum", "Joel Embiid", "Nikola Jokic", "Anthony Davis", "Kyrie Irving"]
 SOCCER_PLAYERS = ["Vinícius Jr", "Mbappé", "Haaland", "Bellingham", "Harry Kane", "Salah", "Lewandowski", "Rodrygo", "De Bruyne", "Lautaro Martínez"]
@@ -28,7 +35,16 @@ def get_odds(sport_key):
     params = {'apiKey': ODDS_API_KEY, 'regions': 'eu', 'markets': 'h2h', 'oddsFormat': 'decimal'}
     try:
         response = requests.get(url, params=params )
-        return response.json() if response.status_code == 200 else []
+        if response.status_code == 200:
+            data = response.json()
+            now = datetime.datetime.now(datetime.timezone.utc)
+            future = now + datetime.timedelta(days=2)
+            filtered = [
+                event for event in data 
+                if now <= datetime.datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00')) <= future
+            ]
+            return filtered
+        return []
     except: return []
 
 def select_bets(odds_data, count=25):
@@ -37,7 +53,7 @@ def select_bets(odds_data, count=25):
         if event.get('bookmakers'):
             outcomes = event['bookmakers'][0]['markets'][0]['outcomes']
             for outcome in outcomes:
-                if 1.3 <= outcome['price'] <= 2.5:
+                if 1.3 <= outcome['price'] <= 2.8:
                     selected.append({
                         'id': event['id'],
                         'match': f"{event['home_team']} vs {event['away_team']}",
@@ -50,13 +66,15 @@ def select_bets(odds_data, count=25):
     return selected
 
 async def create_tip_message():
-    soccer = get_odds('soccer_epl') + get_odds('soccer_brazil_campeonato')
-    nba = get_odds('basketball_nba')
-    all_games = soccer + nba
-    random.shuffle(all_games)
+    all_events = []
+    for league in MAJOR_LEAGUES:
+        all_events.extend(get_odds(league))
     
-    bets = select_bets(all_games, count=25)
-    if len(bets) < 15: return None, None
+    random.shuffle(all_events)
+    bets = select_bets(all_events, count=25)
+    
+    if len(bets) < 10:
+        return "⚠️ **Aviso:** Poucos jogos de ligas principais encontrados para hoje. Tente novamente mais tarde!", None
 
     header = (
         "🏆 **DVD TIPS - ELITE DOS 20 BILHETES** 🏆\n"
@@ -65,6 +83,8 @@ async def create_tip_message():
     )
     
     body = ""
+    categories = ["🛡️ SEGURO", "⚽ ESCANTEIOS", "🟨 CARTÕES", "🏀 NBA PROPS", "💎 MISTO VALOR", "🔥 JACKPOT SUPREMO"]
+    
     for i in range(1, 21):
         b = bets[i-1]
         if i <= 3: # SEGURO
@@ -78,7 +98,7 @@ async def create_tip_message():
         elif 12 <= i <= 15: # NBA PROPS
             player = random.choice(NBA_PLAYERS)
             prop = random.choice(["Pontos", "Rebotes", "Assistências"])
-            val = random.randint(5, 28)
+            val = random.randint(15, 28)
             body += f"{i}️⃣ **🏀 NBA PLAYER PROPS**\n🏟️ {b['match']}\n🎯 {player}: +{val}.5 {prop} | ODD: {random.uniform(1.8, 2.0):.2f}\n"
         elif 16 <= i <= 19: # JOGADORES FUTEBOL
             player = random.choice(SOCCER_PLAYERS)
@@ -101,9 +121,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def postar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, reply_markup = await create_tip_message()
-    if text:
+    if reply_markup:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=reply_markup, parse_mode='Markdown')
-        await update.message.reply_text("✅ 20 Bilhetes postados no canal!")
+        await update.message.reply_text("✅ Bilhetes postados com sucesso!")
+    else:
+        await update.message.reply_text(text)
 
 if __name__ == '__main__':
     application = Application.builder().token(TELEGRAM_TOKEN).build()
