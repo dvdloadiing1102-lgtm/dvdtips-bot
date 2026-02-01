@@ -11,153 +11,176 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Application
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# --- CONFIGURAÇÃO DE LOGS ---
+# --- LOGGING ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- SUAS CHAVES ---
+# --- CONFIGURAÇÕES ---
 TELEGRAM_TOKEN = "8197536655:AAHtSBxCgIQpkKj2TQq1cFGRHMoe9McjK_4"
 ODDS_API_KEY = "e8d200f52a843404bc434738f4433550"
 CHANNEL_ID = "@dvdtips1"
 
-# --- LISTAS ---
-# Adicionei mais ligas para garantir volume
+# --- LIGAS PREMIUM (Filtrei para sair apenas jogos conhecidos) ---
 SOCCER_LEAGUES = [
-    'soccer_epl', 'soccer_brazil_campeonato', 'soccer_spain_la_liga', 
+    'soccer_brazil_campeonato', 'soccer_epl', 'soccer_spain_la_liga', 
     'soccer_italy_serie_a', 'soccer_germany_bundesliga', 'soccer_uefa_champs_league',
-    'soccer_france_ligue_one', 'soccer_portugal_primeira_liga', 'soccer_netherlands_eredivisie'
+    'soccer_france_ligue_one', 'soccer_portugal_primeira_liga'
 ]
 BASKETBALL_LEAGUES = ['basketball_nba']
 MAJOR_LEAGUES = SOCCER_LEAGUES + BASKETBALL_LEAGUES
 
-NBA_PLAYERS = ["LeBron James", "Stephen Curry", "Kevin Durant", "Giannis Antetokounmpo", "Luka Doncic", "Jayson Tatum", "Joel Embiid", "Nikola Jokic"]
-SOCCER_PLAYERS = ["Vinícius Jr", "Mbappé", "Haaland", "Bellingham", "Harry Kane", "Salah", "Lewandowski", "Lautaro Martínez"]
-
-# --- SERVIDOR FALSO (RENDER) ---
+# --- SERVIDOR FALSO (Para o Render não desligar) ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Bot Online e Filtrado! 🚀"
+def home(): return "🤖 Bot DVD TIPS - Operando em Modo Realista!"
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# --- FUNÇÕES INTELIGENTES ---
+# --- FUNÇÕES DE INTELIGÊNCIA ---
 
-def get_today_str():
-    """Retorna a data de HOJE no Brasil (formato YYYY-MM-DD)"""
-    tz = pytz.timezone('America/Sao_Paulo')
-    return datetime.datetime.now(tz).strftime('%Y-%m-%d')
+def get_brazil_time():
+    """Retorna data e hora atuais no Brasil"""
+    return datetime.datetime.now(pytz.timezone('America/Sao_Paulo'))
 
 def get_odds(sport_key):
+    # Pedimos Odds de Vencedor (h2h) e Totais (Over/Under)
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {'apiKey': ODDS_API_KEY, 'regions': 'eu', 'markets': 'h2h', 'oddsFormat': 'decimal'}
+    params = {'apiKey': ODDS_API_KEY, 'regions': 'eu', 'markets': 'h2h,totals', 'oddsFormat': 'decimal'}
     try:
         response = requests.get(url, params=params)
         return response.json() if response.status_code == 200 else []
     except: return []
 
-def select_bets(odds_data):
-    soccer_bets, nba_bets = [], []
-    today_br = get_today_str()
+def process_bets(odds_data):
+    """Processa e classifica as melhores apostas reais"""
+    bets = []
+    now_br = get_brazil_time()
+    # Aceitamos jogos das próximas 24h
+    limit_time = now_br + datetime.timedelta(hours=24)
     
     for event in odds_data:
-        # --- FILTRO RIGOROSO DE DATA ---
-        # A API manda data assim: 2023-10-27T19:00:00Z
+        # --- FILTRO DE TEMPO ---
         try:
-            # Converte string ISO para objeto data
-            event_date_utc = datetime.datetime.strptime(event['commence_time'], "%Y-%m-%dT%H:%M:%SZ")
-            # Ajusta fuso para Brasil (-3h)
-            event_date_br = event_date_utc - datetime.timedelta(hours=3)
-            # Transforma em string YYYY-MM-DD
-            event_date_str = event_date_br.strftime('%Y-%m-%d')
+            # Converte horário da API (UTC) para objeto datetime
+            event_time_utc = datetime.datetime.strptime(event['commence_time'], "%Y-%m-%dT%H:%M:%SZ")
+            event_time_utc = event_time_utc.replace(tzinfo=pytz.utc) # Avisa que é UTC
             
-            # SE A DATA DO JOGO NÃO FOR HOJE, PULA O JOGO
-            if event_date_str != today_br:
+            # Converte para Brasil
+            event_time_br = event_time_utc.astimezone(pytz.timezone('America/Sao_Paulo'))
+            
+            # Se o jogo já passou ou é daqui a mais de 24h, ignora
+            if event_time_br < now_br or event_time_br > limit_time:
                 continue
-        except:
-            continue # Se der erro na data, ignora o jogo por segurança
+        except: continue
 
         if not event.get('bookmakers'): continue
         
-        # Seleciona ODD
-        outcomes = event['bookmakers'][0]['markets'][0]['outcomes']
-        selected = None
-        for o in outcomes:
-            if 1.25 <= o['price'] <= 2.90: # Ajustei levemente o range
-                selected = o
-                break
+        match_name = f"{event['home_team']} x {event['away_team']}"
+        sport = event['sport_key']
+        markets = event['bookmakers'][0]['markets']
         
-        if selected:
-            bet = {
-                'match': f"{event['home_team']} x {event['away_team']}",
-                'selection': selected['name'],
-                'odd': selected['price'],
-                'sport': event['sport_key']
-            }
-            if 'basketball' in event['sport_key']: nba_bets.append(bet)
-            else: soccer_bets.append(bet)
+        for market in markets:
+            # 1. QUEM VENCE (Moneyline)
+            if market['key'] == 'h2h':
+                for outcome in market['outcomes']:
+                    odd = outcome['price']
+                    # Só pegamos odds que fazem sentido (entre 1.25 e 2.50)
+                    if 1.25 <= odd <= 2.50:
+                        # Classificação de Risco
+                        if odd <= 1.50: cat = "🧱 TIJOLINHO (Segurança)"
+                        elif odd <= 1.90: cat = "🧠 BET INTELIGENTE"
+                        else: cat = "🔥 OUSADIA (Valor)"
+                        
+                        bets.append({
+                            'match': match_name,
+                            'selection': f"Vencer: {outcome['name']}",
+                            'odd': odd,
+                            'category': cat,
+                            'sport': "🏀 BASQUETE" if 'basketball' in sport else "⚽ FUTEBOL"
+                        })
             
-    return soccer_bets, nba_bets
+            # 2. OVER GOLS/PONTOS
+            elif market['key'] == 'totals':
+                for outcome in market['outcomes']:
+                    if "Over" in outcome['name'] and 1.50 <= outcome['price'] <= 2.10:
+                        lbl = "Pontos" if 'basketball' in sport else "Gols"
+                        bets.append({
+                            'match': match_name,
+                            'selection': f"Mais de {outcome['point']} {lbl}",
+                            'odd': outcome['price'],
+                            'category': "📊 ESTATÍSTICA (Over)",
+                            'sport': "🏀 BASQUETE" if 'basketball' in sport else "⚽ FUTEBOL"
+                        })
+
+    return bets
 
 async def create_tip_message():
     all_events = []
-    # Busca em todas as ligas
+    # Busca nas ligas principais
     for league in MAJOR_LEAGUES: all_events.extend(get_odds(league))
     
-    # Filtra só os de hoje
-    soccer, nba = select_bets(all_events)
+    valid_bets = process_bets(all_events)
     
-    if (len(soccer) + len(nba)) < 3: return f"⚠️ <b>Aviso:</b> Encontrei poucos jogos confirmados para HOJE ({get_today_str()}). A API pode estar atualizando.", None
+    if not valid_bets:
+        return f"⚠️ <b>Status:</b> A API não retornou jogos confiáveis para as próximas 24h. Tente mais tarde.", None
 
-    pool_soccer, pool_nba = soccer * 10, nba * 10
-    random.shuffle(pool_soccer); random.shuffle(pool_nba)
+    # Embaralha e seleciona os melhores (Máximo 15 para não ficar polúido)
+    random.shuffle(valid_bets)
+    selected_tips = valid_bets[:15]
     
-    body = (
-        "🏆 <b>DVD TIPS - ELITE DOS 20 BILHETES</b> 🏆\n"
-        f"📅 <b>JOGOS DE HOJE: {datetime.datetime.now(pytz.timezone('America/Sao_Paulo')).strftime('%d/%m/%Y')}</b>\n"
+    # Ordena: Futebol primeiro, depois Basquete
+    selected_tips.sort(key=lambda x: x['sport'], reverse=True)
+
+    header = (
+        "🏆 <b>DVD TIPS - ANÁLISE PROFISSIONAL</b> 🏆\n"
+        f"📅 <b>DATA: {get_brazil_time().strftime('%d/%m/%Y')}</b>\n"
         "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
     )
     
-    for i in range(1, 21):
-        bet, cat, text = None, "", ""
-        
-        if 12 <= i <= 15 and pool_nba:
-            bet = pool_nba.pop(0)
-            cat = "🏀 NBA PROPS"
-            text = f"🎯 {random.choice(NBA_PLAYERS)}: +{random.randint(15,28)}.5 Pontos"
-        elif pool_soccer:
-            bet = pool_soccer.pop(0)
-            if i <= 3: cat, text = "🛡️ BILHETE SEGURO", f"🎯 {bet['selection']} ML"
-            elif 4 <= i <= 7: cat, text = "⚽ ESCANTEIOS", f"🎯 +{random.choice(['8.5','9.5'])} Cantos"
-            elif 8 <= i <= 11: cat, text = "🟨 CARTÕES", "🎯 +3.5 Cartões"
-            elif 16 <= i <= 19: cat, text = "🎯 FINALIZAÇÕES", f"🎯 {random.choice(SOCCER_PLAYERS)}: +1.5 Chutes ao Gol"
-            else: cat, text = "💎 MISTO VALOR", f"🎯 {bet['selection']}"
-        
-        if not bet: continue
-        
-        body += f"{i}️⃣ <b>{cat}</b>\n🏟️ {bet['match']}\n{text} | ODD: {bet['odd']:.2f}\n"
-        
-        if i == 20:
-            jackpot_odd = random.uniform(25.0, 30.0)
-            body += f"──────────────────\n🔥 <b>BILHETE JACKPOT SUPREMO</b> 🔥\n📈 <b>ODD TOTAL: {jackpot_odd:.2f}</b>\n💰 Stake: 0.2u (Lucro Alto)\n"
-        else:
-            body += "──────────────────\n"
+    body = ""
+    acumulada_odd = 1.0
+    
+    for i, bet in enumerate(selected_tips, 1):
+        body += (
+            f"{i}️⃣ <b>{bet['category']}</b>\n"
+            f"🏟️ {bet['match']}\n"
+            f"🎯 {bet['selection']} | <b>ODD: {bet['odd']:.2f}</b>\n"
+            "──────────────────\n"
+        )
+        # Calcula a odd da acumulada (simulação)
+        if i <= 5: acumulada_odd *= bet['odd']
 
-    markup = InlineKeyboardMarkup([[InlineKeyboardButton("📲 APOSTAR NA BETANO", url="https://www.betano.bet.br")], [InlineKeyboardButton("📲 APOSTAR NA BET365", url="https://www.bet365.com")]])
-    return body + "\n🚀 <b>Aposte agora nos links abaixo:</b>", markup
+    # Se tiver pelo menos 3 jogos, mostra sugestão de tripla/múltipla
+    if len(selected_tips) >= 3:
+        jackpot_msg = (
+            f"\n🚀 <b>SUGESTÃO DE MÚLTIPLA (TOP 5):</b>\n"
+            f"📈 <b>ODD TOTAL: {acumulada_odd:.2f}</b>\n"
+            "💰 <i>Gestão recomendada: 0.5% da banca</i>\n"
+        )
+        body += jackpot_msg
+
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📲 APOSTAR NA BETANO", url="https://www.betano.bet.br")],
+        [InlineKeyboardButton("📲 APOSTAR NA BET365", url="https://www.bet365.com")]
+    ])
+    
+    footer = "\n⚠️ <i>As odds podem variar. Aposte com responsabilidade.</i>"
+    
+    return header + body + footer, markup
 
 # --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 <b>Bot Online!</b> Filtrando jogos de HOJE (Brasil).", parse_mode='HTML')
+    await update.message.reply_text("🤖 <b>Bot Online e Atualizado!</b>\nUse /postar para gerar a lista do dia.", parse_mode='HTML')
 
 async def postar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text(f"⏳ Buscando jogos de hoje ({get_today_str()})...", parse_mode='HTML')
+    msg = await update.message.reply_text("⏳ <b>Analisando mercado...</b>", parse_mode='HTML')
     try:
         text, markup = await create_tip_message()
         if markup:
             await context.bot.send_message(CHANNEL_ID, text, reply_markup=markup, parse_mode='HTML', disable_web_page_preview=True)
-            await msg.edit_text("✅ Postado!")
+            await msg.edit_text("✅ <b>Lista enviada para o canal!</b>", parse_mode='HTML')
         else: await msg.edit_text(text, parse_mode='HTML')
-    except Exception as e: await msg.edit_text(f"Erro: {e}")
+    except Exception as e: await msg.edit_text(f"❌ Erro: {e}")
 
 async def auto_post(app):
     text, markup = await create_tip_message()
@@ -165,13 +188,18 @@ async def auto_post(app):
 
 async def post_init(application: Application):
     scheduler = AsyncIOScheduler()
+    # Agenda para 11:00 da manhã (Horário de Brasília)
     scheduler.add_job(auto_post, 'cron', hour=11, minute=0, timezone=pytz.timezone('America/Sao_Paulo'), args=[application])
     scheduler.start()
 
 if __name__ == '__main__':
+    # Inicia o servidor falso (Flask) para o Render
     threading.Thread(target=run_flask, daemon=True).start()
+    
+    # Inicia o Bot
     application = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('postar', postar_manual))
-    print("🤖 Bot Rodando com Filtro BR...")
+    
+    print("🤖 Bot DVD TIPS Rodando (Modo Pro)...")
     application.run_polling()
