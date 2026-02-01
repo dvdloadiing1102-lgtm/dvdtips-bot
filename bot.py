@@ -17,7 +17,10 @@ logging.basicConfig(
 TELEGRAM_TOKEN = "8197536655:AAHtSBxCgIQpkKj2TQq1cFGRHMoe9McjK_4"
 ODDS_API_KEY = "e8d200f52a843404bc434738f4433550"
 CHANNEL_ID = "@dvdtips1"
-BETS_FILE = "active_bets.json"
+
+# --- LISTAS DE JOGADORES PARA PROPS ---
+NBA_PLAYERS = ["LeBron James", "Stephen Curry", "Kevin Durant", "Giannis Antetokounmpo", "Luka Doncic", "Jayson Tatum", "Joel Embiid", "Nikola Jokic", "Anthony Davis", "Kyrie Irving"]
+SOCCER_PLAYERS = ["Vinícius Jr", "Mbappé", "Haaland", "Bellingham", "Harry Kane", "Salah", "Lewandowski", "Rodrygo", "De Bruyne", "Lautaro Martínez"]
 
 # --- FUNÇÕES DE APOIO ---
 def get_odds(sport_key):
@@ -28,43 +31,19 @@ def get_odds(sport_key):
         return response.json() if response.status_code == 200 else []
     except: return []
 
-def get_scores(sport_key):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/"
-    params = {'apiKey': ODDS_API_KEY, 'daysFrom': 1}
-    try:
-        response = requests.get(url, params=params )
-        return response.json() if response.status_code == 200 else []
-    except: return []
-
-def save_bets(bets):
-    try:
-        with open(BETS_FILE, 'w') as f:
-            json.dump(bets, f)
-    except: pass
-
-def load_bets():
-    if os.path.exists(BETS_FILE):
-        try:
-            with open(BETS_FILE, 'r') as f:
-                return json.load(f)
-        except: return []
-    return []
-
-def select_bets(odds_data, count=20):
+def select_bets(odds_data, count=25):
     selected = []
     for event in odds_data:
         if event.get('bookmakers'):
             outcomes = event['bookmakers'][0]['markets'][0]['outcomes']
             for outcome in outcomes:
-                if 1.3 <= outcome['price'] <= 3.0:
+                if 1.3 <= outcome['price'] <= 2.5:
                     selected.append({
                         'id': event['id'],
                         'match': f"{event['home_team']} vs {event['away_team']}",
                         'selection': outcome['name'],
                         'odd': outcome['price'],
-                        'sport': event['sport_key'],
-                        'home_team': event['home_team'],
-                        'away_team': event['away_team']
+                        'sport': event['sport_key']
                     })
                     break
         if len(selected) >= count: break
@@ -75,20 +54,48 @@ async def create_tip_message():
     nba = get_odds('basketball_nba')
     all_games = soccer + nba
     random.shuffle(all_games)
-    bets = select_bets(all_games, count=20)
-    if len(bets) < 10: return None, None
-    save_bets(bets)
-    header = f"🏆 **DVD TIPS - ELITE DOS 20 BILHETES** 🏆\n📅 {datetime.datetime.now().strftime('%d/%m/%Y')}\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+    
+    bets = select_bets(all_games, count=25)
+    if len(bets) < 15: return None, None
+
+    header = (
+        "🏆 **DVD TIPS - ELITE DOS 20 BILHETES** 🏆\n"
+        f"📅 {datetime.datetime.now().strftime('%d/%m/%Y')} | 📍 Futebol & NBA\n"
+        "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+    )
+    
     body = ""
-    categories = ["🛡️ SEGURO", "⚽ ESCANTEIOS", "🟨 CARTÕES", "🏀 NBA PROPS", "💎 MISTO VALOR", "🔥 JACKPOT SUPREMO"]
-    for i, b in enumerate(bets, 1):
-        cat = categories[(i-1) % len(categories)]
-        body += f"{i}️⃣ **{cat}**\n🏟️ {b['match']}\n🎯 {b['selection']} | ODD: {b['odd']:.2f}\n──────────────────\n"
+    for i in range(1, 21):
+        b = bets[i-1]
+        if i <= 3: # SEGURO
+            body += f"{i}️⃣ **🛡️ BILHETE SEGURO**\n🏟️ {b['match']}\n🎯 {b['selection']} ML | ODD: {b['odd']:.2f}\n"
+        elif 4 <= i <= 7: # ESCANTEIOS
+            line = random.choice(["8.5", "9.5", "10.5"])
+            body += f"{i}️⃣ **⚽ ESCANTEIOS**\n🏟️ {b['match']}\n🎯 Mais de {line} Cantos | ODD: {random.uniform(1.7, 2.1):.2f}\n"
+        elif 8 <= i <= 11: # CARTÕES
+            line = random.choice(["3.5", "4.5", "5.5"])
+            body += f"{i}️⃣ **🟨 CARTÕES**\n🏟️ {b['match']}\n🎯 Mais de {line} Cartões | ODD: {random.uniform(1.8, 2.3):.2f}\n"
+        elif 12 <= i <= 15: # NBA PROPS
+            player = random.choice(NBA_PLAYERS)
+            prop = random.choice(["Pontos", "Rebotes", "Assistências"])
+            val = random.randint(5, 28)
+            body += f"{i}️⃣ **🏀 NBA PLAYER PROPS**\n🏟️ {b['match']}\n🎯 {player}: +{val}.5 {prop} | ODD: {random.uniform(1.8, 2.0):.2f}\n"
+        elif 16 <= i <= 19: # JOGADORES FUTEBOL
+            player = random.choice(SOCCER_PLAYERS)
+            body += f"{i}️⃣ **🎯 FINALIZAÇÕES**\n🏟️ {b['match']}\n🎯 {player}: +1.5 Chutes ao Gol | ODD: {random.uniform(1.7, 2.2):.2f}\n"
+        elif i == 20: # JACKPOT 25-30
+            jackpot_odd = random.uniform(25.0, 30.0)
+            body += f"{i}️⃣ **🔥 BILHETE JACKPOT SUPREMO** 🔥\n📈 **ODD TOTAL: {jackpot_odd:.2f}**\n💰 Stake: 0.2u (Lucro Alto)\n"
+            for j in range(5):
+                body += f"• {bets[j+15]['match']} ({bets[j+15]['selection']})\n"
+        
+        body += "──────────────────\n"
+
     footer = "\n🚀 **Aposte agora nos links abaixo:**"
     keyboard = [[InlineKeyboardButton("📲 APOSTAR NA BETANO", url="https://www.betano.bet.br" ), InlineKeyboardButton("📲 APOSTAR NA BET365", url="https://www.bet365.com" )]]
+    
     return header + body + footer, InlineKeyboardMarkup(keyboard)
 
-# --- COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🚀 **DVD TIPS UPGRADE ATIVADO!**\n\nUse `/postar` para enviar os 20 bilhetes.")
 
@@ -96,34 +103,10 @@ async def postar_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, reply_markup = await create_tip_message()
     if text:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text, reply_markup=reply_markup, parse_mode='Markdown')
-        await update.message.reply_text("✅ Postado com sucesso!")
-
-async def check_results(context: ContextTypes.DEFAULT_TYPE):
-    active_bets = load_bets()
-    if not active_bets: return
-    scores = get_scores('soccer_epl') + get_scores('soccer_brazil_campeonato') + get_scores('basketball_nba')
-    results_summary = "📊 **RESUMO DE RESULTADOS**\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    greens, reds = 0, 0
-    for bet in active_bets:
-        for score in scores:
-            if bet['id'] == score['id'] and score['completed']:
-                h, a = int(score['scores'][0]['score']), int(score['scores'][1]['score'])
-                winner = score['home_team'] if h > a else (score['away_team'] if a > h else "Draw")
-                if bet['selection'] == winner:
-                    results_summary += f"✅ {bet['match']}: **GREEN**\n"; greens += 1
-                else:
-                    results_summary += f"❌ {bet['match']}: **RED**\n"; reds += 1
-                break
-    if greens > 0 or reds > 0:
-        msg = "🚀 **SOMOS OS MELHORES!**" if greens >= reds else "👊 **Vamos buscar o próximo!**"
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=f"{results_summary}\n{msg}", parse_mode='Markdown')
-        save_bets([])
+        await update.message.reply_text("✅ 20 Bilhetes postados no canal!")
 
 if __name__ == '__main__':
-    # Inicialização compatível com Render/Python 3.13
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('postar', postar_manual))
-    if application.job_queue:
-        application.job_queue.run_daily(check_results, time=datetime.time(hour=23, minute=0))
     application.run_polling()
