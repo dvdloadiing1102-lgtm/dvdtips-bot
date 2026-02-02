@@ -26,7 +26,7 @@ if not TELEGRAM_TOKEN:
     print("ERRO CRÍTICO: Token não configurado!")
     sys.exit()
 
-# Estados do Fluxo
+# Estados
 (SELECT_ACTION, GASTO_VALOR, GASTO_CAT, GASTO_DESC, GANHO_VALOR, GANHO_CAT, NEW_CAT_NAME, NEW_CAT_TYPE, DEL_ID, CONFIRM_DEL_CAT, SET_GOAL_VAL) = range(11)
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -46,11 +46,10 @@ class FinanceDatabase:
             c.execute("""CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, telegram_id INTEGER UNIQUE, username TEXT)""")
             c.execute("""CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, cat_type TEXT DEFAULT 'expense', goal_limit REAL DEFAULT 0)""")
             c.execute("""CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY, user_id INTEGER, type TEXT, amount REAL, category TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-            try: c.execute("ALTER TABLE categories ADD COLUMN goal_limit REAL DEFAULT 0")
+            try: c.execute("ALTER TABLE categories ADD COLUMN goal_limit REAL DEFAULT 0"); conn.commit()
             except: pass
-            try: c.execute("ALTER TABLE categories ADD COLUMN cat_type TEXT DEFAULT 'expense'")
+            try: c.execute("ALTER TABLE categories ADD COLUMN cat_type TEXT DEFAULT 'expense'"); conn.commit()
             except: pass
-            conn.commit()
 
     def get_user_id(self, telegram_id, username):
         with self.get_connection() as conn:
@@ -102,7 +101,7 @@ class FinanceBot:
             month = datetime.now().strftime('%Y-%m')
             spent = c.execute("SELECT SUM(amount) FROM transactions WHERE user_id = ? AND category = ? AND type = 'expense' AND strftime('%Y-%m', created_at) = ?", (uid, cat_name, month)).fetchone()[0] or 0
             total = spent + added_amount
-            if total > limit: return f"⚠️ <b>ALERTA:</b> Meta estourada em {cat_name}!"
+            if total > limit: return f"⚠️ <b>ALERTA:</b> Meta de {cat_name} estourada!"
             return None
 
     def delete_category(self, uid, name, cat_type):
@@ -160,7 +159,7 @@ class FinanceBot:
         sizes = list(filtered_cats.values())
         plt.figure(figsize=(6, 6))
         plt.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=140)
-        plt.title('Distribuição')
+        plt.title('Gastos')
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
         buf.seek(0)
@@ -182,7 +181,7 @@ class FinanceBot:
         doc = SimpleDocTemplate(filename, pagesize=A4)
         elements = []
         styles = getSampleStyleSheet()
-        elements.append(Paragraph("Extrato Financeiro", styles['Heading1']))
+        elements.append(Paragraph("Extrato", styles['Heading1']))
         elements.append(Spacer(1, 20))
         data = [["Tipo", "Valor", "Categoria", "Descricao"]]
         for r in rows:
@@ -195,12 +194,8 @@ class FinanceBot:
 
 bot_logic = FinanceBot()
 
-# --- FUNÇÃO IMPORTANTE (MOVIDA PARA CIMA PARA EVITAR ERRO) ---
-async def start_new_cat_flow_from_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("✍️ <b>Digite o nome da nova categoria:</b>", parse_mode=ParseMode.HTML)
-    return NEW_CAT_NAME
+# --- FUNÇÕES HANDLERS (DEFINIDAS PRIMEIRO PARA EVITAR ERRO) ---
 
-# --- MENUS ---
 def get_main_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("📉 NOVO GASTO", callback_data='start_gasto'), InlineKeyboardButton("📈 NOVO GANHO", callback_data='start_ganho')],
@@ -218,115 +213,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_ACTION
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+    query = update.callback_query; await query.answer()
     await query.edit_message_text("🏠 <b>Menu Principal</b>", reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.HTML)
     return SELECT_ACTION
 
-async def action_files_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📄 PDF", callback_data='action_pdf'), InlineKeyboardButton("📊 Excel (CSV)", callback_data='action_csv')], [InlineKeyboardButton("🔙 Voltar", callback_data='main_menu')]]
-    await update.callback_query.edit_message_text("📂 Escolha o formato:", reply_markup=InlineKeyboardMarkup(keyboard))
-    return SELECT_ACTION
-
-# --- FLUXO GASTO ---
-async def start_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("💸 <b>NOVO GASTO</b>\n\nDigite o valor (ex: 50.00):", parse_mode=ParseMode.HTML)
-    return GASTO_VALOR
-
-async def receive_gasto_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        val = float(update.message.text.replace(',', '.'))
-        context.user_data['temp_valor'] = val
-        uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
-        cats = bot_logic.get_categories(uid, 'expense')
-        keyboard = []
-        row = []
-        for c in cats:
-            row.append(InlineKeyboardButton(c, callback_data=f"cat_{c}"))
-            if len(row) == 2: keyboard.append(row); row = []
-        if row: keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("➕ Criar Categoria", callback_data='create_new_cat_flow')])
-        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data='cancel')])
-        await update.message.reply_text(f"Valor: R$ {val:.2f}\n<b>Selecione a Categoria de Gasto:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
-        return GASTO_CAT
-    except: await update.message.reply_text("❌ Valor inválido."); return GASTO_VALOR
-
-async def receive_gasto_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    data = query.data
-    if data == 'cancel': return await back_to_menu(update, context)
-    if data == 'create_new_cat_flow': 
-        await query.edit_message_text("✍️ <b>Digite o nome:</b>", parse_mode=ParseMode.HTML)
-        return NEW_CAT_NAME
-        
-    context.user_data['temp_cat'] = data.replace("cat_", "")
-    await query.edit_message_text("📝 Digite a descrição ou Pule:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Pular", callback_data='skip_desc')]]))
-    return GASTO_DESC
-
-async def receive_gasto_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        desc = "Gasto"; uid = update.callback_query.from_user.id; uname = update.callback_query.from_user.username; reply_func = update.callback_query.edit_message_text
-    else:
-        desc = update.message.text; uid = update.effective_user.id; uname = update.effective_user.username; reply_func = update.message.reply_text
-    
-    real_uid = bot_logic.initialize_user(uid, uname)
-    val = context.user_data['temp_valor']
-    cat = context.user_data['temp_cat']
-    alert = bot_logic.check_goal(real_uid, cat, val)
-    bot_logic.add_transaction(real_uid, "expense", val, cat, desc)
-    
-    msg = f"✅ <b>Gasto Salvo!</b>\nR$ {val:.2f} em {cat}."
-    if alert: msg += f"\n\n{alert}"
-    await reply_func(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
-    return SELECT_ACTION
-
-# --- FLUXO GANHO ---
-async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("💰 <b>NOVO GANHO</b>\nDigite o valor:", parse_mode=ParseMode.HTML)
-    return GANHO_VALOR
-
-async def receive_ganho_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        val = float(update.message.text.replace(',', '.'))
-        context.user_data['temp_valor'] = val
-        uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
-        cats = bot_logic.get_categories(uid, 'income')
-        keyboard = []
-        row = []
-        for c in cats:
-            row.append(InlineKeyboardButton(c, callback_data=f"inc_{c}"))
-            if len(row) == 2: keyboard.append(row); row = []
-        if row: keyboard.append(row)
-        keyboard.append([InlineKeyboardButton("➕ Criar Categoria", callback_data='create_new_cat_flow')])
-        await update.message.reply_text("Fonte:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return GANHO_CAT
-    except: await update.message.reply_text("❌ Inválido."); return GANHO_VALOR
-
-async def receive_ganho_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    if query.data == 'create_new_cat_flow': 
-        await query.edit_message_text("✍️ Nome da categoria:"); return NEW_CAT_NAME
-    
-    fonte = query.data.replace("inc_", "")
-    uid = query.from_user.id
-    bot_logic.add_transaction(bot_logic.initialize_user(uid, query.from_user.username), "income", context.user_data['temp_valor'], fonte, "Entrada")
-    await query.edit_message_text("✅ <b>Ganho Salvo!</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
-    return SELECT_ACTION
-
-# --- CATEGORIAS & METAS ---
-async def save_new_cat_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['new_cat_name'] = update.message.text
-    await update.message.reply_text("Tipo:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gasto", callback_data='type_expense'), InlineKeyboardButton("Ganho", callback_data='type_income')]]))
-    return NEW_CAT_TYPE
-
-async def save_new_cat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    cat_type = query.data.replace("type_", "")
-    name = context.user_data['new_cat_name']
-    uid = bot_logic.initialize_user(query.from_user.id, query.from_user.username)
-    bot_logic.add_category(uid, name, cat_type)
-    await query.edit_message_text(f"✅ Categoria <b>{name}</b> criada!", reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.HTML)
-    return SELECT_ACTION
+async def start_new_cat_flow_from_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("✍️ <b>Digite o nome da nova categoria:</b>", parse_mode=ParseMode.HTML)
+    return NEW_CAT_NAME
 
 async def view_cats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; uid = bot_logic.initialize_user(query.from_user.id, query.from_user.username)
@@ -363,7 +256,7 @@ async def cat_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text(f"🗑️ {cname} apagada.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data='back_cats')]]))
         return CONFIRM_DEL_CAT
     if data == 'set_goal':
-        await query.edit_message_text(f"🎯 Digite a meta para <b>{cname}</b> (ex: 500):", parse_mode=ParseMode.HTML)
+        await query.edit_message_text(f"🎯 Meta para <b>{cname}</b>:", parse_mode=ParseMode.HTML)
         return SET_GOAL_VAL
 
 async def save_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -374,11 +267,140 @@ async def save_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_logic.set_goal(uid, cname, val)
         await update.message.reply_text(f"✅ Meta de R$ {val} definida para {cname}!", reply_markup=get_main_menu_keyboard())
         return SELECT_ACTION
-    except: await update.message.reply_text("❌ Valor inválido."); return SELECT_ACTION
+    except: await update.message.reply_text("❌ Inválido."); return SELECT_ACTION
 
-# --- EXTRAS ---
-async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_document(open("finance_bot.db", "rb"), caption="📦 Backup")
+async def start_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("💸 <b>NOVO GASTO</b>\nDigite o valor:", parse_mode=ParseMode.HTML)
+    return GASTO_VALOR
+
+async def receive_gasto_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.replace(',', '.'))
+        context.user_data['temp_valor'] = val
+        uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
+        cats = bot_logic.get_categories(uid, 'expense')
+        keyboard = []
+        row = []
+        for c in cats:
+            row.append(InlineKeyboardButton(c, callback_data=f"cat_{c}"))
+            if len(row) == 2: keyboard.append(row); row = []
+        if row: keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("➕ Criar Categoria", callback_data='create_new_cat_flow')])
+        keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data='cancel')])
+        await update.message.reply_text(f"Valor: R$ {val:.2f}\n<b>Selecione a Categoria:</b>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.HTML)
+        return GASTO_CAT
+    except: await update.message.reply_text("❌ Inválido."); return GASTO_VALOR
+
+async def receive_gasto_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    data = query.data
+    if data == 'cancel': return await back_to_menu(update, context)
+    if data == 'create_new_cat_flow': 
+        await query.edit_message_text("✍️ <b>Nome:</b>", parse_mode=ParseMode.HTML)
+        return NEW_CAT_NAME
+    context.user_data['temp_cat'] = data.replace("cat_", "")
+    await query.edit_message_text("📝 Descrição:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Pular", callback_data='skip_desc')]]))
+    return GASTO_DESC
+
+async def receive_gasto_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        desc = "Gasto"; uid = update.callback_query.from_user.id; uname = update.callback_query.from_user.username; reply_func = update.callback_query.edit_message_text
+    else:
+        desc = update.message.text; uid = update.effective_user.id; uname = update.effective_user.username; reply_func = update.message.reply_text
+    real_uid = bot_logic.initialize_user(uid, uname)
+    val = context.user_data['temp_valor']
+    cat = context.user_data['temp_cat']
+    alert = bot_logic.check_goal(real_uid, cat, val)
+    bot_logic.add_transaction(real_uid, "expense", val, cat, desc)
+    msg = f"✅ <b>Gasto Salvo!</b>\nR$ {val:.2f} em {cat}."
+    if alert: msg += f"\n\n{alert}"
+    await reply_func(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
+    return SELECT_ACTION
+
+async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.edit_message_text("💰 <b>NOVO GANHO</b>\nValor:", parse_mode=ParseMode.HTML)
+    return GANHO_VALOR
+
+async def receive_ganho_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.replace(',', '.'))
+        context.user_data['temp_valor'] = val
+        uid = bot_logic.initialize_user(update.effective_user.id, update.effective_user.username)
+        cats = bot_logic.get_categories(uid, 'income')
+        keyboard = []
+        row = []
+        for c in cats:
+            row.append(InlineKeyboardButton(c, callback_data=f"inc_{c}"))
+            if len(row) == 2: keyboard.append(row); row = []
+        if row: keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("➕ Criar Categoria", callback_data='create_new_cat_flow')])
+        await update.message.reply_text("Fonte:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return GANHO_CAT
+    except: await update.message.reply_text("❌ Inválido."); return GANHO_VALOR
+
+async def receive_ganho_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    if query.data == 'create_new_cat_flow': 
+        await query.edit_message_text("✍️ Nome:"); return NEW_CAT_NAME
+    fonte = query.data.replace("inc_", "")
+    uid = query.from_user.id
+    bot_logic.add_transaction(bot_logic.initialize_user(uid, query.from_user.username), "income", context.user_data['temp_valor'], fonte, "Entrada")
+    await query.edit_message_text("✅ <b>Ganho Salvo!</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
+    return SELECT_ACTION
+
+async def save_new_cat_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['new_cat_name'] = update.message.text
+    await update.message.reply_text("Tipo:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Gasto", callback_data='type_expense'), InlineKeyboardButton("Ganho", callback_data='type_income')]]))
+    return NEW_CAT_TYPE
+
+async def save_new_cat_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; await query.answer()
+    cat_type = query.data.replace("type_", "")
+    name = context.user_data['new_cat_name']
+    uid = bot_logic.initialize_user(query.from_user.id, query.from_user.username)
+    bot_logic.add_category(uid, name, cat_type)
+    await query.edit_message_text(f"✅ Categoria <b>{name}</b> criada!", reply_markup=get_main_menu_keyboard(), parse_mode=ParseMode.HTML)
+    return SELECT_ACTION
+
+async def delete_cat_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    # Tratamento para o redirecionamento
+    if data == 'new_cat_btn':
+        await query.edit_message_text("✍️ <b>Digite o nome da nova categoria:</b>", parse_mode=ParseMode.HTML)
+        return NEW_CAT_NAME
+    if data == 'main_menu':
+        return await back_to_menu(update, context)
+
+    # Lógica de deleção
+    try:
+        _, cat_type, cat_name = data.split('_', 2)
+        uid = bot_logic.initialize_user(query.from_user.id, query.from_user.username)
+        bot_logic.delete_category(uid, cat_name, cat_type)
+        # Recarrega a lista
+        return await view_cats(update, context)
+    except:
+        await query.edit_message_text("❌ Erro.", reply_markup=get_main_menu_keyboard())
+    return CONFIRM_DEL_CAT
+
+# --- OUTROS MENUS ---
+async def action_files_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton("📄 PDF", callback_data='action_pdf'), InlineKeyboardButton("📊 Excel (CSV)", callback_data='action_csv')], [InlineKeyboardButton("🔙 Voltar", callback_data='main_menu')]]
+    await update.callback_query.edit_message_text("📂 Formato:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_ACTION
+
+async def view_extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    s = bot_logic.get_summary(bot_logic.initialize_user(update.callback_query.from_user.id, update.callback_query.from_user.username))
+    await update.callback_query.edit_message_text(f"📊 <b>RESUMO</b>\n🟢 R$ {s['income']:.2f}\n🔴 R$ {s['expense']:.2f}\n💰 <b>R$ {s['income']-s['expense']:.2f}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
+    return SELECT_ACTION
+
+async def view_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = bot_logic.initialize_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
+    buf = bot_logic.generate_chart(uid)
+    if buf: await update.callback_query.message.reply_photo(buf, caption="📊 Gastos")
+    else: await update.callback_query.answer("Sem dados.")
     return SELECT_ACTION
 
 async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -394,7 +416,7 @@ async def view_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT_ACTION
 
 async def view_lixeira(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("🗑️ Digite o ID para apagar:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data='main_menu')]]))
+    await update.callback_query.edit_message_text("🗑️ Digite o ID:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data='main_menu')]]))
     return DEL_ID
 
 async def confirm_del_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -405,16 +427,8 @@ async def confirm_del_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: pass
     return SELECT_ACTION
 
-async def view_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = bot_logic.initialize_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    buf = bot_logic.generate_chart(uid)
-    if buf: await update.callback_query.message.reply_photo(buf, caption="📊 Gastos")
-    else: await update.callback_query.answer("Sem dados.")
-    return SELECT_ACTION
-
-async def view_extrato(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = bot_logic.get_summary(bot_logic.initialize_user(update.callback_query.from_user.id, update.callback_query.from_user.username))
-    await update.callback_query.edit_message_text(f"📊 <b>RESUMO</b>\n🟢 R$ {s['income']:.2f}\n🔴 R$ {s['expense']:.2f}\n💰 <b>R$ {s['income']-s['expense']:.2f}</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data='main_menu')]]), parse_mode=ParseMode.HTML)
+async def backup_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_document(open("finance_bot.db", "rb"), caption="📦 Backup")
     return SELECT_ACTION
 
 async def action_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -432,21 +446,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app = Flask(__name__)
 @app.route('/')
 def home(): return "Bot Financeiro - ONLINE 🟢"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-def keep_alive_ping():
-    while True:
-        try: requests.get("http://127.0.0.1:10000")
+def run_flask(): app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+def keep_alive(): 
+    while True: 
+        try: requests.get("http://127.0.0.1:10000") 
         except: pass
         time.sleep(600)
 
 if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
-    threading.Thread(target=keep_alive_ping, daemon=True).start()
-    
+    threading.Thread(target=keep_alive, daemon=True).start()
     app_bot = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     conv = ConversationHandler(
@@ -464,6 +473,7 @@ if __name__ == '__main__':
                 CallbackQueryHandler(action_pdf, pattern='^action_pdf$'),
                 CallbackQueryHandler(action_csv, pattern='^action_csv$'),
                 CallbackQueryHandler(backup_db, pattern='^backup_db$'),
+                # AGORA VAI FUNCIONAR POIS A FUNÇÃO JÁ EXISTE
                 CallbackQueryHandler(start_new_cat_flow_from_menu, pattern='^new_cat_btn$'),
                 CallbackQueryHandler(back_to_menu, pattern='^main_menu$')
             ],
