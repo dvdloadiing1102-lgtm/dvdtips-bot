@@ -6,6 +6,7 @@ import random
 import os
 import pytz
 import threading
+import time
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, Application, CallbackQueryHandler
@@ -15,7 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- CONFIGURAÇÕES ---
-TELEGRAM_TOKEN = "8197536655:AAHtSBxCgIQpkKj2TQq1cFGRHMoe9McjK_4"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8197536655:AAHtSBxCgIQpkKj2TQq1cFGRHMoe9McjK_4")
 ODDS_API_KEY = "e8d200f52a843404bc434738f4433550"
 CHANNEL_ID = "@dvdtips1"
 
@@ -28,13 +29,24 @@ SOCCER_LEAGUES = [
 BASKETBALL_LEAGUES = ['basketball_nba']
 MAJOR_LEAGUES = SOCCER_LEAGUES + BASKETBALL_LEAGUES
 
-# --- SERVIDOR FALSO ---
+# --- SERVIDOR FALSO E ANTI-SONO ---
 app = Flask(__name__)
 @app.route('/')
 def home(): return "🤖 Bot DVD TIPS - Versão Premium Ativa!"
+
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+def keep_alive_ping():
+    while True:
+        try:
+            # O bot se auto-visita a cada 10 minutos para o Render não desligar
+            requests.get("http://127.0.0.1:10000")
+            logging.info("Ping de manutenção enviado.")
+        except:
+            pass
+        time.sleep(600)
 
 # --- FUNÇÕES API ---
 def get_brazil_time():
@@ -123,19 +135,14 @@ async def create_tip_message():
 # --- COMANDOS E MENU ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # MENU INTERATIVO (BOTÕES)
     keyboard = [
         [InlineKeyboardButton("📜 Postar Lista no Canal", callback_data='postar')],
         [InlineKeyboardButton("🦓 Caçar Zebras", callback_data='zebra'), InlineKeyboardButton("🎁 Bônus", callback_data='bonus')],
-        [InlineKeyboardButton("🧮 Calculadora de Lucro", callback_data='help_calc')],
-        [InlineKeyboardButton("🛡️ Calculadora de Cobertura", callback_data='help_hedge')]
+        [InlineKeyboardButton("🧮 Calc. Lucro", callback_data='help_calc'), InlineKeyboardButton("🛡️ Calc. Cobertura", callback_data='help_hedge')]
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    msg = (
-        "🤖 <b>PAINEL DVD TIPS v3.0</b>\n\n"
-        "Bem-vindo ao sistema de gestão.\n"
-        "Selecione uma opção abaixo:"
-    )
+    msg = "🤖 <b>PAINEL DVD TIPS v3.0</b>\n\nBem-vindo ao sistema de gestão.\nSelecione uma opção abaixo:"
+    
     if update.message: await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
     else: await update.callback_query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
@@ -156,7 +163,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == 'zebra':
         await query.edit_message_text("🦓 <b>Buscando zebras (Odds 3.00+)...</b>", parse_mode='HTML')
-        # (Lógica simplificada da zebra aqui para não estourar o código)
         all_events = []
         for league in MAJOR_LEAGUES: all_events.extend(get_odds(league))
         zebras = []
@@ -173,28 +179,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: await query.edit_message_text("❌ Nenhuma zebra hoje.\n/start para voltar.")
 
     elif data == 'bonus':
-        msg = (
-            "🎁 <b>PARCEIROS E BÔNUS</b> 🎁\n\n"
-            "🟢 <b>Bet365:</b> Ganhe até R$200 em créditos.\n"
-            "👉 bit.ly/seulink365\n\n"
-            "🟠 <b>Betano:</b> Bônus de 100% até R$500.\n"
-            "👉 bit.ly/seulinkbetano\n\n"
-            "<i>Use nossos links para apoiar o projeto!</i>"
-        )
+        msg = "🎁 <b>BÔNUS</b>\n\n🟢 <b>Bet365:</b> bit.ly/link\n🟠 <b>Betano:</b> bit.ly/link\n\n/start para voltar."
         await query.edit_message_text(msg, parse_mode='HTML')
 
     elif data == 'help_calc':
-        await query.edit_message_text("ℹ️ <b>COMO USAR:</b>\nDigite: `/calc [odd] [valor]`\n\nExemplo: `/calc 1.80 50`\n(Para saber quanto ganha apostando 50 reais na odd 1.80)", parse_mode='Markdown')
+        await query.edit_message_text("ℹ️ <b>COMO USAR:</b>\n`/calc 1.80 50`\n(Odd 1.80, Valor 50)", parse_mode='Markdown')
 
     elif data == 'help_hedge':
-        msg = (
-            "ℹ️ <b>COMO USAR A COBERTURA:</b>\n"
-            "Serve para calcular quanto apostar no contra-ataque para não perder dinheiro.\n\n"
-            "Digite: `/cobertura [ValorAposta1] [Odd1] [Odd2]`\n\n"
-            "Ex: `/cobertura 100 2.00 3.50`\n"
-            "(Apostei 100 na Odd 2.00, quanto apostar na Odd 3.50 pra salvar?)"
-        )
-        await query.edit_message_text(msg, parse_mode='HTML')
+        await query.edit_message_text("ℹ️ <b>COBERTURA:</b>\n`/cobertura 100 2.00 3.50`\n(Aposta 100 na Odd 2.00, cobrir na Odd 3.50)", parse_mode='Markdown')
 
 # --- CALCULADORAS ---
 async def calcular_lucro(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -206,31 +198,24 @@ async def calcular_lucro(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def calcular_cobertura(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        # Args: Valor1, Odd1, Odd2
         v1 = float(context.args[0].replace(',', '.'))
         o1 = float(context.args[1].replace(',', '.'))
         o2 = float(context.args[2].replace(',', '.'))
         
-        # Fórmula de Hedging (Para Zero Profit)
-        # Retorno 1 = v1 * o1
-        # Necessário apostar v2 tal que v2 * o2 = v1 + v2 (Breakeven) ou v1*o1 (Profit equal)
-        # Vamos calcular para recuperar o investimento total (v1 + v2)
-        
         v2 = (v1 * o1) / o2
         investimento_total = v1 + v2
-        retorno = v1 * o1 # ou v2 * o2 (são iguais)
+        retorno = v1 * o1 
         lucro = retorno - investimento_total
         
         msg = (
-            f"🛡️ <b>CÁLCULO DE COBERTURA</b>\n\n"
+            f"🛡️ <b>COBERTURA</b>\n\n"
             f"Aposta Principal: R$ {v1:.2f} (@{o1})\n"
-            f"Aposta de Cobertura: <b>R$ {v2:.2f}</b> (@{o2})\n\n"
-            f"💰 Investimento Total: R$ {investimento_total:.2f}\n"
-            f"🔄 Retorno (Qualquer resultado): R$ {retorno:.2f}\n"
-            f"📊 Resultado Final: {'🟢 Lucro' if lucro > 0 else '🔴 Prejuízo'} de R$ {lucro:.2f}"
+            f"Aposta Cobertura: <b>R$ {v2:.2f}</b> (@{o2})\n\n"
+            f"💰 Total investido: R$ {investimento_total:.2f}\n"
+            f"📊 Resultado: {'🟢 Lucro' if lucro > 0 else '🔴 Prejuízo'} de R$ {lucro:.2f}"
         )
         await update.message.reply_text(msg, parse_mode='HTML')
-    except: await update.message.reply_text("❌ Erro. Ex: `/cobertura 100 2.00 3.50`", parse_mode='Markdown')
+    except: await update.message.reply_text("Erro. Ex: `/cobertura 100 2.00 3.50`", parse_mode='Markdown')
 
 async def simular_alavancagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     banca = 50.00
@@ -252,18 +237,19 @@ async def post_init(application: Application):
     scheduler.start()
 
 if __name__ == '__main__':
+    # Threads para o servidor e o anti-sono
     threading.Thread(target=run_flask, daemon=True).start()
+    threading.Thread(target=keep_alive_ping, daemon=True).start()
     
     application = Application.builder().token(TELEGRAM_TOKEN).post_init(post_init).build()
     
     # HANDLERS
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CallbackQueryHandler(button_handler)) # Para os botões funcionarem
-    
-    application.add_handler(CommandHandler('postar', lambda u,c: start(u,c))) # Redireciona para o menu
+    application.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CommandHandler('postar', start)) # Atalho para o menu
     application.add_handler(CommandHandler('calc', calcular_lucro))
     application.add_handler(CommandHandler('cobertura', calcular_cobertura))
     application.add_handler(CommandHandler('alavancagem', simular_alavancagem))
     
-    print("🤖 Bot DVD TIPS v3.0 (Menu Interativo) Rodando...")
+    print("🤖 Bot DVD TIPS v3.0 Rodando...")
     application.run_polling()
