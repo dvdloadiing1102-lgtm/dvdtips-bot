@@ -1,5 +1,5 @@
-python-telegram-bot==21.9
+python-telegram-bot
+Flask
 requests
 APScheduler
 pytz
-Flask
