@@ -42,7 +42,7 @@ if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 # Estados para conversas interativas
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS (CORRIGIDO) =================
+# ================= BANCO DE DADOS =================
 def load_db():
     default = {
         "users": {}, 
@@ -330,7 +330,12 @@ async def gen_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.reply_text(f"🔑 Chave: `{key}`", parse_mode="Markdown")
 
 async def start_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔑 Digite sua chave VIP:")
+    # Se vier de um botão (Callback), precisa responder para não carregar eternamente
+    if update.callback_query:
+        await update.callback_query.answer()
+        
+    msg = update.effective_message
+    await msg.reply_text("🔑 Digite sua chave VIP:")
     return VIP_KEY
 
 async def handle_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -379,13 +384,15 @@ if __name__ == "__main__":
         fallbacks=[CommandHandler("cancel", cancel)]
     ))
     
+    # CORREÇÃO AQUI: CallbackQueryHandler usado corretamente
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("vip", start_vip), InlineKeyboardButton("🔑 Ativar VIP", callback_data="enter_key")],
+        entry_points=[
+            CommandHandler("vip", start_vip), 
+            CallbackQueryHandler(start_vip, pattern="^enter_key$")
+        ],
         states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]},
         fallbacks=[]
     ))
-    # Handler para o botão "Ativar VIP" quando fosse callback (removido do menu principal, mas mantido pra compatibilidade)
-    app.add_handler(CallbackQueryHandler(start_vip, pattern="^enter_key$"))
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
@@ -403,7 +410,7 @@ if __name__ == "__main__":
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    print("🤖 DVD TIPS V7.2 - ONLINE")
+    print("🤖 DVD TIPS V7.3 - ONLINE")
     
     async def main_wrapper():
         async with app:
