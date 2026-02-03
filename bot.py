@@ -19,10 +19,10 @@ except ImportError:
     import subprocess
     print("⚠️ Dependências não encontradas. Instalando...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-        print("✅ Dependências instaladas. Reinicie o script.")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot", "httpx", "google-generativeai", "aiohttp"])
+        print("✅ Dependências instaladas.")
     except Exception as e:
-        print(f"❌ Falha ao instalar: {e}")
+        print(f"❌ Falha: {e}")
     sys.exit(1)
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -31,7 +31,7 @@ API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
 PORT = int(os.environ.get("PORT", 10000))
-DB_FILE = "/var/data/dvd_tips_data.json"
+DB_FILE = "dvd_tips_data.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,27 +48,19 @@ if GEMINI_API_KEY:
 db_data = {}
 db_lock = asyncio.Lock()
 
-async def setup_database_path():
-    db_dir = os.path.dirname(DB_FILE)
-    if not os.path.exists(db_dir):
-        logger.info(f"Criando diretório: {db_dir}")
-        os.makedirs(db_dir)
-
 async def load_db():
     global db_data
-    await setup_database_path()
-    async with db_lock:
-        default_db = {"users": {}, "keys": {}, "api_cache": {}}
-        if not os.path.exists(DB_FILE):
-            db_data = default_db
-            return
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                db_data = json.load(f)
-            logger.info("DB carregado.")
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Erro ao carregar DB: {e}")
-            db_data = default_db
+    default_db = {"users": {}, "keys": {}, "api_cache": {}}
+    if not os.path.exists(DB_FILE):
+        db_data = default_db
+        return
+    try:
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            db_data = json.load(f)
+        logger.info("DB carregado.")
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Erro ao carregar DB: {e}")
+        db_data = default_db
 
 async def save_db():
     async with db_lock:
@@ -129,11 +121,15 @@ CACHE_TTL = 1800
 async def get_real_matches(force_refresh=False):
     cache = db_data.get("api_cache", {})
     if cache.get("timestamp") and not force_refresh:
-        last_fetch = datetime.fromisoformat(cache["timestamp"])
-        if (datetime.now() - last_fetch).total_seconds() < CACHE_TTL:
-            return cache.get("matches", [])
+        try:
+            last_fetch = datetime.fromisoformat(cache["timestamp"])
+            if (datetime.now() - last_fetch).total_seconds() < CACHE_TTL:
+                return cache.get("matches", [])
+        except:
+            pass
 
-    if not API_FOOTBALL_KEY: return []
+    if not API_FOOTBALL_KEY:
+        return []
 
     today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
     headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
@@ -147,7 +143,8 @@ async def get_real_matches(force_refresh=False):
             data = resp.json().get("response", [])
             VIP_LEAGUES = [39, 71, 72, 140, 61, 78, 135, 2, 3, 13, 11, 4, 9, 10]
             for game_data in data:
-                if game_data["league"]["id"] not in VIP_LEAGUES and len(matches) > 15: continue
+                if game_data["league"]["id"] not in VIP_LEAGUES and len(matches) > 15:
+                    continue
                 matches.append({
                     "match": f'{game_data["teams"]["home"]["name"]} vs {game_data["teams"]["away"]["name"]}',
                     "league": game_data["league"]["name"],
@@ -165,12 +162,14 @@ async def get_real_matches(force_refresh=False):
     return matches
 
 def generate_multiple(matches, size=4):
-    if not matches or len(matches) < size: return None
+    if not matches or len(matches) < size:
+        return None
     selection = matches[:size]
     return {"games": selection}
 
 async def ask_guru(text):
-    if not USE_GEMINI: return "Guru IA indisponível."
+    if not USE_GEMINI:
+        return "Guru IA indisponível."
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         prompt = f"Você é um especialista em apostas esportivas. Responda curto e direto (max 2 frases) sobre: {text}"
@@ -189,14 +188,16 @@ def get_main_keyboard():
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     async with db_lock:
         if user_id not in db_data["users"]:
             db_data["users"][user_id] = {"vip_expiry": None}
     await update.message.reply_text("👋 Bem-vindo!", reply_markup=get_main_keyboard())
 
 async def show_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     await update.message.reply_text("🔄 Buscando jogos...")
     matches = await get_real_matches()
     if not matches:
@@ -206,7 +207,8 @@ async def show_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def show_multiple(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     matches = await get_real_matches()
     multi = generate_multiple(matches)
     if multi and multi["games"]:
@@ -216,7 +218,8 @@ async def show_multiple(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Jogos insuficientes.")
 
 async def show_leagues(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     matches = await get_real_matches()
     if matches:
         leagues = sorted(list(set([m['league'] for m in matches])))
@@ -226,18 +229,26 @@ async def show_leagues(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Nenhuma liga encontrada.")
 
 async def guru_trigger(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     await update.message.reply_text("🤖 Qual é sua dúvida sobre apostas?")
     context.user_data['waiting_for_guru'] = True
 
 async def show_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if await check_flood(update): return
+    if await check_flood(update):
+        return
     user_id = str(update.effective_user.id)
     user_data = db_data["users"].get(user_id, {})
     vip_expiry = user_data.get("vip_expiry", "N/A")
     msg = f"🎫 **SEU STATUS**\n\n**ID:** `{user_id}`\n"
-    if vip_expiry and datetime.strptime(vip_expiry, "%Y-%m-%d") > datetime.now():
-        msg += f"**VIP:** Ativo até {vip_expiry}"
+    if vip_expiry:
+        try:
+            if datetime.strptime(vip_expiry, "%Y-%m-%d") > datetime.now():
+                msg += f"**VIP:** Ativo até {vip_expiry}"
+            else:
+                msg += "**VIP:** Expirado"
+        except:
+            msg += "**VIP:** Inativo"
     else:
         msg += "**VIP:** Inativo"
     await update.message.reply_text(msg)
@@ -256,7 +267,7 @@ async def activate_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     try:
         key_to_activate = context.args[0]
-    except IndexError:
+    except (IndexError, TypeError):
         await update.message.reply_text("Uso: `/ativar <chave>`")
         return
     async with db_lock:
@@ -341,20 +352,8 @@ async def main():
         await save_db()
         logger.info("Desligamento completo.")
 
-async def shutdown(sig, loop):
-    logger.info(f"Sinal recebido: {sig.name}")
-    tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    loop.stop()
-
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    signals = (signal.SIGHUP, signal.SIGTERM, signal.SIGINT)
-    for s in signals:
-        loop.add_signal_handler(s, lambda s=s: asyncio.create_task(shutdown(s, loop)))
     try:
-        loop.run_until_complete(main())
-    finally:
-        loop.close()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot finalizado pelo usuário.")
