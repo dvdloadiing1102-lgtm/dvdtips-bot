@@ -1,450 +1,325 @@
 import os
-import sqlite3
-import logging
 import sys
-import matplotlib
-matplotlib.use('Agg')
+import json
+import logging
+import uuid
+import threading
+import time
+import random
+import secrets
+import asyncio
+from datetime import datetime, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import matplotlib.pyplot as plt
-import io
-import csv
-from datetime import datetime
+# --- AUTO-INSTALAÇÃO DE DEPENDÊNCIAS ---
+try:
+    import httpx
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters, ConversationHandler
+except ImportError:
+    print("⚠️ Instalando dependências...")
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot", "flask", "matplotlib", "requests", "httpx"])
+    os.execv(sys.executable, ['python'] + sys.argv)
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters, ConversationHandler
-)
+# ================= CONFIGURAÇÃO =================
+TOKEN = os.getenv("BOT_TOKEN") # Coloque seu token no Render
+ADMIN_ID = os.getenv("ADMIN_ID") # Coloque SEU ID aqui para ser o dono
+RENDER_URL = os.getenv("RENDER_URL")
+DB_FILE = "dvd_tips.json"
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# ================= CONFIG =================
+# ================= BANCO DE DADOS (JSON) =================
+def load_db():
+    default = {
+        "users": {},       # {id: {vip_expiry: str, bank: 1000, history: []}}
+        "keys": {},        # {chave: dias}
+        "tips": [],        # Histórico de tips enviadas
+        "active_bets": []  # Apostas aguardando resultado
+    }
+    if not os.path.exists(DB_FILE): return default
+    try:
+        with open(DB_FILE, "r") as f: return json.load(f)
+    except: return default
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-if not TOKEN:
-    print("❌ TELEGRAM_TOKEN NÃO CONFIGURADO")
-    sys.exit()
+def save_db(data):
+    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
 
-logging.basicConfig(level=logging.INFO)
+db = load_db()
 
-# ================= STATES =================
+# ================= SERVIDOR WEB (KEEP ALIVE) =================
+def start_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS ON")
+        def do_HEAD(self):
+            self.send_response(200); self.end_headers()
+    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
-(SELECT_ACTION, GASTO_VALOR, GASTO_CAT, GASTO_DESC,
- GANHO_VALOR, GANHO_CAT, DEL_ID) = range(7)
+threading.Thread(target=start_web_server, daemon=True).start()
 
-# ================= DATABASE =================
+async def keep_alive_async():
+    if not RENDER_URL: return
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                await asyncio.sleep(600)
+                await client.get(RENDER_URL, timeout=10)
+            except: pass
 
-class DB:
-    def __init__(self, db_path="finance_bot.db"):
-        self.db_path = db_path
-        self.init_db()
+# ================= LÓGICA VIP & UTILITÁRIOS =================
+def is_vip(user_id):
+    user = db["users"].get(str(user_id))
+    if not user or not user.get("vip_expiry"): return False
+    expiry = datetime.strptime(user["vip_expiry"], "%Y-%m-%d %H:%M:%S")
+    return expiry > datetime.now()
 
-    def conn(self):
-        return sqlite3.connect(self.db_path, check_same_thread=False)
+def check_admin(user_id):
+    return str(user_id) == str(ADMIN_ID)
 
-    def init_db(self):
-        with self.conn() as c:
-            cur = c.cursor()
+def generate_key(days=30):
+    key = "DVD-" + secrets.token_hex(4).upper()
+    db["keys"][key] = days
+    save_db(db)
+    return key
 
-            cur.execute("""CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY,
-                telegram_id INTEGER UNIQUE,
-                username TEXT
-            )""")
+# ================= SIMULAÇÃO DE IA E MARKET =================
+def ai_analysis_mock(match_name):
+    # Aqui entraria a chamada para o Gemini API real
+    analises = [
+        "O time da casa vem pressionado e deve atacar desde o início.",
+        "Historicamente, este confronto tem muitos gols.",
+        "O visitante está com desfalques importantes na zaga.",
+        "Probabilidade alta de empate no primeiro tempo."
+    ]
+    return random.choice(analises) + " IA Confidence: 85%"
 
-            cur.execute("""CREATE TABLE IF NOT EXISTS categories (
-                id INTEGER PRIMARY KEY,
-                user_id INTEGER,
-                name TEXT,
-                type TEXT
-            )""")
+# Monitoramento de Odds (Simulado)
+async def market_scanner(app):
+    while True:
+        await asyncio.sleep(300) # Scaneia a cada 5 minutos
+        # Simulação: Se achar uma "Odd de Valor"
+        if random.random() < 0.1: # 10% de chance de achar algo
+            msg = "🚨 **ALERTA DE VALOR (Dropping Odds)**\n\nJogo: Team A vs Team B\nOdd caiu de 2.00 para 1.70!\n🔥 Aposte Agora!"
+            # Envia para todos os usuários (ou só VIPs)
+            for uid in db["users"]:
+                try: await app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
+                except: pass
 
-            cur.execute("""CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY,
-                user_id INTEGER,
-                type TEXT,
-                amount REAL,
-                category TEXT,
-                description TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )""")
-
-            c.commit()
-
-db = DB()
-
-# ================= CORE =================
-
-def init_user(tid, username):
-    with db.conn() as c:
-        cur = c.cursor()
-        cur.execute("SELECT id FROM users WHERE telegram_id=?", (tid,))
-        res = cur.fetchone()
-
-        if res:
-            return res[0]
-
-        cur.execute("INSERT INTO users VALUES(NULL, ?, ?)", (tid, username))
-        uid = cur.lastrowid
-
-        exp = ["Alimentação", "Transporte", "Lazer", "Contas"]
-        inc = ["Salário", "Extra"]
-
-        for e in exp:
-            cur.execute("INSERT INTO categories VALUES(NULL, ?, ?, 'expense')", (uid, e))
-
-        for i in inc:
-            cur.execute("INSERT INTO categories VALUES(NULL, ?, ?, 'income')", (uid, i))
-
-        c.commit()
-        return uid
-
-
-def get_categories(uid, ctype):
-    with db.conn() as c:
-        rows = c.cursor().execute(
-            "SELECT name FROM categories WHERE user_id=? AND type=?",
-            (uid, ctype)
-        ).fetchall()
-        return [r[0] for r in rows]
-
-
-def add_transaction(uid, t, amount, cat, desc):
-    with db.conn() as c:
-        c.cursor().execute(
-            "INSERT INTO transactions VALUES(NULL, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-            (uid, t, amount, cat, desc)
-        )
-        c.commit()
-
-
-def get_summary(uid):
-    with db.conn() as c:
-        rows = c.cursor().execute(
-            "SELECT type, amount, category FROM transactions WHERE user_id=?",
-            (uid,)
-        ).fetchall()
-
-    summary = {"income": 0, "expense": 0, "cats": {}}
-
-    for t, amount, cat in rows:
-        if t == "income":
-            summary["income"] += amount
-        else:
-            summary["expense"] += amount
-            summary["cats"][cat] = summary["cats"].get(cat, 0) + amount
-
-    return summary
-
-
-def chart(uid):
-    summary = get_summary(uid)
-    cats = summary["cats"]
-
-    if not cats:
-        return None
-
-    plt.figure(figsize=(6, 6))
-    plt.pie(cats.values(), labels=cats.keys(), autopct="%1.1f%%")
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png")
+# ================= GRÁFICOS =================
+def generate_profit_chart(user_id):
+    history = db["users"].get(str(user_id), {}).get("history", [])
+    if not history: return None
+    
+    bankroll = [1000] # Banca inicial fictícia
+    dates = ["Início"]
+    
+    current = 1000
+    for bet in history[-10:]: # Últimas 10
+        if bet['result'] == 'green': current += bet['profit']
+        elif bet['result'] == 'red': current -= bet['stake']
+        bankroll.append(current)
+        dates.append(bet['date'][:5]) # dd/mm
+        
+    plt.figure(figsize=(6, 4))
+    plt.plot(dates, bankroll, marker='o', color='green', linewidth=2)
+    plt.title('Evolução da Banca (Simulado)')
+    plt.grid(True, linestyle='--', alpha=0.5)
+    
+    buf = os.sys.modules['io'].BytesIO()
+    plt.savefig(buf, format='png')
     buf.seek(0)
     plt.close()
-
     return buf
 
-
-def get_last(uid):
-    with db.conn() as c:
-        return c.cursor().execute(
-            "SELECT id, type, amount, category FROM transactions WHERE user_id=? ORDER BY id DESC LIMIT 15",
-            (uid,)
-        ).fetchall()
-
-
-def delete_tx(uid, tid):
-    with db.conn() as c:
-        cur = c.cursor()
-        cur.execute("DELETE FROM transactions WHERE id=? AND user_id=?", (tid, uid))
-        c.commit()
-        return cur.rowcount > 0
-
-
-def export_csv(uid):
-    with db.conn() as c:
-        rows = c.cursor().execute(
-            "SELECT type, amount, category, description, created_at FROM transactions WHERE user_id=?",
-            (uid,)
-        ).fetchall()
-
-    out = io.StringIO()
-    writer = csv.writer(out)
-    writer.writerow(["Tipo", "Valor", "Categoria", "Descrição", "Data"])
-
-    for r in rows:
-        writer.writerow(["Entrada" if r[0] == "income" else "Saída", r[1], r[2], r[3], r[4]])
-
-    return out.getvalue()
-
-
-def export_pdf(uid, filename="extrato.pdf"):
-    rows = get_last(uid)
-
-    doc = SimpleDocTemplate(filename, pagesize=A4)
-    styles = getSampleStyleSheet()
-    elements = []
-
-    elements.append(Paragraph("Extrato Financeiro", styles["Heading1"]))
-    elements.append(Spacer(1, 20))
-
-    data = [["Tipo", "Valor", "Categoria", "Descrição"]]
-
-    for r in rows:
-        t = "ENTRADA" if r[1] == "income" else "SAÍDA"
-        data.append([t, f"R$ {r[2]:.2f}", r[3], r[4]])
-
-    table = Table(data)
-    table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 1, colors.black),
-        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey)
-    ]))
-
-    elements.append(table)
-    doc.build(elements)
-
-# ================= UI =================
-
-def menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📉 Novo Gasto", callback_data="gasto"),
-         InlineKeyboardButton("📈 Novo Ganho", callback_data="ganho")],
-
-        [InlineKeyboardButton("📊 Saldo", callback_data="saldo"),
-         InlineKeyboardButton("🍕 Gráfico", callback_data="grafico")],
-
-        [InlineKeyboardButton("📋 Detalhes", callback_data="detalhes"),
-         InlineKeyboardButton("📄 Exportar", callback_data="exportar")],
-
-        [InlineKeyboardButton("🗑️ Lixeira", callback_data="lixeira")]
-    ])
-
-# ================= HANDLERS =================
+# ================= HANDLERS DO BOT =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    init_user(user.id, user.username)
-
+    uid = str(user.id)
+    
+    # Registra usuário se novo
+    if uid not in db["users"]:
+        db["users"][uid] = {"vip_expiry": None, "bank": 1000, "history": []}
+        save_db(db)
+    
+    status = "💎 VIP ATIVO" if is_vip(uid) else "👤 Membro Grátis"
+    if check_admin(uid): status = "👑 ADMIN (GOD MODE)"
+    
+    kb = [
+        [InlineKeyboardButton("📊 Minha Banca", callback_data="my_stats"),
+         InlineKeyboardButton("🔑 Ativar VIP", callback_data="enter_key")],
+        [InlineKeyboardButton("🆘 Suporte", url="https://t.me/seusuario")]
+    ]
+    
+    if check_admin(uid):
+        kb.append([InlineKeyboardButton("📢 Enviar TIP (Admin)", callback_data="admin_panel")])
+    
     await update.message.reply_text(
-        f"👋 Olá {user.first_name}!",
-        reply_markup=menu()
+        f"⚽ **DVD TIPS V2.0**\n\nOlá {user.first_name}!\nStatus: **{status}**\n\nUse o menu abaixo:",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown"
     )
-    return SELECT_ACTION
 
+# --- SISTEMA VIP ---
+async def enter_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("Digite sua chave VIP (Ex: `DVD-1A2B...`):")
+    return 1 # Estado esperando chave
 
-async def start_gasto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Digite o valor:")
-    return GASTO_VALOR
-
-
-async def gasto_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        val = float(update.message.text.replace(",", "."))
-        context.user_data["val"] = val
-
-        uid = init_user(update.effective_user.id, update.effective_user.username)
-        cats = get_categories(uid, "expense")
-
-        keyboard = [[InlineKeyboardButton(c, callback_data=f"cat_{c}")] for c in cats]
-
-        await update.message.reply_text("Categoria:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return GASTO_CAT
-
-    except:
-        await update.message.reply_text("❌ Valor inválido")
-        return GASTO_VALOR
-
-
-async def gasto_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cat = update.callback_query.data.replace("cat_", "")
-    context.user_data["cat"] = cat
-    await update.callback_query.edit_message_text("Descrição:")
-    return GASTO_DESC
-
-
-async def gasto_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    desc = update.message.text
-    uid = init_user(update.effective_user.id, update.effective_user.username)
-
-    add_transaction(uid, "expense", context.user_data["val"], context.user_data["cat"], desc)
-
-    await update.message.reply_text("✅ Gasto salvo", reply_markup=menu())
-    return SELECT_ACTION
-
-
-async def start_ganho(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Digite o valor:")
-    return GANHO_VALOR
-
-
-async def ganho_valor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        val = float(update.message.text.replace(",", "."))
-        context.user_data["val"] = val
-
-        uid = init_user(update.effective_user.id, update.effective_user.username)
-        cats = get_categories(uid, "income")
-
-        keyboard = [[InlineKeyboardButton(c, callback_data=f"inc_{c}")] for c in cats]
-
-        await update.message.reply_text("Fonte:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return GANHO_CAT
-
-    except:
-        await update.message.reply_text("❌ Valor inválido")
-        return GANHO_VALOR
-
-
-async def ganho_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fonte = update.callback_query.data.replace("inc_", "")
-    uid = init_user(update.effective_user.id, update.effective_user.username)
-
-    add_transaction(uid, "income", context.user_data["val"], fonte, "Entrada")
-
-    await update.callback_query.edit_message_text("✅ Ganho salvo", reply_markup=menu())
-    return SELECT_ACTION
-
-
-async def saldo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    s = get_summary(uid)
-
-    await update.callback_query.edit_message_text(
-        f"📊 RESUMO\n\n🟢 {s['income']:.2f}\n🔴 {s['expense']:.2f}\n💰 {s['income'] - s['expense']:.2f}",
-        reply_markup=menu()
-    )
-    return SELECT_ACTION
-
-
-async def grafico(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    buf = chart(uid)
-
-    if buf:
-        await update.callback_query.message.reply_photo(buf)
+async def process_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    key = update.message.text.strip()
+    uid = str(update.effective_user.id)
+    
+    if key in db["keys"]:
+        days = db["keys"].pop(key)
+        new_expiry = datetime.now() + timedelta(days=days)
+        db["users"][uid]["vip_expiry"] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+        save_db(db)
+        await update.message.reply_text(f"✅ **VIP ATIVADO!**\nValidade: {days} dias.\nAgora você receberá as melhores Tips!", parse_mode="Markdown")
     else:
-        await update.callback_query.answer("Sem dados")
+        await update.message.reply_text("❌ Chave inválida ou já usada.")
+    return ConversationHandler.END
 
-    return SELECT_ACTION
+# --- ÁREA DO ADMIN (ENVIAR TIPS) ---
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_admin(update.effective_user.id): return
+    kb = [
+        [InlineKeyboardButton("⚽ Criar Tip", callback_data="create_tip")],
+        [InlineKeyboardButton("🔑 Gerar Chave VIP", callback_data="gen_key_menu")],
+        [InlineKeyboardButton("✅ Marcar Green/Red", callback_data="result_menu")]
+    ]
+    await update.callback_query.edit_message_text("👑 **Painel do Chefe**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
+# Gerar Chave
+async def gen_key_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    key = generate_key(30)
+    await update.callback_query.message.reply_text(f"🔑 **Nova Chave Gerada:**\n`{key}`\n(Copia e manda pro cliente)", parse_mode="Markdown")
 
-async def detalhes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    items = get_last(uid)
+# Criar TIP (Simples)
+async def create_tip_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("Digite a TIP no formato:\n`TimeA vs TimeB | Aposta | Odd`")
+    return 2 # Estado esperando tip
 
-    if not items:
-        await update.callback_query.edit_message_text("📭 Sem registros", reply_markup=menu())
-        return SELECT_ACTION
-
-    msg = "📋 Últimos lançamentos:\n"
-    for i in items:
-        icon = "🟢" if i[1] == "income" else "🔴"
-        msg += f"{icon} ID {i[0]} — R$ {i[2]:.2f} — {i[3]}\n"
-
-    await update.callback_query.edit_message_text(msg, reply_markup=menu())
-    return SELECT_ACTION
-
-
-async def lixeira(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("Digite ID para apagar:")
-    return DEL_ID
-
-
-async def delete_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.effective_user.id, update.effective_user.username)
-
+async def broadcast_tip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        ok = delete_tx(uid, int(update.message.text))
-        await update.message.reply_text("✅ Apagado" if ok else "❌ Não encontrado")
+        raw = update.message.text.split("|")
+        match, bet, odd = raw[0].strip(), raw[1].strip(), raw[2].strip()
+        
+        # Gera análise com IA (Mock)
+        analysis = ai_analysis_mock(match)
+        
+        tip_id = str(uuid.uuid4())[:6]
+        tip_data = {"id": tip_id, "match": match, "bet": bet, "odd": odd, "status": "pending", "date": datetime.now().strftime("%d/%m")}
+        db["tips"].append(tip_data)
+        save_db(db)
+        
+        msg = f"💎 **DVD TIP OURO** 💎\n\n⚽ **{match}**\n🎯 **{bet}**\n📈 Odd: {odd}\n\n🤖 **IA Diz:** _{analysis}_"
+        
+        # Envia para todos (Filtra VIPs se quiser depois)
+        count = 0
+        for uid in db["users"]:
+            try:
+                await context.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
+                count += 1
+            except: pass
+            
+        await update.message.reply_text(f"✅ Tip enviada para {count} usuários!")
     except:
-        await update.message.reply_text("❌ ID inválido")
+        await update.message.reply_text("❌ Formato errado. Use `Time vs Time | Aposta | Odd`")
+    return ConversationHandler.END
 
-    await update.message.reply_text("Menu:", reply_markup=menu())
-    return SELECT_ACTION
+# --- RESULTADOS E GRÁFICOS ---
+async def result_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not db["tips"]:
+        await update.callback_query.edit_message_text("Sem tips pendentes.")
+        return
+    
+    kb = []
+    for tip in db["tips"][-5:]: # Ultimas 5
+        if tip["status"] == "pending":
+            kb.append([InlineKeyboardButton(f"✅ {tip['match']} (Green)", callback_data=f"set_green_{tip['id']}")])
+            kb.append([InlineKeyboardButton(f"❌ {tip['match']} (Red)", callback_data=f"set_red_{tip['id']}")])
+            
+    await update.callback_query.edit_message_text("Definir Resultados:", reply_markup=InlineKeyboardMarkup(kb))
 
+async def set_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    action, tip_id = data.split("_")[1], data.split("_")[2]
+    
+    # Atualiza DB
+    for tip in db["tips"]:
+        if tip["id"] == tip_id:
+            tip["status"] = action
+            
+            # Notifica usuários e atualiza histórico (Simulação)
+            result_msg = "✅ **GREEN!** Lucro no bolso!" if action == "green" else "❌ **RED.** Acontece, gestão de banca!"
+            final_msg = f"🏁 **Resultado Final:**\n⚽ {tip['match']}\n{result_msg}"
+            
+            # Atualiza histórico fictício dos usuários para gerar gráfico
+            for uid in db["users"]:
+                profit = 100 if action == "green" else -100 # Valor fixo simulado
+                db["users"][uid]["history"].append({"date": tip["date"], "result": action, "profit": profit, "stake": 50})
+            
+            save_db(db)
+            
+            # Broadcast resultado
+            for uid in db["users"]:
+                try: await context.bot.send_message(chat_id=uid, text=final_msg, parse_mode="Markdown")
+                except: pass
+                
+    await query.edit_message_text(f"Resultado {action.upper()} definido!")
 
-async def export_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text(
-        "Exportar:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("📄 PDF", callback_data="pdf"),
-             InlineKeyboardButton("📊 CSV", callback_data="csv")],
-            [InlineKeyboardButton("🔙 Voltar", callback_data="menu")]
-        ])
-    )
-    return SELECT_ACTION
+async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.callback_query.from_user.id)
+    chart = generate_profit_chart(uid)
+    
+    if chart:
+        await update.callback_query.message.reply_photo(chart, caption="📊 **Sua Evolução Recente**", parse_mode="Markdown")
+    else:
+        await update.callback_query.message.reply_text("📉 Você ainda não tem histórico suficiente para gerar gráfico.")
 
-
-async def export_pdf_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    export_pdf(uid)
-
-    with open("extrato.pdf", "rb") as f:
-        await update.callback_query.message.reply_document(f)
-
-    return SELECT_ACTION
-
-
-async def export_csv_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = init_user(update.callback_query.from_user.id, update.callback_query.from_user.username)
-    data = export_csv(uid)
-
-    await update.callback_query.message.reply_document(io.BytesIO(data.encode()), filename="extrato.csv")
-    return SELECT_ACTION
-
-
-async def back_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.edit_message_text("🏠 Menu", reply_markup=menu())
-    return SELECT_ACTION
-
-
-# ================= RUN =================
-
+# ================= EXECUÇÃO =================
 if __name__ == "__main__":
+    if not TOKEN:
+        print("❌ ERRO: Configure o TOKEN nas variáveis de ambiente.")
+        sys.exit()
+
     app = ApplicationBuilder().token(TOKEN).build()
-
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            SELECT_ACTION: [
-                CallbackQueryHandler(start_gasto, pattern="^gasto$"),
-                CallbackQueryHandler(start_ganho, pattern="^ganho$"),
-                CallbackQueryHandler(saldo, pattern="^saldo$"),
-                CallbackQueryHandler(grafico, pattern="^grafico$"),
-                CallbackQueryHandler(detalhes, pattern="^detalhes$"),
-                CallbackQueryHandler(lixeira, pattern="^lixeira$"),
-                CallbackQueryHandler(export_menu, pattern="^exportar$"),
-                CallbackQueryHandler(export_pdf_handler, pattern="^pdf$"),
-                CallbackQueryHandler(export_csv_handler, pattern="^csv$"),
-                CallbackQueryHandler(back_menu, pattern="^menu$")
-            ],
-
-            GASTO_VALOR: [MessageHandler(filters.TEXT, gasto_valor)],
-            GASTO_CAT: [CallbackQueryHandler(gasto_cat)],
-            GASTO_DESC: [MessageHandler(filters.TEXT, gasto_desc)],
-
-            GANHO_VALOR: [MessageHandler(filters.TEXT, ganho_valor)],
-            GANHO_CAT: [CallbackQueryHandler(ganho_cat)],
-
-            DEL_ID: [MessageHandler(filters.TEXT, delete_id)]
-        },
-        fallbacks=[CommandHandler("start", start)]
+    
+    # Handlers Conversacionais
+    vip_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(enter_key_handler, pattern="^enter_key$")],
+        states={1: [MessageHandler(filters.TEXT, process_key)]},
+        fallbacks=[]
+    )
+    
+    tip_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(create_tip_start, pattern="^create_tip$")],
+        states={2: [MessageHandler(filters.TEXT, broadcast_tip)]},
+        fallbacks=[]
     )
 
-    app.add_handler(conv)
-
-    print("🤖 BOT ONLINE — SEM ERRO — RENDER OK")
-    app.run_polling(drop_pending_updates=True)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(vip_conv)
+    app.add_handler(tip_conv)
+    
+    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
+    app.add_handler(CallbackQueryHandler(gen_key_menu, pattern="^gen_key_menu$"))
+    app.add_handler(CallbackQueryHandler(result_menu, pattern="^result_menu$"))
+    app.add_handler(CallbackQueryHandler(set_result, pattern="^set_"))
+    app.add_handler(CallbackQueryHandler(my_stats, pattern="^my_stats$"))
+    
+    # Inicia scanner de mercado em segundo plano
+    asyncio.create_task(keep_alive_async())
+    # Note: Market scanner loop would need to be inside an async loop or separate thread correctly
+    # For simplicity in this structure, we rely on manual tips, but the function is there.
+    
+    print("🤖 DVD TIPS V2.0 ONLINE!")
+    app.run_polling()
