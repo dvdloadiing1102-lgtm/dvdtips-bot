@@ -42,15 +42,28 @@ if GEMINI_API_KEY: genai.configure(api_key=GEMINI_API_KEY)
 # Estados para conversas interativas
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS =================
+# ================= BANCO DE DADOS (CORRIGIDO) =================
 def load_db():
-    default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
-    if not os.path.exists(DB_FILE): return default
-    try: with open(DB_FILE, "r") as f: return json.load(f)
-    except: return default
+    default = {
+        "users": {}, 
+        "keys": {}, 
+        "last_run": "", 
+        "api_cache": None, 
+        "api_cache_time": None
+    }
+    
+    if not os.path.exists(DB_FILE):
+        return default
+        
+    try:
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return default
 
 def save_db(data):
-    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 db = load_db()
 
@@ -58,17 +71,27 @@ db = load_db()
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS APP ON")
-        def do_HEAD(self): self.send_response(200); self.end_headers()
-    try: HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except: pass
+        def do_GET(self): 
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"DVD TIPS APP ON")
+        def do_HEAD(self): 
+            self.send_response(200)
+            self.end_headers()
+            
+    try: 
+        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except: 
+        pass
 
 def run_pinger():
     if not RENDER_URL: return
     while True:
         time.sleep(600)
-        try: requests.get(RENDER_URL, timeout=10)
-        except: pass
+        try: 
+            requests.get(RENDER_URL, timeout=10)
+        except: 
+            pass
 
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
@@ -152,10 +175,9 @@ def generate_simulated_matches():
         matches.append({"match": f"{t1} x {t2}", "tip": tip, "odd": 1.80, "league": "Simulado", "time": "19:00", "reason": "Jogaço ofensivo."})
     return matches
 
-# ================= MENUS DE BOTÕES (O NOVO DESIGN) =================
+# ================= MENUS =================
 
 def get_main_keyboard():
-    # Este é o teclado "Flutuante" (Fixo embaixo)
     keyboard = [
         ["🔮 Analisar Jogo", "🧮 Calculadora"],
         ["🦓 Zebra do Dia", "🛡️ Aposta Segura"],
@@ -167,7 +189,7 @@ def get_main_keyboard():
 
 # ================= FUNÇÕES INTERATIVAS =================
 
-# 1. Analisar (Início)
+# 1. Analisar
 async def start_analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⚽ **Qual jogo você quer analisar?**\n\nDigite o nome dos times (ex: `Flamengo x Vasco`):", parse_mode="Markdown")
     return INPUT_ANALISE
@@ -179,7 +201,7 @@ async def handle_analise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🤖 **Análise DVD AI:**\n\n{res}", parse_mode="Markdown")
     return ConversationHandler.END
 
-# 2. Calculadora (Início)
+# 2. Calculadora
 async def start_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧮 **Calculadora de Lucro**\n\nDigite o valor da aposta e a odd separados por espaço.\nExemplo: `50 1.80`")
     return INPUT_CALC
@@ -193,10 +215,10 @@ async def handle_calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"💰 **Resultado:**\n\nAposta: R$ {val:.2f}\nRetorno: R$ {total:.2f}\n✅ **Lucro Líquido:** R$ {lucro:.2f}", parse_mode="Markdown")
     except:
         await update.message.reply_text("❌ Formato inválido. Tente de novo (ex: `100 2.0`).")
-        return INPUT_CALC # Pede de novo
+        return INPUT_CALC
     return ConversationHandler.END
 
-# 3. Gestão (Início)
+# 3. Gestão
 async def start_gestao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("💰 **Gestão de Banca**\n\nQual o valor total da sua banca hoje? (Apenas números)")
     return INPUT_GESTAO
@@ -212,7 +234,7 @@ async def handle_gestao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return INPUT_GESTAO
     return ConversationHandler.END
 
-# 4. Guru (Início)
+# 4. Guru
 async def start_guru(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 **Guru das Apostas**\n\nQual sua dúvida sobre apostas? Pergunte qualquer coisa!")
     return INPUT_GURU
@@ -223,11 +245,11 @@ async def handle_guru(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🎓 **Guru Responde:**\n\n{res}", parse_mode="Markdown")
     return ConversationHandler.END
 
-# Funções Diretas (Sem input)
+# Funções Diretas
 async def direct_zebra(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tips = db.get("api_cache")
     if not tips: 
-        get_real_matches(force_refresh=True) # Tenta forçar refresh se vazio
+        get_real_matches(force_refresh=True)
         tips = db.get("api_cache")
         
     if not tips: return await update.message.reply_text("📭 Sem jogos analisados no momento.")
@@ -285,7 +307,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
-# --- Admin Panel (Continua Inline para não misturar) ---
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_admin(update.effective_user.id): return
     kb = [[InlineKeyboardButton("🚀 Enviar Tips", callback_data="force_tips")], [InlineKeyboardButton("🔑 Gerar Chave", callback_data="gen_key")]]
@@ -308,7 +329,6 @@ async def gen_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = generate_key(30)
     await update.callback_query.message.reply_text(f"🔑 Chave: `{key}`", parse_mode="Markdown")
 
-# --- VIP Key System ---
 async def start_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔑 Digite sua chave VIP:")
     return VIP_KEY
@@ -321,12 +341,12 @@ async def handle_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_expiry = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
         db["users"][uid]["vip_expiry"] = new_expiry
         save_db(db)
-        await update.message.reply_text("✅ **VIP ATIVADO!** Bem-vindo à elite.", parse_mode="Markdown")
+        await update.message.reply_text("✅ **VIP ATIVADO!**", parse_mode="Markdown")
     else: await update.message.reply_text("❌ Chave inválida.")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Operação cancelada.", reply_markup=get_main_keyboard())
+    await update.message.reply_text("❌ Cancelado.", reply_markup=get_main_keyboard())
     return ConversationHandler.END
 
 # ================= MAIN =================
@@ -334,48 +354,43 @@ if __name__ == "__main__":
     if not TOKEN: sys.exit("Falta TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # Handlers de Conversa (Interativos)
-    conv_analise = ConversationHandler(
+    # Handlers
+    app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🔮 Analisar Jogo$"), start_analise)],
         states={INPUT_ANALISE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_analise)]},
         fallbacks=[CommandHandler("cancel", cancel)]
-    )
+    ))
     
-    conv_calc = ConversationHandler(
+    app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🧮 Calculadora$"), start_calc)],
         states={INPUT_CALC: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calc)]},
         fallbacks=[CommandHandler("cancel", cancel)]
-    )
+    ))
     
-    conv_gestao = ConversationHandler(
+    app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^💰 Gestão Banca$"), start_gestao)],
         states={INPUT_GESTAO: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_gestao)]},
         fallbacks=[CommandHandler("cancel", cancel)]
-    )
+    ))
     
-    conv_guru = ConversationHandler(
+    app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🤖 Guru IA$"), start_guru)],
         states={INPUT_GURU: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_guru)]},
         fallbacks=[CommandHandler("cancel", cancel)]
-    )
+    ))
     
-    # Handler VIP (Escondido via comando /vip ou botão futuro)
-    conv_vip = ConversationHandler(
-        entry_points=[CommandHandler("vip", start_vip)],
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("vip", start_vip), InlineKeyboardButton("🔑 Ativar VIP", callback_data="enter_key")],
         states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]},
         fallbacks=[]
-    )
+    ))
+    # Handler para o botão "Ativar VIP" quando fosse callback (removido do menu principal, mas mantido pra compatibilidade)
+    app.add_handler(CallbackQueryHandler(start_vip, pattern="^enter_key$"))
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_command))
     
-    app.add_handler(conv_analise)
-    app.add_handler(conv_calc)
-    app.add_handler(conv_gestao)
-    app.add_handler(conv_guru)
-    app.add_handler(conv_vip)
-    
-    # Handlers Diretos (Botões Simples)
+    # Handlers Botões
     app.add_handler(MessageHandler(filters.Regex("^🦓 Zebra do Dia$"), direct_zebra))
     app.add_handler(MessageHandler(filters.Regex("^🛡️ Aposta Segura$"), direct_segura))
     app.add_handler(MessageHandler(filters.Regex("^🏆 Ligas$"), direct_ligas))
@@ -383,18 +398,16 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.Regex("^📚 Glossário$"), direct_glossario))
     app.add_handler(MessageHandler(filters.Regex("^🎫 Meu Status$"), direct_status))
 
-    # Admin Callbacks
     app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
     app.add_handler(CallbackQueryHandler(gen_key_handler, pattern="^gen_key$"))
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    print("🤖 DVD TIPS V7.1 (APP MODE) - ONLINE")
+    print("🤖 DVD TIPS V7.2 - ONLINE")
     
     async def main_wrapper():
         async with app:
             await app.start()
-            # Scheduler removido aqui para simplificar (usa o force manual ou pode reativar se quiser)
             await app.updater.start_polling(drop_pending_updates=True)
             await asyncio.Event().wait()
     try: loop.run_until_complete(main_wrapper())
