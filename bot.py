@@ -4,8 +4,6 @@ import json
 import asyncio
 import logging
 import secrets
-import math
-import signal
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -337,23 +335,33 @@ async def main():
     app.add_handler(CallbackQueryHandler(admin_callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    try:
-        logger.info("Iniciando todos os serviços...")
+    async with app:
+        await app.initialize()
+        await app.start()
+        
         await asyncio.gather(
-            app.run_polling(allowed_updates=Update.ALL_TYPES, close_loop=False),
+            app.updater.start_polling(allowed_updates=Update.ALL_TYPES),
             start_web_server(),
             run_pinger()
         )
-    except (asyncio.CancelledError, KeyboardInterrupt):
-        logger.info("Parando...")
-    finally:
-        logger.info("Desligando...")
-        await app.shutdown()
-        await save_db()
-        logger.info("Desligamento completo.")
 
 if __name__ == "__main__":
+    import signal
+    
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    def signal_handler(sig, frame):
+        logger.info(f"Recebido sinal {sig}, desligando...")
+        loop.stop()
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
-        asyncio.run(main())
+        loop.run_until_complete(main())
     except KeyboardInterrupt:
-        logger.info("Bot finalizado pelo usuário.")
+        logger.info("Bot finalizado.")
+    finally:
+        loop.run_until_complete(save_db())
+        loop.close()
