@@ -8,6 +8,7 @@ import time
 import random
 import secrets
 import asyncio
+import traceback
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -32,7 +33,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
-DB_FILE = "dvd_tips_v12.json"
+DB_FILE = "dvd_tips_v13.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,21 +51,11 @@ if GEMINI_API_KEY:
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS (CORRIGIDO) =================
+# ================= BANCO DE DADOS =================
 def load_db():
-    default = {
-        "users": {}, 
-        "keys": {}, 
-        "last_run": "", 
-        "api_cache": None, 
-        "api_cache_time": None
-    }
-    
-    if not os.path.exists(DB_FILE):
-        return default
-    
+    default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
+    if not os.path.exists(DB_FILE): return default
     try:
-        # AGORA ESTÁ EM LINHAS SEPARADAS (SEM ERRO)
         with open(DB_FILE, "r") as f:
             return json.load(f)
     except:
@@ -76,14 +67,14 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SERVIDOR WEB =================
+# ================= SERVIDOR WEB (KEEP ALIVE) =================
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"DVD TIPS V12.1 ONLINE")
+            self.wfile.write(b"DVD TIPS V13 ONLINE")
         def do_HEAD(self):
             self.send_response(200)
             self.end_headers()
@@ -135,32 +126,15 @@ async def get_smart_analysis(match, tip, context="tip"):
             pass
     return random.choice(BACKUP_PHRASES)
 
-# ================= MOTOR DE ODDS (FILTRO RIGOROSO) =================
-
-# LISTA VIP (TOP 20 LIGAS + COPAS)
+# ================= MOTOR DE ODDS (ELITE) =================
 TARGET_LEAGUES = [
-    # Top 5 Europa
     'soccer_epl', 'soccer_efl_champ', 'soccer_england_efl_cup',
-    'soccer_italy_serie_a', 'soccer_italy_serie_b', 'soccer_italy_coppa_italia',
-    'soccer_germany_bundesliga', 'soccer_germany_bundesliga2', 'soccer_germany_dfb_pokal',
+    'soccer_italy_serie_a', 'soccer_italy_coppa_italia',
+    'soccer_germany_bundesliga', 'soccer_germany_dfb_pokal',
     'soccer_spain_la_liga', 'soccer_spain_copa_del_rey',
-    'soccer_france_ligue_one',
-    
-    # Brasil & América
+    'soccer_france_ligue_one', 'soccer_uefa_champions_league',
     'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_brazil_campeonato',
-    'soccer_argentina_primera', 'soccer_libertadores', 'soccer_sulamericana',
-    'soccer_usa_mls', 'soccer_mexico_ligamx',
-    
-    # Resto do Top 20
-    'soccer_portugal_primeira_liga',
-    'soccer_netherlands_eredivisie',
-    'soccer_belgium_pro_league',
-    'soccer_turkey_super_league',
-    'soccer_denmark_superliga',
-    'soccer_poland_ekstraklasa',
-    'soccer_switzerland_superleague',
-    
-    # Basquete
+    'soccer_libertadores', 'soccer_sulamericana',
     'basketball_nba'
 ]
 
@@ -168,24 +142,17 @@ async def get_real_matches(force_refresh=False):
     if not ODDS_API_KEY:
         return generate_simulated_matches()
     
-    # Cache (30 min)
     if not force_refresh and db.get("api_cache") and db.get("api_cache_time"):
         last = datetime.strptime(db["api_cache_time"], "%Y-%m-%d %H:%M:%S")
         if (datetime.now() - last).total_seconds() < 1800:
             return db["api_cache"]
     
     matches = []
-    
-    # Definição RIGOROSA de "Hoje" (Horário de Brasília)
     now_utc = datetime.now(timezone.utc)
-    now_br = now_utc - timedelta(hours=3)
+    # Define "Hoje" como até as 04:00 da manhã do dia seguinte (UTC) para pegar jogos noturnos
+    limit_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(hours=30)
     
-    # Fim do dia de hoje (23:59:59 BRT)
-    end_of_today_br = now_br.replace(hour=23, minute=59, second=59, microsecond=999999)
-    # Converte fim do dia BR para UTC (para comparar com a API)
-    end_of_today_utc = end_of_today_br + timedelta(hours=3)
-    
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=20.0) as client:
         try:
             url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
             resp = await client.get(url)
@@ -193,15 +160,13 @@ async def get_real_matches(force_refresh=False):
             if resp.status_code == 200:
                 data = resp.json()
                 for game in data:
-                    # 1. Filtro de Liga (Só as Tops)
                     if game['sport_key'] not in TARGET_LEAGUES:
                         continue
                     
-                    # 2. Filtro de Data (Só HOJE)
                     game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
                     
-                    # Se o jogo já começou há mais de 2h ou é depois de hoje à noite -> Pula
-                    if game_time < (now_utc - timedelta(hours=2)) or game_time > end_of_today_utc:
+                    # Filtro de Data: Jogos que começam nas próximas 24h
+                    if not (now_utc - timedelta(hours=2) < game_time < limit_time):
                         continue
                         
                     res = process_game(game)
@@ -211,7 +176,6 @@ async def get_real_matches(force_refresh=False):
         except Exception as e:
             logger.error(f"Erro API: {e}")
 
-    # Remove duplicados e ordena
     unique = []
     seen = set()
     for m in matches:
@@ -232,7 +196,6 @@ async def get_real_matches(force_refresh=False):
 def process_game(game):
     try:
         game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        # Horário Visual (Brasil)
         time_str = (game_time - timedelta(hours=3)).strftime("%H:%M")
         
         league = game['sport_title'].replace("Soccer ", "").replace("Basketball ", "")
@@ -246,7 +209,6 @@ def process_game(game):
         
         tip, odd = None, 0
         
-        # Estratégia Vencedor
         if h2h:
             outcomes = sorted(h2h['outcomes'], key=lambda x: x['price'])
             fav = outcomes[0]
@@ -254,8 +216,7 @@ def process_game(game):
             if min_odd <= fav['price'] <= 2.30:
                 tip, odd = f"Vence {fav['name']}", fav['price']
         
-        # Estratégia Over
-        if (not tip) and totals:
+        if (not tip or odd < 1.25) and totals:
             line = totals['outcomes'][0]
             if is_nba:
                 over = next((o for o in totals['outcomes'] if o['name'] == 'Over'), None)
@@ -267,13 +228,7 @@ def process_game(game):
                     tip, odd = "Over 2.5 Gols", over25['price']
 
         if tip:
-            return {
-                "match": f"{game['home_team']} x {game['away_team']}",
-                "tip": tip, 
-                "odd": odd, 
-                "league": league, 
-                "time": time_str
-            }
+            return {"match": f"{game['home_team']} x {game['away_team']}", "tip": tip, "odd": odd, "league": league, "time": time_str}
     except:
         return None
     return None
@@ -299,8 +254,7 @@ async def start(u, c):
     uid=str(u.effective_user.id)
     if uid not in db["users"]: db["users"][uid] = {"vip_expiry": ""}
     save_db(db)
-    await c.bot.delete_webhook(drop_pending_updates=True)
-    await u.message.reply_text("👋 **DVD TIPS V12.1**\nFiltro: Elite Hoje (Brasil & Top 20)", reply_markup=get_main_keyboard())
+    await u.message.reply_text("👋 **DVD TIPS V13.0**\nSistema Blindado & Rápido!", reply_markup=get_main_keyboard())
 
 async def direct_jogos(u, c):
     await u.message.reply_text("🔄 Filtrando jogos de HOJE na Elite...")
@@ -321,7 +275,7 @@ async def direct_ligas(u, c):
     else:
         await u.message.reply_text("📭 Nada.")
 
-# --- Outras Funções (Análise, Calc, etc) ---
+# --- Outras Funções ---
 async def start_analise(u, c):
     await u.message.reply_text("⚽/🏀 **Qual jogo?**")
     return INPUT_ANALISE
@@ -435,23 +389,29 @@ async def cancel(u, c):
     await u.message.reply_text("❌", reply_markup=get_main_keyboard())
     return ConversationHandler.END
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
 # Agendador
 async def scheduler(app):
     while True:
-        now = datetime.now() - timedelta(hours=3)
-        if now.strftime("%H:%M") == "08:00" and db["last_run"] != now.strftime("%Y-%m-%d"):
-            tips = await get_real_matches(True)
-            if tips:
-                for uid in db["users"]:
-                    try:
-                        await app.bot.send_message(uid, "☀️ **Tips da Elite Hoje:**")
-                        for t in tips[:5]:
-                            await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
-                    except:
-                        pass
-                db["last_run"] = now.strftime("%Y-%m-%d")
-                save_db(db)
-        await asyncio.sleep(60)
+        try:
+            now = datetime.now() - timedelta(hours=3)
+            if now.strftime("%H:%M") == "08:00" and db["last_run"] != now.strftime("%Y-%m-%d"):
+                tips = await get_real_matches(True)
+                if tips:
+                    for uid in db["users"]:
+                        try:
+                            await app.bot.send_message(uid, "☀️ **Tips da Elite Hoje:**")
+                            for t in tips[:5]:
+                                await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
+                        except:
+                            pass
+                    db["last_run"] = now.strftime("%Y-%m-%d")
+                    save_db(db)
+            await asyncio.sleep(60)
+        except:
+            await asyncio.sleep(60)
 
 async def post_init(app):
     asyncio.create_task(scheduler(app))
@@ -462,13 +422,15 @@ if __name__ == "__main__":
     try:
         app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
         
+        # Error Handler para evitar crash
+        app.add_error_handler(error_handler)
+        
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🔮 Analisar Jogo$"), start_analise)], states={INPUT_ANALISE: [MessageHandler(filters.TEXT, handle_analise)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🧮 Calculadora$"), start_calc)], states={INPUT_CALC: [MessageHandler(filters.TEXT, handle_calc)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^💰 Gestão Banca$"), start_gestao)], states={INPUT_GESTAO: [MessageHandler(filters.TEXT, handle_gestao)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🤖 Guru IA$"), start_guru)], states={INPUT_GURU: [MessageHandler(filters.TEXT, handle_guru)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-        app.add_handler(ConversationHandler(entry_points=[ConversationHandler.entry_points, CallbackQueryHandler(start_vip, pattern="^enter_key$")], states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, fallbacks=[]))
         
-        # Correção do Entry Point do VIP para aceitar o comando /vip também
+        # CORREÇÃO DEFINITIVA DO VIP HANDLER (O culpado pelo travamento anterior)
         app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], 
             states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, 
@@ -486,7 +448,7 @@ if __name__ == "__main__":
         app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
         app.add_handler(CallbackQueryHandler(gen_key_h, pattern="^gen_key$"))
 
-        print("🤖 V12.1 ONLINE (DATA RIGOROSA + ELITE)")
+        print("🤖 V13.0 ONLINE (BLINDADA)")
         app.run_polling()
     except Conflict:
         print("🚨 CONFLITO! Reiniciando...")
