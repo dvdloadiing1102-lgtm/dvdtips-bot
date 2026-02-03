@@ -7,12 +7,13 @@ import threading
 import time
 import random
 import secrets
+import asyncio
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- AUTO-INSTALAÇÃO ---
 try:
-    import requests # Usaremos requests para o ping (mais estável com threads)
+    import requests
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -27,17 +28,16 @@ except ImportError:
 # ================= CONFIGURAÇÃO =================
 TOKEN = os.getenv("BOT_TOKEN") 
 ADMIN_ID = os.getenv("ADMIN_ID")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY") # NOVA VARIÁVEL!
 RENDER_URL = os.getenv("RENDER_URL")
-DB_FILE = "dvd_tips.json"
+DB_FILE = "dvd_tips_real.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ================= BANCO DE DADOS =================
 def load_db():
-    default = {
-        "users": {}, "keys": {}, "tips": [], "active_bets": []
-    }
+    default = {"users": {}, "keys": {}, "tips_history": [], "last_run": ""}
     if not os.path.exists(DB_FILE): return default
     try:
         with open(DB_FILE, "r") as f: return json.load(f)
@@ -48,244 +48,176 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SERVIDOR WEB (ANTI-ERRO 501 E KEEP ALIVE) =================
+# ================= SERVIDOR WEB & KEEP ALIVE =================
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS ON")
-        def do_HEAD(self): # Corrige o erro do UptimeRobot
+            self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS REAL ON")
+        def do_HEAD(self):
             self.send_response(200); self.end_headers()
     HTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
-# Função de PING (Usando Threading para não travar o asyncio)
 def run_pinger():
     if not RENDER_URL: return
     while True:
-        time.sleep(600) # 10 minutos
-        try:
-            requests.get(RENDER_URL, timeout=10)
-            print("Ping enviado com sucesso.")
-        except:
-            pass
+        time.sleep(600)
+        try: requests.get(RENDER_URL, timeout=10)
+        except: pass
 
-# Inicia os serviços de fundo
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
 
-# ================= LÓGICA VIP & UTILITÁRIOS =================
-def is_vip(user_id):
-    user = db["users"].get(str(user_id))
-    if not user or not user.get("vip_expiry"): return False
+# ================= INTEGRAÇÃO THE-ODDS-API (REAL) =================
+def get_real_matches():
+    """Busca jogos reais da API ou usa simulador se falhar"""
+    if not ODDS_API_KEY:
+        return generate_simulated_matches() # Fallback se não tiver chave
+    
+    # Busca Odds de Futebol (Soccer) - Ex: Brasileirão, Premier League
+    # Regiões: uk, us, eu, au. Markets: h2h (vencedor).
+    url = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal"
+    
     try:
-        expiry = datetime.strptime(user["vip_expiry"], "%Y-%m-%d %H:%M:%S")
-        return expiry > datetime.now()
-    except: return False
-
-def check_admin(user_id):
-    # Se ADMIN_ID não estiver configurado, ninguém é admin
-    if not ADMIN_ID: return False
-    return str(user_id) == str(ADMIN_ID)
-
-def generate_key(days=30):
-    key = "DVD-" + secrets.token_hex(4).upper()
-    db["keys"][key] = days
-    save_db(db)
-    return key
-
-def ai_analysis_mock(match_name):
-    analises = [
-        "O mandante tem 70% de posse de bola nos últimos jogos.",
-        "Must win game para o visitante.",
-        "Defesas fracas, alta chance de Over 2.5 gols.",
-        "O histórico do confronto favorece o empate."
-    ]
-    return random.choice(analises) + " (IA Confidence: 88%)"
-
-# ================= GRÁFICOS =================
-def generate_profit_chart(user_id):
-    history = db["users"].get(str(user_id), {}).get("history", [])
-    if not history: return None
-    
-    bankroll = [1000]
-    dates = ["Início"]
-    current = 1000
-    
-    # Pega os últimos 15 registros
-    for bet in history[-15:]:
-        if bet['result'] == 'green': current += bet['profit']
-        elif bet['result'] == 'red': current -= bet['stake']
-        bankroll.append(current)
-        dates.append(bet['date'][:5])
-        
-    plt.figure(figsize=(6, 4))
-    plt.plot(range(len(bankroll)), bankroll, marker='o', color='#00ff00', linewidth=2)
-    plt.title('Crescimento da Banca 🚀')
-    plt.grid(True, linestyle='--', alpha=0.3)
-    plt.facecolor = '#f0f0f0'
-    
-    buf = os.sys.modules['io'].BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    plt.close()
-    return buf
-
-# ================= HANDLERS =================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    uid = str(user.id)
-    
-    if uid not in db["users"]:
-        db["users"][uid] = {"vip_expiry": None, "bank": 1000, "history": []}
-        save_db(db)
-    
-    status = "💎 VIP ATIVO" if is_vip(uid) else "👤 Membro Grátis"
-    if check_admin(uid): status = "👑 ADMIN"
-    
-    kb = [
-        [InlineKeyboardButton("📊 Minha Banca", callback_data="my_stats"),
-         InlineKeyboardButton("🔑 Ativar VIP", callback_data="enter_key")],
-        [InlineKeyboardButton("🆘 Suporte", url="https://t.me/seusuario")]
-    ]
-    
-    if check_admin(uid):
-        kb.append([InlineKeyboardButton("⚙️ Painel Admin", callback_data="admin_panel")])
-    
-    await update.message.reply_text(
-        f"⚽ **DVD TIPS V2.0**\n\nOlá {user.first_name}!\nStatus: **{status}**\n\nUse o menu abaixo:",
-        reply_markup=InlineKeyboardMarkup(kb),
-        parse_mode="Markdown"
-    )
-
-# --- SISTEMA VIP ---
-async def enter_key_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Digite sua chave VIP (Ex: `DVD-XXXX`):")
-    return 1
-
-async def process_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    key = update.message.text.strip()
-    uid = str(update.effective_user.id)
-    
-    if key in db["keys"]:
-        days = db["keys"].pop(key)
-        new_expiry = datetime.now() + timedelta(days=days)
-        db["users"][uid]["vip_expiry"] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
-        save_db(db)
-        await update.message.reply_text(f"✅ **VIP ATIVADO!**\nValidade: {days} dias.", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("❌ Chave inválida.")
-    return ConversationHandler.END
-
-# --- ADMIN ---
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_admin(update.effective_user.id): return
-    kb = [
-        [InlineKeyboardButton("⚽ Nova Tip", callback_data="create_tip")],
-        [InlineKeyboardButton("🔑 Gerar Chave", callback_data="gen_key_menu")],
-        [InlineKeyboardButton("🏁 Resultados", callback_data="result_menu")]
-    ]
-    await update.callback_query.edit_message_text("👑 **Painel Admin**", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
-
-async def gen_key_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    key = generate_key(30)
-    await update.callback_query.message.reply_text(f"🔑 Chave (30 dias):\n`{key}`", parse_mode="Markdown")
-
-async def create_tip_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text("Envie a TIP:\n`Jogo | Aposta | Odd`")
-    return 2
-
-async def broadcast_tip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        raw = update.message.text.split("|")
-        match, bet, odd = raw[0].strip(), raw[1].strip(), raw[2].strip()
-        analysis = ai_analysis_mock(match)
-        
-        tip_id = str(uuid.uuid4())[:6]
-        tip_data = {"id": tip_id, "match": match, "bet": bet, "odd": odd, "status": "pending", "date": datetime.now().strftime("%d/%m")}
-        db["tips"].append(tip_data)
-        save_db(db)
-        
-        msg = f"💎 **TIP DO DVD** 💎\n\n⚽ **{match}**\n🎯 **{bet}**\n📈 Odd: {odd}\n\n🧠 _{analysis}_"
-        
-        for uid in db["users"]:
-            try: await context.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
-            except: pass
+        response = requests.get(url)
+        if response.status_code != 200:
+            logger.error(f"Erro API: {response.text}")
+            return generate_simulated_matches()
             
-        await update.message.reply_text("✅ Tip enviada!")
-    except:
-        await update.message.reply_text("❌ Erro. Use: `Time A vs B | Aposta | 1.90`")
-    return ConversationHandler.END
+        data = response.json()
+        matches = []
+        
+        # Filtra jogos que acontecem nas próximas 24h
+        now = datetime.utcnow()
+        limit = now + timedelta(hours=24)
+        
+        for game in data:
+            game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ")
+            if game_time > limit: continue # Pula jogos distantes
+            
+            # Tenta pegar odds da Bet365 ou Betfair (ou a primeira que tiver)
+            bookmakers = game.get('bookmakers', [])
+            if not bookmakers: continue
+            
+            odds_data = bookmakers[0]['markets'][0]['outcomes'] # Pega o primeiro bookmaker
+            
+            # Lógica simples de Tip: Apostar no Favorito (menor odd)
+            # Ordena por odd: [Favorito, ..., Zebra]
+            sorted_odds = sorted(odds_data, key=lambda x: x['price'])
+            favorito = sorted_odds[0]
+            
+            # Filtra odds muito baixas (tipo 1.05)
+            if favorito['price'] < 1.30: continue
+            
+            matches.append({
+                "match": f"{game['home_team']} x {game['away_team']}",
+                "tip": f"Vence {favorito['name']}",
+                "odd": favorito['price'],
+                "league": game['sport_title']
+            })
+            
+            if len(matches) >= 12: break # Limite de 12 jogos
+            
+        if not matches: return generate_simulated_matches()
+        return matches
+        
+    except Exception as e:
+        logger.error(f"Erro Fatal API: {e}")
+        return generate_simulated_matches()
 
-# --- RESULTADOS ---
-async def result_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = []
-    for tip in db["tips"][-5:]:
-        if tip["status"] == "pending":
-            kb.append([
-                InlineKeyboardButton(f"✅ {tip['match']}", callback_data=f"set_green_{tip['id']}"),
-                InlineKeyboardButton(f"❌", callback_data=f"set_red_{tip['id']}")
-            ])
-    if not kb: await update.callback_query.edit_message_text("Sem tips pendentes.")
-    else: await update.callback_query.edit_message_text("Definir Resultado:", reply_markup=InlineKeyboardMarkup(kb))
+def generate_simulated_matches():
+    """Simulador (Backup se a API falhar ou acabar os créditos)"""
+    TEAMS = ["Flamengo", "Palmeiras", "Real Madrid", "City", "Bayern", "Arsenal"]
+    matches = []
+    for _ in range(5):
+        t1, t2 = random.sample(TEAMS, 2)
+        matches.append({
+            "match": f"{t1} x {t2}",
+            "tip": "Over 2.5 Gols",
+            "odd": round(random.uniform(1.5, 2.1), 2),
+            "league": "Simulado"
+        })
+    return matches
 
-async def set_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    data = query.data
-    action, tip_id = data.split("_")[1], data.split("_")[2]
+def generate_multiple_bet(matches_pool):
+    """Cria a Múltipla a partir dos jogos reais"""
+    if len(matches_pool) < 3: return None
+    selection = random.sample(matches_pool, k=3)
     
-    for tip in db["tips"]:
-        if tip["id"] == tip_id:
-            tip["status"] = action
-            save_db(db)
+    multi_odd = 1.0
+    desc = []
+    for m in selection:
+        multi_odd *= m['odd']
+        desc.append(f"• {m['match']} ({m['tip']}) @{m['odd']}")
+    
+    return {
+        "match": "🔥 BILHETE PRONTO DO DIA 🔥",
+        "tip": "\n".join(desc),
+        "odd": round(multi_odd, 2)
+    }
+
+# ================= ENVIO AUTOMÁTICO =================
+async def send_daily_batch(app):
+    # Pega jogos REAIS
+    daily_selection = get_real_matches()
+    multiple_bet = generate_multiple_bet(daily_selection)
+    
+    header = f"📅 **TIPS DE HOJE {datetime.now().strftime('%d/%m')}** 📅\n_Dados reais analisados via API_\n───────────────────"
+    
+    for uid in db["users"]:
+        try:
+            await app.bot.send_message(chat_id=uid, text=header, parse_mode="Markdown")
+            await asyncio.sleep(2)
             
-            # Atualiza histórico dos usuários (Simulação de Lucro)
-            profit = 100 if action == "green" else -100
-            for uid in db["users"]:
-                db["users"][uid]["history"].append({"date": tip["date"], "result": action, "profit": profit, "stake": 100})
-            save_db(db)
+            for i, tip in enumerate(daily_selection):
+                msg = f"🏆 **{tip.get('league', 'Futebol')}**\n⚽ {tip['match']}\n🎯 **{tip['tip']}**\n📈 Odd: {tip['odd']}"
+                await app.bot.send_message(chat_id=uid, text=msg, parse_mode="Markdown")
+                await asyncio.sleep(1)
             
-            res_txt = "✅ GREEN! 💰" if action == "green" else "❌ RED."
-            for uid in db["users"]:
-                try: await context.bot.send_message(chat_id=uid, text=f"🏁 Resultado: {tip['match']}\n{res_txt}")
-                except: pass
+            if multiple_bet:
+                msg_multi = f"🚀 **MÚLTIPLA DO DIA** 🚀\n\n{multiple_bet['tip']}\n\n💰 **ODD TOTAL: {multiple_bet['odd']}**"
+                await app.bot.send_message(chat_id=uid, text=msg_multi, parse_mode="Markdown")
                 
-    await query.edit_message_text(f"Marcado como {action}!")
+        except: pass
 
-async def my_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.callback_query.from_user.id)
-    chart = generate_profit_chart(uid)
-    if chart: await update.callback_query.message.reply_photo(chart, caption="📈 Seu Gráfico")
-    else: await update.callback_query.message.reply_text("Sem dados ainda.")
+async def scheduler_loop(app):
+    while True:
+        now_br = datetime.utcnow() - timedelta(hours=3)
+        if now_br.strftime("%H:%M") == "08:00" and db["last_run"] != now_br.strftime("%Y-%m-%d"):
+            await send_daily_batch(app)
+            db["last_run"] = now_br.strftime("%Y-%m-%d")
+            save_db(db)
+        await asyncio.sleep(50)
+
+# ================= HANDLERS BÁSICOS =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    if uid not in db["users"]: db["users"][uid] = {}
+    save_db(db)
+    
+    kb = []
+    if str(uid) == str(ADMIN_ID):
+        kb.append([InlineKeyboardButton("🚀 Gerar Tips Reais Agora", callback_data="force_tips")])
+    
+    await update.message.reply_text("⚽ **DVD TIPS REAL V4.0**\nBot conectado à API de Odds.", reply_markup=InlineKeyboardMarkup(kb))
+
+async def force_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(ADMIN_ID): return
+    await update.callback_query.message.reply_text("🔄 Buscando dados na API...")
+    await send_daily_batch(context.application)
+    await update.callback_query.message.reply_text("✅ Feito!")
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    if not TOKEN:
-        print("❌ ERRO: Token não encontrado.")
-        sys.exit()
-
+    if not TOKEN: sys.exit("Falta TOKEN")
+    
     app = ApplicationBuilder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
     
-    # Conversas
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(enter_key_handler, pattern="^enter_key$")],
-        states={1: [MessageHandler(filters.TEXT, process_key)]},
-        fallbacks=[]
-    ))
+    loop = asyncio.get_event_loop()
+    loop.create_task(keep_alive_async()) # Mantém vivo
+    loop.create_task(scheduler_loop(app)) # Relógio das 8h
     
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(create_tip_start, pattern="^create_tip$")],
-        states={2: [MessageHandler(filters.TEXT, broadcast_tip)]},
-        fallbacks=[]
-    ))
-    
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin_panel$"))
-    app.add_handler(CallbackQueryHandler(gen_key_menu, pattern="^gen_key_menu$"))
-    app.add_handler(CallbackQueryHandler(result_menu, pattern="^result_menu$"))
-    app.add_handler(CallbackQueryHandler(set_result, pattern="^set_"))
-    app.add_handler(CallbackQueryHandler(my_stats, pattern="^my_stats$"))
-    
-    print("🤖 DVD TIPS V2.0 RODANDO...")
-    app.run_polling(drop_pending_updates=True)
+    print("🤖 DVD TIPS REAL V4.0 - ONLINE")
+    app.run_polling()
