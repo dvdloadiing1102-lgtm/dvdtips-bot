@@ -44,20 +44,35 @@ if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         USE_GEMINI = True
         logger.info("✅ IA Ativa")
-    except: logger.warning("⚠️ IA Off")
+    except:
+        logger.warning("⚠️ IA Off")
 
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS =================
+# ================= BANCO DE DADOS (CORRIGIDO) =================
 def load_db():
-    default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
-    if not os.path.exists(DB_FILE): return default
-    try: with open(DB_FILE, "r") as f: return json.load(f)
-    except: return default
+    default = {
+        "users": {}, 
+        "keys": {}, 
+        "last_run": "", 
+        "api_cache": None, 
+        "api_cache_time": None
+    }
+    
+    if not os.path.exists(DB_FILE):
+        return default
+    
+    try:
+        # AGORA ESTÁ EM LINHAS SEPARADAS (SEM ERRO)
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return default
 
 def save_db(data):
-    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 db = load_db()
 
@@ -65,19 +80,28 @@ db = load_db()
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS V12 ONLINE")
-        def do_HEAD(self): self.send_response(200); self.end_headers()
-    try: HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except: pass
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"DVD TIPS V12.1 ONLINE")
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+            
+    try:
+        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except:
+        pass
 
 def run_pinger():
     if not RENDER_URL: return
     while True:
         time.sleep(600)
-        try: 
+        try:
             import requests
             requests.get(RENDER_URL, timeout=10)
-        except: pass
+        except:
+            pass
 
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
@@ -96,12 +120,19 @@ async def get_smart_analysis(match, tip, context="tip"):
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
             loop = asyncio.get_running_loop()
-            if context == "tip": prompt = f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase técnica (PT-BR)."
-            elif context == "guru": prompt = f"Responda curto sobre apostas: {match}"
-            elif context == "analise": prompt = f"Analise {match}. Vencedor e Gols. PT-BR."
+            
+            if context == "tip":
+                prompt = f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase técnica (PT-BR)."
+            elif context == "guru":
+                prompt = f"Responda curto sobre apostas: {match}"
+            elif context == "analise":
+                prompt = f"Analise {match}. Vencedor e Gols. PT-BR."
+            
             response = await loop.run_in_executor(None, model.generate_content, prompt)
-            if response.text: return response.text.strip()
-        except: pass
+            if response.text:
+                return response.text.strip()
+        except:
+            pass
     return random.choice(BACKUP_PHRASES)
 
 # ================= MOTOR DE ODDS (FILTRO RIGOROSO) =================
@@ -109,14 +140,14 @@ async def get_smart_analysis(match, tip, context="tip"):
 # LISTA VIP (TOP 20 LIGAS + COPAS)
 TARGET_LEAGUES = [
     # Top 5 Europa
-    'soccer_epl', 'soccer_efl_champ', 'soccer_england_efl_cup', # Inglaterra
-    'soccer_italy_serie_a', 'soccer_italy_serie_b', 'soccer_italy_coppa_italia', # Itália
-    'soccer_germany_bundesliga', 'soccer_germany_bundesliga2', 'soccer_germany_dfb_pokal', # Alemanha
-    'soccer_spain_la_liga', 'soccer_spain_copa_del_rey', # Espanha
-    'soccer_france_ligue_one', # França
+    'soccer_epl', 'soccer_efl_champ', 'soccer_england_efl_cup',
+    'soccer_italy_serie_a', 'soccer_italy_serie_b', 'soccer_italy_coppa_italia',
+    'soccer_germany_bundesliga', 'soccer_germany_bundesliga2', 'soccer_germany_dfb_pokal',
+    'soccer_spain_la_liga', 'soccer_spain_copa_del_rey',
+    'soccer_france_ligue_one',
     
     # Brasil & América
-    'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_brazil_campeonato', # Brasil
+    'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_brazil_campeonato',
     'soccer_argentina_primera', 'soccer_libertadores', 'soccer_sulamericana',
     'soccer_usa_mls', 'soccer_mexico_ligamx',
     
@@ -134,12 +165,14 @@ TARGET_LEAGUES = [
 ]
 
 async def get_real_matches(force_refresh=False):
-    if not ODDS_API_KEY: return generate_simulated_matches()
+    if not ODDS_API_KEY:
+        return generate_simulated_matches()
     
     # Cache (30 min)
     if not force_refresh and db.get("api_cache") and db.get("api_cache_time"):
         last = datetime.strptime(db["api_cache_time"], "%Y-%m-%d %H:%M:%S")
-        if (datetime.now() - last).total_seconds() < 1800: return db["api_cache"]
+        if (datetime.now() - last).total_seconds() < 1800:
+            return db["api_cache"]
     
     matches = []
     
@@ -153,7 +186,6 @@ async def get_real_matches(force_refresh=False):
     end_of_today_utc = end_of_today_br + timedelta(hours=3)
     
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # Estratégia Híbrida: Busca Upcoming mas filtra SEVERAMENTE
         try:
             url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
             resp = await client.get(url)
@@ -162,7 +194,8 @@ async def get_real_matches(force_refresh=False):
                 data = resp.json()
                 for game in data:
                     # 1. Filtro de Liga (Só as Tops)
-                    if game['sport_key'] not in TARGET_LEAGUES: continue
+                    if game['sport_key'] not in TARGET_LEAGUES:
+                        continue
                     
                     # 2. Filtro de Data (Só HOJE)
                     game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -172,7 +205,8 @@ async def get_real_matches(force_refresh=False):
                         continue
                         
                     res = process_game(game)
-                    if res: matches.append(res)
+                    if res:
+                        matches.append(res)
                     
         except Exception as e:
             logger.error(f"Erro API: {e}")
@@ -217,7 +251,7 @@ def process_game(game):
             outcomes = sorted(h2h['outcomes'], key=lambda x: x['price'])
             fav = outcomes[0]
             min_odd = 1.10 if is_nba else 1.25
-            if min_odd <= fav['price'] <= 2.30: # Max 2.30 para ser "seguro"
+            if min_odd <= fav['price'] <= 2.30:
                 tip, odd = f"Vence {fav['name']}", fav['price']
         
         # Estratégia Over
@@ -228,14 +262,20 @@ def process_game(game):
                 if over and 1.50 <= over['price'] <= 2.10:
                     tip, odd = f"Over {line.get('point',0)} Pontos", over['price']
             else:
-                # Futebol: Busca Over 2.5 ou Over 1.5 (mais seguro)
                 over25 = next((o for o in totals['outcomes'] if o['name'] == 'Over' and o['point'] == 2.5), None)
                 if over25 and 1.50 <= over25['price'] <= 2.10:
                     tip, odd = "Over 2.5 Gols", over25['price']
 
         if tip:
-            return {"match": f"{game['home_team']} x {game['away_team']}", "tip": tip, "odd": odd, "league": league, "time": time_str}
-    except: return None
+            return {
+                "match": f"{game['home_team']} x {game['away_team']}",
+                "tip": tip, 
+                "odd": odd, 
+                "league": league, 
+                "time": time_str
+            }
+    except:
+        return None
     return None
 
 def generate_simulated_matches():
@@ -260,12 +300,13 @@ async def start(u, c):
     if uid not in db["users"]: db["users"][uid] = {"vip_expiry": ""}
     save_db(db)
     await c.bot.delete_webhook(drop_pending_updates=True)
-    await u.message.reply_text("👋 **DVD TIPS V12.0**\nFiltro: Elite Hoje (Brasil & Top 20)", reply_markup=get_main_keyboard())
+    await u.message.reply_text("👋 **DVD TIPS V12.1**\nFiltro: Elite Hoje (Brasil & Top 20)", reply_markup=get_main_keyboard())
 
 async def direct_jogos(u, c):
     await u.message.reply_text("🔄 Filtrando jogos de HOJE na Elite...")
     tips = await get_real_matches(True)
-    if not tips: return await u.message.reply_text("📭 Sem jogos principais hoje.")
+    if not tips:
+        return await u.message.reply_text("📭 Sem jogos principais hoje.")
     
     txt = ""
     for t in tips[:15]:
@@ -277,46 +318,74 @@ async def direct_ligas(u, c):
     if tips:
         ls = sorted(list(set([t['league'] for t in tips])))
         await u.message.reply_text(f"🏆 **Ligas Ativas Hoje:**\n" + "\n".join([f"• {l}" for l in ls]))
-    else: await u.message.reply_text("📭 Nada.")
+    else:
+        await u.message.reply_text("📭 Nada.")
 
 # --- Outras Funções (Análise, Calc, etc) ---
-async def start_analise(u, c): await u.message.reply_text("⚽/🏀 **Qual jogo?**"); return INPUT_ANALISE
+async def start_analise(u, c):
+    await u.message.reply_text("⚽/🏀 **Qual jogo?**")
+    return INPUT_ANALISE
+
 async def handle_analise(u, c):
     await u.message.reply_text("🧠 _Analisando..._")
     res = await get_smart_analysis(u.message.text, "", "analise")
-    await u.message.reply_text(f"🤖 **Análise:**\n{res}", parse_mode="Markdown"); return ConversationHandler.END
+    await u.message.reply_text(f"🤖 **Análise:**\n{res}", parse_mode="Markdown")
+    return ConversationHandler.END
 
-async def start_calc(u, c): await u.message.reply_text("🧮 `Valor Odd`"); return INPUT_CALC
+async def start_calc(u, c):
+    await u.message.reply_text("🧮 `Valor Odd`")
+    return INPUT_CALC
+
 async def handle_calc(u, c): 
-    try: v,o=map(float,u.message.text.replace(",", ".").split()); await u.message.reply_text(f"✅ Lucro: {v*(o-1):.2f}")
-    except: await u.message.reply_text("❌ Erro")
+    try:
+        v,o=map(float,u.message.text.replace(",", ".").split())
+        await u.message.reply_text(f"✅ Lucro: {v*(o-1):.2f}")
+    except:
+        await u.message.reply_text("❌ Erro")
     return ConversationHandler.END
 
-async def start_gestao(u, c): await u.message.reply_text("💰 Banca?"); return INPUT_GESTAO
+async def start_gestao(u, c):
+    await u.message.reply_text("💰 Banca?")
+    return INPUT_GESTAO
+
 async def handle_gestao(u, c):
-    try: b=float(u.message.text.replace(",", ".")); await u.message.reply_text(f"📊 Aposta (2%): {b*0.02:.2f}")
-    except: await u.message.reply_text("❌ Erro")
+    try:
+        b=float(u.message.text.replace(",", "."))
+        await u.message.reply_text(f"📊 Aposta (2%): {b*0.02:.2f}")
+    except:
+        await u.message.reply_text("❌ Erro")
     return ConversationHandler.END
 
-async def start_guru(u, c): await u.message.reply_text("🤖 Pergunte:"); return INPUT_GURU
+async def start_guru(u, c):
+    await u.message.reply_text("🤖 Pergunte:")
+    return INPUT_GURU
+
 async def handle_guru(u, c): 
     res = await get_smart_analysis(u.message.text, "", "guru")
-    await u.message.reply_text(f"🎓 {res}"); return ConversationHandler.END
+    await u.message.reply_text(f"🎓 {res}")
+    return ConversationHandler.END
 
 async def direct_zebra(u, c):
     t = await get_real_matches(False)
     m = max(t, key=lambda x: x['odd']) if t else None
-    if m: await u.message.reply_text(f"🦓 **ZEBRA:**\n{m['match']}\n🎯 {m['tip']} (@{m['odd']})")
-    else: await u.message.reply_text("📭 Nada.")
+    if m:
+        await u.message.reply_text(f"🦓 **ZEBRA:**\n{m['match']}\n🎯 {m['tip']} (@{m['odd']})")
+    else:
+        await u.message.reply_text("📭 Nada.")
 
 async def direct_segura(u, c):
     t = await get_real_matches(False)
     m = min(t, key=lambda x: x['odd']) if t else None
-    if m: await u.message.reply_text(f"🛡️ **SEGURA:**\n{m['match']}\n🎯 {m['tip']} (@{m['odd']})")
-    else: await u.message.reply_text("📭 Nada.")
+    if m:
+        await u.message.reply_text(f"🛡️ **SEGURA:**\n{m['match']}\n🎯 {m['tip']} (@{m['odd']})")
+    else:
+        await u.message.reply_text("📭 Nada.")
 
-async def direct_glossario(u, c): await u.message.reply_text("📚 **Glossário:**\nOver: Mais\nUnder: Menos")
-async def direct_status(u, c): await u.message.reply_text(f"🎫 ID: `{u.effective_user.id}`", parse_mode="Markdown")
+async def direct_glossario(u, c):
+    await u.message.reply_text("📚 **Glossário:**\nOver: Mais\nUnder: Menos")
+
+async def direct_status(u, c):
+    await u.message.reply_text(f"🎫 ID: `{u.effective_user.id}`", parse_mode="Markdown")
 
 # Admin
 def check_admin(uid): return str(uid) == str(ADMIN_ID)
@@ -330,27 +399,41 @@ async def admin_cmd(u, c):
 async def force_tips(u, c):
     await u.callback_query.message.reply_text("🚀 Buscando...")
     tips = await get_real_matches(True)
-    if not tips: await u.callback_query.message.reply_text("❌ Nada."); return
+    if not tips:
+        await u.callback_query.message.reply_text("❌ Nada.")
+        return
     for uid in db["users"]:
         try:
             await c.bot.send_message(uid, "📅 **TIPS DE HOJE (ELITE):**")
             for t in tips[:6]:
                 rs = await get_smart_analysis(t['match'], t['tip'], "tip")
                 await c.bot.send_message(uid, f"🏆 {t['league']}\n⏰ {t['time']} | ⚔️ {t['match']}\n🎯 **{t['tip']}** (@{t['odd']})\n🧠 _{rs}_", parse_mode="Markdown")
-        except: pass
+        except:
+            pass
     await u.callback_query.message.reply_text("✅ Feito.")
 
-async def gen_key_h(u, c): await u.callback_query.message.reply_text(f"`{generate_key(30)}`", parse_mode="Markdown")
+async def gen_key_h(u, c):
+    await u.callback_query.message.reply_text(f"`{generate_key(30)}`", parse_mode="Markdown")
+
 async def start_vip(u, c): 
     if u.callback_query: await u.callback_query.answer()
-    await u.message.reply_text("🔑 Chave:"); return VIP_KEY
+    await u.message.reply_text("🔑 Chave:")
+    return VIP_KEY
+
 async def handle_vip(u, c):
-    k=u.message.text.strip(); uid=str(u.effective_user.id)
+    k=u.message.text.strip()
+    uid=str(u.effective_user.id)
     if k in db["keys"]:
-        db["users"][uid]["vip_expiry"] = "Ativo"; save_db(db); await u.message.reply_text("✅ VIP Ativo!")
-    else: await u.message.reply_text("❌")
+        db["users"][uid]["vip_expiry"] = "Ativo"
+        save_db(db)
+        await u.message.reply_text("✅ VIP Ativo!")
+    else:
+        await u.message.reply_text("❌")
     return ConversationHandler.END
-async def cancel(u, c): await u.message.reply_text("❌", reply_markup=get_main_keyboard()); return ConversationHandler.END
+
+async def cancel(u, c):
+    await u.message.reply_text("❌", reply_markup=get_main_keyboard())
+    return ConversationHandler.END
 
 # Agendador
 async def scheduler(app):
@@ -362,9 +445,12 @@ async def scheduler(app):
                 for uid in db["users"]:
                     try:
                         await app.bot.send_message(uid, "☀️ **Tips da Elite Hoje:**")
-                        for t in tips[:5]: await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
-                    except: pass
-                db["last_run"] = now.strftime("%Y-%m-%d"); save_db(db)
+                        for t in tips[:5]:
+                            await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
+                    except:
+                        pass
+                db["last_run"] = now.strftime("%Y-%m-%d")
+                save_db(db)
         await asyncio.sleep(60)
 
 async def post_init(app):
@@ -380,7 +466,14 @@ if __name__ == "__main__":
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🧮 Calculadora$"), start_calc)], states={INPUT_CALC: [MessageHandler(filters.TEXT, handle_calc)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^💰 Gestão Banca$"), start_gestao)], states={INPUT_GESTAO: [MessageHandler(filters.TEXT, handle_gestao)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🤖 Guru IA$"), start_guru)], states={INPUT_GURU: [MessageHandler(filters.TEXT, handle_guru)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-        app.add_handler(ConversationHandler(entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, fallbacks=[]))
+        app.add_handler(ConversationHandler(entry_points=[ConversationHandler.entry_points, CallbackQueryHandler(start_vip, pattern="^enter_key$")], states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, fallbacks=[]))
+        
+        # Correção do Entry Point do VIP para aceitar o comando /vip também
+        app.add_handler(ConversationHandler(
+            entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], 
+            states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, 
+            fallbacks=[CommandHandler("cancel", cancel)]
+        ))
 
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("admin", admin_cmd))
@@ -393,7 +486,7 @@ if __name__ == "__main__":
         app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
         app.add_handler(CallbackQueryHandler(gen_key_h, pattern="^gen_key$"))
 
-        print("🤖 V12.0 ONLINE (DATA RIGOROSA + ELITE)")
+        print("🤖 V12.1 ONLINE (DATA RIGOROSA + ELITE)")
         app.run_polling()
     except Conflict:
         print("🚨 CONFLITO! Reiniciando...")
