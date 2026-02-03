@@ -28,7 +28,7 @@ except ImportError:
 # ================= CONFIGURAÇÃO =================
 TOKEN = os.getenv("BOT_TOKEN") 
 ADMIN_ID = os.getenv("ADMIN_ID")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY") # NOVA VARIÁVEL!
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
 DB_FILE = "dvd_tips_real.json"
 
@@ -48,23 +48,32 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SERVIDOR WEB & KEEP ALIVE =================
+# ================= SERVIDOR WEB (KEEP ALIVE VIA THREADS) =================
+# Isso roda separado do bot para não travar
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS REAL ON")
-        def do_HEAD(self):
+        def do_HEAD(self): # Importante para UptimeRobot
             self.send_response(200); self.end_headers()
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    
+    try:
+        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except Exception as e:
+        print(f"Erro no Server Web: {e}")
 
+# Função que pinga o próprio site a cada 10 min
 def run_pinger():
     if not RENDER_URL: return
     while True:
         time.sleep(600)
-        try: requests.get(RENDER_URL, timeout=10)
+        try:
+            requests.get(RENDER_URL, timeout=10)
+            print("Ping enviado para manter vivo.")
         except: pass
 
+# Inicia as Threads de suporte (Web + Pinger)
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
 
@@ -72,10 +81,8 @@ threading.Thread(target=run_pinger, daemon=True).start()
 def get_real_matches():
     """Busca jogos reais da API ou usa simulador se falhar"""
     if not ODDS_API_KEY:
-        return generate_simulated_matches() # Fallback se não tiver chave
+        return generate_simulated_matches()
     
-    # Busca Odds de Futebol (Soccer) - Ex: Brasileirão, Premier League
-    # Regiões: uk, us, eu, au. Markets: h2h (vencedor).
     url = f"https://api.the-odds-api.com/v4/sports/soccer/odds/?apiKey={ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal"
     
     try:
@@ -87,26 +94,20 @@ def get_real_matches():
         data = response.json()
         matches = []
         
-        # Filtra jogos que acontecem nas próximas 24h
         now = datetime.utcnow()
         limit = now + timedelta(hours=24)
         
         for game in data:
             game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ")
-            if game_time > limit: continue # Pula jogos distantes
+            if game_time > limit: continue
             
-            # Tenta pegar odds da Bet365 ou Betfair (ou a primeira que tiver)
             bookmakers = game.get('bookmakers', [])
             if not bookmakers: continue
             
-            odds_data = bookmakers[0]['markets'][0]['outcomes'] # Pega o primeiro bookmaker
-            
-            # Lógica simples de Tip: Apostar no Favorito (menor odd)
-            # Ordena por odd: [Favorito, ..., Zebra]
+            odds_data = bookmakers[0]['markets'][0]['outcomes']
             sorted_odds = sorted(odds_data, key=lambda x: x['price'])
             favorito = sorted_odds[0]
             
-            # Filtra odds muito baixas (tipo 1.05)
             if favorito['price'] < 1.30: continue
             
             matches.append({
@@ -116,7 +117,7 @@ def get_real_matches():
                 "league": game['sport_title']
             })
             
-            if len(matches) >= 12: break # Limite de 12 jogos
+            if len(matches) >= 12: break
             
         if not matches: return generate_simulated_matches()
         return matches
@@ -126,11 +127,11 @@ def get_real_matches():
         return generate_simulated_matches()
 
 def generate_simulated_matches():
-    """Simulador (Backup se a API falhar ou acabar os créditos)"""
-    TEAMS = ["Flamengo", "Palmeiras", "Real Madrid", "City", "Bayern", "Arsenal"]
+    TEAMS = ["Flamengo", "Palmeiras", "Real Madrid", "City", "Bayern", "Arsenal", "Liverpool", "Barcelona"]
     matches = []
-    for _ in range(5):
-        t1, t2 = random.sample(TEAMS, 2)
+    random.shuffle(TEAMS)
+    for i in range(0, len(TEAMS)-1, 2):
+        t1, t2 = TEAMS[i], TEAMS[i+1]
         matches.append({
             "match": f"{t1} x {t2}",
             "tip": "Over 2.5 Gols",
@@ -140,7 +141,6 @@ def generate_simulated_matches():
     return matches
 
 def generate_multiple_bet(matches_pool):
-    """Cria a Múltipla a partir dos jogos reais"""
     if len(matches_pool) < 3: return None
     selection = random.sample(matches_pool, k=3)
     
@@ -158,11 +158,10 @@ def generate_multiple_bet(matches_pool):
 
 # ================= ENVIO AUTOMÁTICO =================
 async def send_daily_batch(app):
-    # Pega jogos REAIS
     daily_selection = get_real_matches()
     multiple_bet = generate_multiple_bet(daily_selection)
     
-    header = f"📅 **TIPS DE HOJE {datetime.now().strftime('%d/%m')}** 📅\n_Dados reais analisados via API_\n───────────────────"
+    header = f"📅 **TIPS DE HOJE {datetime.now().strftime('%d/%m')}** 📅\n_Dados analisados via API_\n───────────────────"
     
     for uid in db["users"]:
         try:
@@ -180,16 +179,23 @@ async def send_daily_batch(app):
                 
         except: pass
 
+# Loop que verifica a hora (Roda dentro do Event Loop do Bot)
 async def scheduler_loop(app):
     while True:
-        now_br = datetime.utcnow() - timedelta(hours=3)
-        if now_br.strftime("%H:%M") == "08:00" and db["last_run"] != now_br.strftime("%Y-%m-%d"):
-            await send_daily_batch(app)
-            db["last_run"] = now_br.strftime("%Y-%m-%d")
-            save_db(db)
-        await asyncio.sleep(50)
+        try:
+            now_br = datetime.utcnow() - timedelta(hours=3)
+            # Verifica se é 08:00
+            if now_br.strftime("%H:%M") == "08:00" and db["last_run"] != now_br.strftime("%Y-%m-%d"):
+                logger.info("Enviando tips automáticas...")
+                await send_daily_batch(app)
+                db["last_run"] = now_br.strftime("%Y-%m-%d")
+                save_db(db)
+            await asyncio.sleep(50)
+        except Exception as e:
+            logger.error(f"Erro no Scheduler: {e}")
+            await asyncio.sleep(60)
 
-# ================= HANDLERS BÁSICOS =================
+# ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid not in db["users"]: db["users"][uid] = {}
@@ -197,27 +203,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb = []
     if str(uid) == str(ADMIN_ID):
-        kb.append([InlineKeyboardButton("🚀 Gerar Tips Reais Agora", callback_data="force_tips")])
+        kb.append([InlineKeyboardButton("🚀 Gerar Tips Agora", callback_data="force_tips")])
     
-    await update.message.reply_text("⚽ **DVD TIPS REAL V4.0**\nBot conectado à API de Odds.", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text("⚽ **DVD TIPS REAL V4.1**\nBot conectado e pronto.", reply_markup=InlineKeyboardMarkup(kb))
 
 async def force_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != str(ADMIN_ID): return
-    await update.callback_query.message.reply_text("🔄 Buscando dados na API...")
+    await update.callback_query.message.reply_text("🔄 Gerando...")
     await send_daily_batch(context.application)
-    await update.callback_query.message.reply_text("✅ Feito!")
+    await update.callback_query.message.reply_text("✅ Enviado!")
 
 # ================= MAIN =================
 if __name__ == "__main__":
     if not TOKEN: sys.exit("Falta TOKEN")
     
+    # Configuração correta para evitar conflito de loops
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
     
-    loop = asyncio.get_event_loop()
-    loop.create_task(keep_alive_async()) # Mantém vivo
-    loop.create_task(scheduler_loop(app)) # Relógio das 8h
+    # Inicia o agendador como uma tarefa background DO BOT
+    # Isso evita o erro "NameError: keep_alive_async" e "no running event loop"
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
-    print("🤖 DVD TIPS REAL V4.0 - ONLINE")
-    app.run_polling()
+    print("🤖 DVD TIPS REAL V4.1 - INICIANDO...")
+    
+    # Injetamos o scheduler antes de iniciar o polling
+    async def main_wrapper():
+        async with app:
+            await app.start()
+            # Cria a tarefa do agendador
+            asyncio.create_task(scheduler_loop(app))
+            await app.updater.start_polling(drop_pending_updates=True)
+            # Mantém rodando
+            await asyncio.Event().wait()
+
+    try:
+        loop.run_until_complete(main_wrapper())
+    except KeyboardInterrupt:
+        pass
