@@ -13,23 +13,21 @@ DB_FILE = "dvd_tips_v19_pro.json"
 #############################################
 # db.py – Banco de dados seguro com lock + logs
 #############################################
-import json, threading, os, datetime
+import json, threading, datetime
 
 db_lock = threading.Lock()
 
 def load_db():
     default = {"users": {}, "keys": {}, "last_run": "", "api_cache": [], "api_cache_time": None, "logs": []}
-    if not os.path.exists(DB_FILE):
-        return default
     try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
+        with open("dvd_tips_v19_pro.json", "r", encoding="utf-8") as f:
             return json.load(f)
     except:
         return default
 
 def save_db(data):
     with db_lock:
-        with open(DB_FILE, "w", encoding="utf-8") as f:
+        with open("dvd_tips_v19_pro.json", "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
 def log_action(user_id, action):
@@ -38,7 +36,7 @@ def log_action(user_id, action):
     save_db(db)
 
 #############################################
-# utils.py – Funções auxiliares VIP / Flood
+# utils.py – Funções VIP / Flood
 #############################################
 import secrets, datetime, time
 
@@ -49,7 +47,8 @@ def generate_vip_key(days=30):
 
 def check_vip(uid, db):
     expiry = db["users"].get(uid, {}).get("vip_expiry")
-    if not expiry: return False
+    if not expiry:
+        return False
     return datetime.datetime.fromisoformat(expiry) > datetime.datetime.now()
 
 last_action_time = {}
@@ -67,7 +66,6 @@ def check_flood(uid, limit_seconds=3):
 #############################################
 import threading, time, requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from config import RENDER_URL
 
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -81,20 +79,24 @@ def start_web_server():
             self.end_headers()
     try:
         HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except: pass
+    except:
+        pass
 
-def run_pinger():
-    if not RENDER_URL: return
+def run_pinger(RENDER_URL):
+    if not RENDER_URL:
+        return
     while True:
         time.sleep(600)
         try:
             requests.get(RENDER_URL, timeout=10)
-        except: pass
+        except:
+            pass
 
 #############################################
 # ai_service.py – Gemini IA + fallback
 #############################################
 import asyncio, random
+
 USE_GEMINI = False
 BACKUP_PHRASES = [
     "Favorito claro, odds indicam vitória tranquila.",
@@ -114,7 +116,8 @@ except:
     USE_GEMINI = False
 
 async def get_smart_analysis(match, tip="", mode="tip"):
-    if not USE_GEMINI: return random.choice(BACKUP_PHRASES)
+    if not USE_GEMINI:
+        return random.choice(BACKUP_PHRASES)
     prompts = {
         "tip": f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase técnica.",
         "guru": f"Responda curto sobre apostas: {match}",
@@ -129,7 +132,7 @@ async def get_smart_analysis(match, tip="", mode="tip"):
         return random.choice(BACKUP_PHRASES)
 
 #############################################
-# football_service.py – API Football + Cache + retry
+# football_service.py – API Football + Cache
 #############################################
 import httpx, math
 from datetime import datetime, timedelta, timezone
@@ -141,7 +144,8 @@ CACHE_TTL = 1800
 
 def is_cache_valid(db):
     ts = db.get("api_cache_time")
-    if not ts: return False
+    if not ts:
+        return False
     last = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
     return (datetime.now() - last).total_seconds() < CACHE_TTL
 
@@ -169,7 +173,8 @@ async def get_real_matches(force=False):
     VIP_LEAGUES = {39, 140, 61, 78, 135, 2, 3, 13, 11}
 
     for g in data:
-        if g["league"]["id"] not in VIP_LEAGUES: continue
+        if g["league"]["id"] not in VIP_LEAGUES:
+            continue
         home, away = g["teams"]["home"]["name"], g["teams"]["away"]["name"]
         ts = g["fixture"]["timestamp"]
         matches.append({
@@ -180,25 +185,35 @@ async def get_real_matches(force=False):
             "tip": random.choice([f"Vence {home}", "Over 2.5 Gols"])
         })
 
-    matches.sort(key=lambda x:x["time"])
+    matches.sort(key=lambda x: x["time"])
     db["api_cache"], db["api_cache_time"] = matches, datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     save_db(db)
     return matches
 
 def generate_multiple(matches, size=4):
-    if len(matches)<size: return None
+    if len(matches) < size:
+        return None
     selection = random.sample(matches, size)
-    total_odd = round(math.prod(m["odd"] for m in selection),2)
+    total_odd = round(math.prod(m["odd"] for m in selection), 2)
     return {"games": selection, "total_odd": total_odd}
 
 #############################################
-# handlers/main_handlers.py
+# main.py – Bot Telegram completo
 #############################################
-from telegram import ReplyKeyboardMarkup
-from telegram.ext import CommandHandler, MessageHandler, filters
-from db import load_db, log_action
+import asyncio, logging, threading
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from db import log_action
+from webserver import start_web_server, run_pinger
+from config import TOKEN, RENDER_URL
 from football_service import get_real_matches, generate_multiple
 from ai_service import get_smart_analysis
+from utils import check_flood
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ================= Handlers =================
+from telegram import ReplyKeyboardMarkup
 
 def get_main_keyboard():
     return ReplyKeyboardMarkup([
@@ -206,17 +221,38 @@ def get_main_keyboard():
         ["🦓 Zebra do Dia", "🛡️ Aposta Segura"],
         ["💰 Gestão Banca", "🤖 Guru IA"],
         ["🏆 Ligas", "📋 Jogos de Hoje"],
-        ["📚 Glossário", "🎫 Meu Status"],
-        ["👑 Admin"]
+        ["📚 Glossário", "🎫 Meu Status"]
     ], resize_keyboard=True)
 
 async def start(update, context):
     uid = str(update.effective_user.id)
-    db = load_db()
-    if uid not in db["users"]:
-        db["users"][uid] = {"vip_expiry": ""}
+    if check_flood(uid):
+        await update.message.reply_text("⚠️ Ação bloqueada: flood detectado")
+        return
     log_action(uid, "start_bot")
     await update.message.reply_text("👋 **DVD TIPS V19 PRO**\nBot Online!", reply_markup=get_main_keyboard())
 
-def register_main(app):
-    app.add_handler(CommandHandler("start", start)
+async def direct_multipla(update, context):
+    tips = await get_real_matches()
+    multi = generate_multiple(tips)
+    if multi:
+        txt = "🚀 **MÚLTIPLA DO DIA**\n\n"
+        for m in multi['games']:
+            txt += f"• {m['match']} ({m['tip']})\n"
+        txt += f"\n💰 **ODD TOTAL: {multi['total_odd']:.2f}**"
+        await update.message.reply_text(txt)
+    else:
+        await update.message.reply_text("⚠️ Poucos jogos para múltipla.")
+
+# ================= Inicialização Bot =================
+if __name__ == "__main__":
+    threading.Thread(target=start_web_server, daemon=True).start()
+    threading.Thread(target=run_pinger, args=(RENDER_URL,), daemon=True).start()
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Regex("^🚀 Múltipla 20x$"), direct_multipla))
+
+    logger.info("🤖 DVD TIPS V19 PRO ONLINE")
+    app.run_polling()
