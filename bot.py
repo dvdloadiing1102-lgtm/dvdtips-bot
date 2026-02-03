@@ -32,7 +32,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
-DB_FILE = "dvd_tips_v14.json"
+DB_FILE = "dvd_tips_v16.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,62 +50,52 @@ if GEMINI_API_KEY:
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS (SINTAXE CORRIGIDA) =================
+# ================= BANCO DE DADOS =================
 def load_db():
     default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
-    if not os.path.exists(DB_FILE):
-        return default
-    
+    if not os.path.exists(DB_FILE): return default
     try:
-        # CORREÇÃO: Linhas separadas para evitar SyntaxError
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return default
+        with open(DB_FILE, "r") as f: return json.load(f)
+    except: return default
 
 def save_db(data):
-    with open(DB_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
 
 db = load_db()
 
-# ================= SERVIDOR WEB (KEEP ALIVE) =================
+# ================= SERVIDOR WEB =================
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self): 
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"DVD TIPS V14 ONLINE")
+            self.wfile.write(b"DVD TIPS V16 ONLINE")
         def do_HEAD(self): 
             self.send_response(200)
             self.end_headers()
-    try: 
-        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except: 
-        pass
+    try: HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except: pass
 
 def run_pinger():
     if not RENDER_URL: return
     while True:
         time.sleep(600)
         try:
-            # Import local para não conflitar
             import requests
             requests.get(RENDER_URL, timeout=10)
-        except: 
-            pass
+        except: pass
 
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
 
 # ================= INTELIGÊNCIA ARTIFICIAL =================
 BACKUP_PHRASES = [
-    "Confronto equilibrado, leve vantagem para o mandante.",
-    "Ataques fortes, grande chance de gols.",
-    "Jogo truncado, defesas devem prevalecer.",
-    "Favorito vive boa fase e deve vencer.",
-    "Odd de valor, vale o risco calculado."
+    "Favorito joga em casa, probabilidade alta.",
+    "Ataques potentes, tendência de gols.",
+    "Jogo truncado, defesas prevalecem.",
+    "Histórico recente aponta vantagem do mandante.",
+    "Odd desajustada, vale o risco calculado."
 ]
 
 async def get_smart_analysis(match, tip, context="tip"):
@@ -113,69 +103,57 @@ async def get_smart_analysis(match, tip, context="tip"):
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
             loop = asyncio.get_running_loop()
-            
             prompt = ""
-            if context == "tip": 
-                prompt = f"Futebol/Basquete: {match}. Minha aposta: {tip}. Justifique em 1 frase curta técnica (PT-BR)."
-            elif context == "guru": 
-                prompt = f"Responda curto sobre apostas esportivas: {match}"
-            elif context == "analise": 
-                prompt = f"Analise o jogo {match}. Dê o vencedor provável e expectativa de gols/pontos. Responda em Português."
-            
-            # Executa sem travar o bot
+            if context == "tip": prompt = f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase curta técnica (PT-BR)."
+            elif context == "guru": prompt = f"Responda curto sobre apostas: {match}"
+            elif context == "analise": prompt = f"Analise {match}. Vencedor e Gols. PT-BR."
             response = await loop.run_in_executor(None, model.generate_content, prompt)
             if response.text: return response.text.strip()
         except Exception as e:
             logger.error(f"Erro IA: {e}")
-    
     return random.choice(BACKUP_PHRASES)
 
-# ================= MOTOR DE ODDS (FILTRO DATA RIGOROSO) =================
+# ================= MOTOR DE ODDS (MEGA PACK) =================
 TARGET_LEAGUES = [
-    'soccer_epl', 'soccer_england_efl_cup', 
+    'soccer_epl', 'soccer_england_efl_cup', 'soccer_efl_champ',
     'soccer_italy_serie_a', 'soccer_italy_coppa_italia',
     'soccer_germany_bundesliga', 'soccer_germany_dfb_pokal',
     'soccer_spain_la_liga', 'soccer_spain_copa_del_rey',
     'soccer_france_ligue_one', 'soccer_uefa_champions_league',
     'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_brazil_campeonato',
     'soccer_libertadores', 'soccer_sulamericana',
+    'soccer_argentina_primera', 'soccer_portugal_primeira_liga',
+    'soccer_turkey_super_league', 'soccer_netherlands_eredivisie',
     'basketball_nba'
 ]
 
 async def get_real_matches(force_refresh=False):
     if not ODDS_API_KEY: return generate_simulated_matches()
     
-    # Cache de 30 min
+    # Cache 15 min
     if not force_refresh and db.get("api_cache") and db.get("api_cache_time"):
         last = datetime.strptime(db["api_cache_time"], "%Y-%m-%d %H:%M:%S")
-        if (datetime.now() - last).total_seconds() < 1800: return db["api_cache"]
+        if (datetime.now() - last).total_seconds() < 900: return db["api_cache"]
     
     matches = []
-    
-    # DATAS: Define o intervalo exato do "Dia de Hoje no Brasil"
     now_utc = datetime.now(timezone.utc)
     now_br = now_utc - timedelta(hours=3)
+    end_of_day_utc = (now_br.replace(hour=23, minute=59, second=59) + timedelta(hours=3))
     
-    # Final do dia de hoje (23:59:59)
-    end_of_day_br = now_br.replace(hour=23, minute=59, second=59)
-    end_of_day_utc = end_of_day_br + timedelta(hours=3)
-    
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    async with httpx.AsyncClient(timeout=20.0) as client:
         try:
-            # Pede jogos "Upcoming"
-            url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
+            # Pede Upcoming sem filtro regional para pegar tudo
+            url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&markets=h2h,totals&oddsFormat=decimal"
             resp = await client.get(url)
             
             if resp.status_code == 200:
                 data = resp.json()
                 for game in data:
-                    # 1. Filtro de Ligas (Elite)
-                    if game['sport_key'] not in TARGET_LEAGUES: continue
-                    
-                    # 2. Filtro de Data (RIGOROSO)
+                    # Se temos poucos jogos, aceita qualquer liga de futebol, senão filtra
+                    if len(matches) > 10 and game['sport_key'] not in TARGET_LEAGUES:
+                        continue
+                        
                     game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                    
-                    # Se o jogo já passou há mais de 2h ou é DEPOIS de hoje -> Pula
                     if game_time < (now_utc - timedelta(hours=2)) or game_time > end_of_day_utc:
                         continue
                     
@@ -206,7 +184,6 @@ def process_game(game):
     try:
         game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         time_str = (game_time - timedelta(hours=3)).strftime("%H:%M")
-        
         league = game['sport_title'].replace("Soccer ", "").replace("Basketball ", "")
         is_nba = 'NBA' in league
         
@@ -221,25 +198,50 @@ def process_game(game):
         if h2h:
             outcomes = sorted(h2h['outcomes'], key=lambda x: x['price'])
             fav = outcomes[0]
-            min_odd = 1.10 if is_nba else 1.25
-            if min_odd <= fav['price'] <= 2.30:
+            min_odd = 1.10 if is_nba else 1.20
+            if min_odd <= fav['price'] <= 2.60: # Aceita odds até 2.60 para ter mais volume
                 tip, odd = f"Vence {fav['name']}", fav['price']
         
-        if (not tip or odd < 1.25) and totals:
+        if (not tip or odd < 1.30) and totals:
             line = totals['outcomes'][0]
             if is_nba:
                 over = next((o for o in totals['outcomes'] if o['name'] == 'Over'), None)
                 if over and 1.50 <= over['price'] <= 2.10:
-                    point = line.get('point', 0)
-                    tip, odd = f"Over {point} Pontos", over['price']
+                    tip, odd = f"Over {line.get('point',0)} Pontos", over['price']
             else:
                 over25 = next((o for o in totals['outcomes'] if o['name'] == 'Over' and o['point'] == 2.5), None)
-                if over25 and 1.50 <= over25['price'] <= 2.10:
+                if over25 and 1.50 <= over25['price'] <= 2.20:
                     tip, odd = "Over 2.5 Gols", over25['price']
 
         if tip:
             return {"match": f"{game['home_team']} x {game['away_team']}", "tip": tip, "odd": odd, "league": league, "time": time_str}
     except: return None
+    return None
+
+def generate_multiple(matches):
+    # Gera uma múltipla de Odd 20 a 35
+    if not matches or len(matches) < 5: return None
+    
+    # Filtra jogos com odds "seguras" para a múltipla (1.40 a 2.20)
+    candidates = [m for m in matches if 1.40 <= m['odd'] <= 2.20]
+    
+    for _ in range(50): # Tenta 50 combinações aleatórias
+        random.shuffle(candidates)
+        selection = []
+        total_odd = 1.0
+        
+        for game in candidates:
+            if game in selection: continue
+            if game['match'] in [s['match'] for s in selection]: continue # Evita mesmo jogo
+            
+            selection.append(game)
+            total_odd *= game['odd']
+            
+            if 20.0 <= total_odd <= 35.0:
+                return {"games": selection, "total_odd": total_odd}
+            
+            if total_odd > 35.0: break # Passou do limite, tenta outra
+            
     return None
 
 def generate_simulated_matches():
@@ -251,10 +253,10 @@ def generate_simulated_matches():
 # ================= MENUS =================
 def get_main_keyboard():
     return ReplyKeyboardMarkup([
-        ["🔮 Analisar Jogo", "🧮 Calculadora"],
+        ["🔮 Analisar Jogo", "🚀 Múltipla 20x"], # Múltipla voltou!
         ["🦓 Zebra do Dia", "🛡️ Aposta Segura"],
         ["💰 Gestão Banca", "🤖 Guru IA"],
-        ["🏆 Ligas", "📋 Jogos de Hoje"],
+        ["🏆 Ligas", "📋 Jogos de Hoje"], # Jogos de Hoje
         ["📚 Glossário", "🎫 Meu Status"]
     ], resize_keyboard=True)
 
@@ -263,26 +265,48 @@ async def start(u, c):
     uid=str(u.effective_user.id)
     if uid not in db["users"]: db["users"][uid] = {"vip_expiry": ""}
     save_db(db)
-    # Limpa webhook para evitar conflitos antigos
     await c.bot.delete_webhook(drop_pending_updates=True)
-    await u.message.reply_text("👋 **DVD TIPS V14.0**\nFiltro: Jogos de HOJE (Brasil & Elite)", reply_markup=get_main_keyboard())
+    await u.message.reply_text("👋 **DVD TIPS V16.0**\nAgora com Múltipla e Listão!", reply_markup=get_main_keyboard())
 
 # --- Listas ---
 async def direct_jogos(u, c):
-    await u.message.reply_text("🔄 Buscando jogos de HOJE...")
+    await u.message.reply_text("🔄 Buscando grade completa (15 Jogos)...")
     tips = await get_real_matches(True)
-    if not tips: return await u.message.reply_text("📭 Sem jogos principais hoje.")
+    if not tips: return await u.message.reply_text("📭 Sem jogos.")
     
+    # Envia os Top 15 jogos
     txt = ""
-    for t in tips[:12]:
+    for t in tips[:15]:
         txt += f"⏰ {t['time']} | {t['league']}\n⚔️ {t['match']}\n👉 **{t['tip']}** (@{t['odd']})\n\n"
-    await u.message.reply_text(f"📋 **Agenda Elite Hoje:**\n\n{txt}", parse_mode="Markdown")
+    
+    await u.message.reply_text(f"📋 **GRADE DE HOJE (TOP 15):**\n\n{txt}", parse_mode="Markdown")
+    
+    # Gera Múltipla Automaticamente junto com a grade
+    multi = generate_multiple(tips)
+    if multi:
+        txt_multi = "🚀 **MÚLTIPLA PRONTA (RISCO ALTO)**\n\n"
+        for m in multi['games']:
+            txt_multi += f"• {m['match']}\n  🎯 {m['tip']} (@{m['odd']})\n"
+        txt_multi += f"\n💰 **ODD TOTAL: {multi['total_odd']:.2f}**"
+        await u.message.reply_text(txt_multi, parse_mode="Markdown")
+
+async def direct_multipla(u, c):
+    tips = await get_real_matches(False)
+    multi = generate_multiple(tips)
+    if multi:
+        txt = "🚀 **BILHETE PRONTO (ODD 20+)**\n\n"
+        for m in multi['games']:
+            txt += f"• {m['match']}\n  🎯 {m['tip']} (@{m['odd']})\n"
+        txt += f"\n💰 **ODD FINAL: {multi['total_odd']:.2f}**"
+        await u.message.reply_text(txt, parse_mode="Markdown")
+    else:
+        await u.message.reply_text("⚠️ Não consegui montar uma múltipla segura hoje (Jogos insuficientes).")
 
 async def direct_ligas(u, c):
     tips = await get_real_matches(False)
     if tips:
         ls = sorted(list(set([t['league'] for t in tips])))
-        await u.message.reply_text(f"🏆 **Ligas Hoje:**\n" + "\n".join([f"• {l}" for l in ls]))
+        await u.message.reply_text(f"🏆 **Ligas:**\n" + "\n".join([f"• {l}" for l in ls]))
     else: await u.message.reply_text("📭 Nada.")
 
 # --- Funcionalidades ---
@@ -324,7 +348,7 @@ async def direct_segura(u, c):
 async def direct_glossario(u, c): await u.message.reply_text("📚 **Glossário:**\nOver: Mais\nUnder: Menos")
 async def direct_status(u, c): await u.message.reply_text(f"🎫 ID: `{u.effective_user.id}`", parse_mode="Markdown")
 
-# --- Admin & VIP ---
+# --- Admin ---
 def check_admin(uid): return str(uid) == str(ADMIN_ID)
 def generate_key(d): k="K-"+secrets.token_hex(4).upper(); db["keys"][k]=d; save_db(db); return k
 
@@ -337,18 +361,26 @@ async def force_tips(u, c):
     await u.callback_query.message.reply_text("🚀 Buscando...")
     tips = await get_real_matches(True)
     if not tips: await u.callback_query.message.reply_text("❌ Nada."); return
+    
+    # Gera texto único
+    txt = "📅 **TIPS DE HOJE:**\n\n"
+    for t in tips[:15]:
+        txt += f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})\n\n"
+    
+    # Gera Múltipla
+    multi = generate_multiple(tips)
+    if multi:
+        txt += "🚀 **MÚLTIPLA DO DIA:**\n"
+        for m in multi['games']:
+            txt += f"• {m['match']} ({m['tip']})\n"
+        txt += f"💰 **ODD: {multi['total_odd']:.2f}**"
+
     for uid in db["users"]:
-        try:
-            await c.bot.send_message(uid, "📅 **TIPS DE HOJE:**")
-            for t in tips[:6]:
-                rs = await get_smart_analysis(t['match'], t['tip'], "tip")
-                await c.bot.send_message(uid, f"🏆 {t['league']}\n⏰ {t['time']} | ⚔️ {t['match']}\n🎯 **{t['tip']}** (@{t['odd']})\n🧠 _{rs}_", parse_mode="Markdown")
+        try: await c.bot.send_message(uid, txt, parse_mode="Markdown")
         except: pass
     await u.callback_query.message.reply_text("✅ Feito.")
 
 async def gen_key_h(u, c): await u.callback_query.message.reply_text(f"`{generate_key(30)}`", parse_mode="Markdown")
-
-# CORREÇÃO DO VIP: Unificação para evitar duplo trigger
 async def start_vip(u, c): 
     if u.callback_query: await u.callback_query.answer()
     await u.message.reply_text("🔑 Chave:")
@@ -370,10 +402,10 @@ async def scheduler(app):
         if now.strftime("%H:%M") == "08:00" and db["last_run"] != now.strftime("%Y-%m-%d"):
             tips = await get_real_matches(True)
             if tips:
+                txt = "☀️ **Bom dia! Grade de Hoje:**\n\n"
+                for t in tips[:12]: txt += f"⚽ {t['match']} -> {t['tip']}\n"
                 for uid in db["users"]:
-                    try:
-                        await app.bot.send_message(uid, "☀️ **Tips de Hoje:**")
-                        for t in tips[:5]: await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
+                    try: await app.bot.send_message(uid, txt)
                     except: pass
                 db["last_run"] = now.strftime("%Y-%m-%d"); save_db(db)
         await asyncio.sleep(60)
@@ -392,13 +424,7 @@ if __name__ == "__main__":
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🧮 Calculadora$"), start_calc)], states={INPUT_CALC: [MessageHandler(filters.TEXT, handle_calc)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^💰 Gestão Banca$"), start_gestao)], states={INPUT_GESTAO: [MessageHandler(filters.TEXT, handle_gestao)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🤖 Guru IA$"), start_guru)], states={INPUT_GURU: [MessageHandler(filters.TEXT, handle_guru)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-        
-        # VIP Handler Corrigido
-        app.add_handler(ConversationHandler(
-            entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], 
-            states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, 
-            fallbacks=[CommandHandler("cancel", cancel)]
-        ))
+        app.add_handler(ConversationHandler(entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, fallbacks=[CommandHandler("cancel", cancel)]))
 
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("admin", admin_cmd))
@@ -406,13 +432,14 @@ if __name__ == "__main__":
         app.add_handler(MessageHandler(filters.Regex("^🛡️ Aposta Segura$"), direct_segura))
         app.add_handler(MessageHandler(filters.Regex("^🏆 Ligas$"), direct_ligas))
         app.add_handler(MessageHandler(filters.Regex("^📋 Jogos de Hoje$"), direct_jogos))
-        app.add_handler(MessageHandler(filters.Regex("^🎫 Meu Status$"), direct_status))
+        app.add_handler(MessageHandler(filters.Regex("^🚀 Múltipla 20x$"), direct_multipla)) # Novo Botão!
         app.add_handler(MessageHandler(filters.Regex("^📚 Glossário$"), direct_glossario))
+        app.add_handler(MessageHandler(filters.Regex("^🎫 Meu Status$"), direct_status))
         
         app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
         app.add_handler(CallbackQueryHandler(gen_key_h, pattern="^gen_key$"))
 
-        print("🤖 V14.0 ONLINE")
+        print("🤖 V16.0 ONLINE")
         app.run_polling()
     except Conflict:
         print("🚨 CONFLITO! Reiniciando...")
