@@ -1,5 +1,4 @@
 python-telegram-bot
-flask
-matplotlib
-requests
 httpx
+google-generativeai
+aiohttp
