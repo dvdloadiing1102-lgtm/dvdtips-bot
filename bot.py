@@ -50,33 +50,59 @@ else:
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS =================
+# ================= BANCO DE DADOS (CORRIGIDO) =================
 def load_db():
-    default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
-    if not os.path.exists(DB_FILE): return default
-    try: with open(DB_FILE, "r") as f: return json.load(f)
-    except: return default
+    default = {
+        "users": {}, 
+        "keys": {}, 
+        "last_run": "", 
+        "api_cache": None, 
+        "api_cache_time": None
+    }
+    
+    if not os.path.exists(DB_FILE):
+        return default
+    
+    try:
+        # AQUI ESTAVA O ERRO: Agora está separado em linhas
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return default
 
 def save_db(data):
-    with open(DB_FILE, "w") as f: json.dump(data, f, indent=2)
+    with open(DB_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 db = load_db()
 
 # ================= SERVIDOR WEB =================
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
+    
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS V7.5 ON")
-        def do_HEAD(self): self.send_response(200); self.end_headers()
-    try: HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except: pass
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"DVD TIPS V7.6 ON")
+            
+        def do_HEAD(self):
+            self.send_response(200)
+            self.end_headers()
+            
+    try:
+        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except:
+        pass
 
 def run_pinger():
     if not RENDER_URL: return
     while True:
         time.sleep(600)
-        try: requests.get(RENDER_URL, timeout=10)
-        except: pass
+        try:
+            requests.get(RENDER_URL, timeout=10)
+        except:
+            pass
 
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
@@ -87,7 +113,6 @@ def get_ai_analysis(match, tip, context="tip"):
         return "⚠️ IA Indisponível (Verifique Logs)."
     
     try:
-        # Tenta modelo Flash primeiro (mais rápido)
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         if context == "tip":
@@ -102,7 +127,6 @@ def get_ai_analysis(match, tip, context="tip"):
     except Exception as e:
         logger.error(f"Erro IA Primário: {e}")
         try:
-            # Fallback para modelo Pro se o Flash falhar
             model = genai.GenerativeModel('gemini-pro')
             response = model.generate_content(prompt)
             return response.text.strip()
@@ -117,7 +141,6 @@ def get_real_matches(force_refresh=False):
         last_time = datetime.strptime(db["api_cache_time"], "%Y-%m-%d %H:%M:%S")
         if (datetime.now() - last_time).total_seconds() < 2700: return db["api_cache"]
     
-    # URL: Upcoming (Próximos Jogos) - Garante jogos de Terça
     url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us,au&markets=h2h,totals&oddsFormat=decimal"
     
     try:
@@ -128,8 +151,6 @@ def get_real_matches(force_refresh=False):
         
         data = response.json()
         matches = []
-        
-        # Data Atual no Brasil (UTC-3)
         now_utc = datetime.now(timezone.utc)
         
         for game in data:
@@ -137,10 +158,8 @@ def get_real_matches(force_refresh=False):
             
             game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
             
-            # Pega jogos que começam entre AGORA e daqui a 24h
             if not (now_utc < game_time < now_utc + timedelta(hours=24)): continue
             
-            # Converte para Horário de Brasília para exibição
             time_str = (game_time - timedelta(hours=3)).strftime("%H:%M")
             
             bookmakers = game.get('bookmakers', [])
@@ -320,7 +339,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_db(db)
     
     await update.message.reply_text(
-        "👋 **DVD TIPS APP V7.5**\nSelecione uma opção:",
+        "👋 **DVD TIPS APP V7.6**\nSelecione uma opção:",
         reply_markup=get_main_keyboard()
     )
 
@@ -340,13 +359,12 @@ async def force_tips(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Cabeçalho com data correta
     br_time = datetime.now(timezone.utc) - timedelta(hours=3)
-    header = f"📅 **TIPS {br_time.strftime('%d/%m')} (Terça)**"
+    header = f"📅 **TIPS {br_time.strftime('%d/%m')}**"
     
     for uid in db["users"]:
         try:
             await context.bot.send_message(uid, header, parse_mode="Markdown")
             for t in tips[:6]:
-                # Gera justificativa IA na hora do envio
                 reason = get_ai_analysis(f"{t['match']}", t['tip'], "tip")
                 await context.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})\n🧠 _{reason}_", parse_mode="Markdown")
         except: pass
@@ -423,7 +441,7 @@ if __name__ == "__main__":
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    print("🤖 DVD TIPS V7.5 - ONLINE")
+    print("🤖 DVD TIPS V7.6 - ONLINE")
     
     async def main_wrapper():
         async with app:
