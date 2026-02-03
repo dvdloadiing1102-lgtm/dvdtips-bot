@@ -11,9 +11,9 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# --- AUTO-INSTALAÇÃO DE DEPENDÊNCIAS ---
+# --- AUTO-INSTALAÇÃO ---
 try:
-    import httpx # NOVA BIBLIOTECA (Async)
+    import httpx
     import matplotlib
     matplotlib.use('Agg')
     import google.generativeai as genai
@@ -21,7 +21,7 @@ try:
     from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters, ConversationHandler
     from telegram.error import Conflict
 except ImportError:
-    print("⚠️ Instalando dependências (Isso pode demorar 1 min)...")
+    print("⚠️ Instalando dependências...")
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot", "flask", "matplotlib", "httpx", "google-generativeai"])
     os.execv(sys.executable, ['python'] + sys.argv)
@@ -32,12 +32,9 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
-DB_FILE = "dvd_tips_v11.json"
+DB_FILE = "dvd_tips_v12.json"
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-    level=logging.INFO
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuração IA
@@ -46,9 +43,8 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         USE_GEMINI = True
-        logger.info("✅ IA Ativada")
-    except: 
-        logger.warning("⚠️ IA Falhou (Verifique a chave)")
+        logger.info("✅ IA Ativa")
+    except: logger.warning("⚠️ IA Off")
 
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
@@ -57,8 +53,7 @@ INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 def load_db():
     default = {"users": {}, "keys": {}, "last_run": "", "api_cache": None, "api_cache_time": None}
     if not os.path.exists(DB_FILE): return default
-    try:
-        with open(DB_FILE, "r") as f: return json.load(f)
+    try: with open(DB_FILE, "r") as f: return json.load(f)
     except: return default
 
 def save_db(data):
@@ -66,110 +61,121 @@ def save_db(data):
 
 db = load_db()
 
-# ================= SERVIDOR WEB (KEEP ALIVE) =================
+# ================= SERVIDOR WEB =================
 def start_web_server():
     port = int(os.environ.get("PORT", 10000))
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self): 
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"DVD TIPS V11 ONLINE")
-        def do_HEAD(self): 
-            self.send_response(200)
-            self.end_headers()
-    try: 
-        HTTPServer(("0.0.0.0", port), Handler).serve_forever()
-    except Exception as e:
-        logger.error(f"Erro Web Server: {e}")
+        def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"DVD TIPS V12 ONLINE")
+        def do_HEAD(self): self.send_response(200); self.end_headers()
+    try: HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    except: pass
 
 def run_pinger():
     if not RENDER_URL: return
     while True:
-        time.sleep(600) # Ping a cada 10 min
+        time.sleep(600)
         try: 
-            # Aqui pode usar requests pois é uma thread separada
-            import requests 
+            import requests
             requests.get(RENDER_URL, timeout=10)
         except: pass
 
 threading.Thread(target=start_web_server, daemon=True).start()
 threading.Thread(target=run_pinger, daemon=True).start()
 
-# ================= INTEGRAÇÃO INTELIGENTE (ASYNC) =================
+# ================= IA & ANALITICS =================
 BACKUP_PHRASES = [
-    "Favorito joga em casa com apoio da torcida.",
-    "Expectativa de jogo aberto, ideal para gols.",
-    "Defesas fortes, tendência de placar baixo.",
-    "Histórico de confronto favorece o mandante.",
-    "Time visitante vem de sequência ruim."
+    "Favorito joga em casa, probabilidade alta.",
+    "Ataques potentes, tendência de gols.",
+    "Jogo truncado, defesas prevalecem.",
+    "Histórico recente aponta vantagem do mandante.",
+    "Odd desajustada, vale o risco calculado."
 ]
 
 async def get_smart_analysis(match, tip, context="tip"):
     if USE_GEMINI:
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
-            # Executa a IA em uma thread separada para não travar o bot
             loop = asyncio.get_running_loop()
-            
-            if context == "tip": prompt = f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase curta técnica (PT-BR)."
+            if context == "tip": prompt = f"Jogo: {match}. Tip: {tip}. Justifique em 1 frase técnica (PT-BR)."
             elif context == "guru": prompt = f"Responda curto sobre apostas: {match}"
             elif context == "analise": prompt = f"Analise {match}. Vencedor e Gols. PT-BR."
-            
-            # Chama a IA
             response = await loop.run_in_executor(None, model.generate_content, prompt)
             if response.text: return response.text.strip()
-        except Exception as e:
-            logger.error(f"Erro IA: {e}")
-    
+        except: pass
     return random.choice(BACKUP_PHRASES)
 
-# ================= MOTOR DE ODDS (HTTPX - ASYNC) =================
+# ================= MOTOR DE ODDS (FILTRO RIGOROSO) =================
+
+# LISTA VIP (TOP 20 LIGAS + COPAS)
+TARGET_LEAGUES = [
+    # Top 5 Europa
+    'soccer_epl', 'soccer_efl_champ', 'soccer_england_efl_cup', # Inglaterra
+    'soccer_italy_serie_a', 'soccer_italy_serie_b', 'soccer_italy_coppa_italia', # Itália
+    'soccer_germany_bundesliga', 'soccer_germany_bundesliga2', 'soccer_germany_dfb_pokal', # Alemanha
+    'soccer_spain_la_liga', 'soccer_spain_copa_del_rey', # Espanha
+    'soccer_france_ligue_one', # França
+    
+    # Brasil & América
+    'soccer_brazil_serie_a', 'soccer_brazil_serie_b', 'soccer_brazil_campeonato', # Brasil
+    'soccer_argentina_primera', 'soccer_libertadores', 'soccer_sulamericana',
+    'soccer_usa_mls', 'soccer_mexico_ligamx',
+    
+    # Resto do Top 20
+    'soccer_portugal_primeira_liga',
+    'soccer_netherlands_eredivisie',
+    'soccer_belgium_pro_league',
+    'soccer_turkey_super_league',
+    'soccer_denmark_superliga',
+    'soccer_poland_ekstraklasa',
+    'soccer_switzerland_superleague',
+    
+    # Basquete
+    'basketball_nba'
+]
+
 async def get_real_matches(force_refresh=False):
     if not ODDS_API_KEY: return generate_simulated_matches()
     
-    # Cache
+    # Cache (30 min)
     if not force_refresh and db.get("api_cache") and db.get("api_cache_time"):
         last = datetime.strptime(db["api_cache_time"], "%Y-%m-%d %H:%M:%S")
         if (datetime.now() - last).total_seconds() < 1800: return db["api_cache"]
     
     matches = []
-    # Ligas Prioritárias
-    leagues = [
-        'soccer_england_efl_cup', 'soccer_spain_copa_del_rey', 
-        'soccer_italy_coppa_italia', 'soccer_germany_dfb_pokal',
-        'soccer_libertadores', 'soccer_brazil_serie_a',
-        'soccer_brazil_campeonato', 'basketball_nba',
-        'soccer_uefa_champions_league'
-    ]
     
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        # 1. Busca Ligas Específicas
-        for league in leagues:
-            try:
-                url = f"https://api.the-odds-api.com/v4/sports/{league}/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for game in data:
-                        res = process_game(game)
-                        if res: matches.append(res)
-            except Exception as e:
-                logger.error(f"Erro League {league}: {e}")
-
-        # 2. Busca Upcoming (Fallback)
-        if len(matches) < 5:
-            try:
-                url_up = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
-                resp = await client.get(url_up)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for game in data:
-                        if game['sport_key'] not in leagues:
-                             if 'soccer' in game['sport_key'] or 'basketball' in game['sport_key']:
-                                res = process_game(game)
-                                if res: matches.append(res)
-            except Exception as e:
-                logger.error(f"Erro Upcoming: {e}")
+    # Definição RIGOROSA de "Hoje" (Horário de Brasília)
+    now_utc = datetime.now(timezone.utc)
+    now_br = now_utc - timedelta(hours=3)
+    
+    # Fim do dia de hoje (23:59:59 BRT)
+    end_of_today_br = now_br.replace(hour=23, minute=59, second=59, microsecond=999999)
+    # Converte fim do dia BR para UTC (para comparar com a API)
+    end_of_today_utc = end_of_today_br + timedelta(hours=3)
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        # Estratégia Híbrida: Busca Upcoming mas filtra SEVERAMENTE
+        try:
+            url = f"https://api.the-odds-api.com/v4/sports/upcoming/odds/?apiKey={ODDS_API_KEY}&regions=eu,uk,us&markets=h2h,totals"
+            resp = await client.get(url)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                for game in data:
+                    # 1. Filtro de Liga (Só as Tops)
+                    if game['sport_key'] not in TARGET_LEAGUES: continue
+                    
+                    # 2. Filtro de Data (Só HOJE)
+                    game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    
+                    # Se o jogo já começou há mais de 2h ou é depois de hoje à noite -> Pula
+                    if game_time < (now_utc - timedelta(hours=2)) or game_time > end_of_today_utc:
+                        continue
+                        
+                    res = process_game(game)
+                    if res: matches.append(res)
+                    
+        except Exception as e:
+            logger.error(f"Erro API: {e}")
 
     # Remove duplicados e ordena
     unique = []
@@ -191,13 +197,10 @@ async def get_real_matches(force_refresh=False):
 
 def process_game(game):
     try:
-        now_utc = datetime.now(timezone.utc)
         game_time = datetime.strptime(game['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        
-        # Filtro: Jogos de agora até +30h
-        if not (now_utc - timedelta(hours=2) < game_time < now_utc + timedelta(hours=30)): return None
-        
+        # Horário Visual (Brasil)
         time_str = (game_time - timedelta(hours=3)).strftime("%H:%M")
+        
         league = game['sport_title'].replace("Soccer ", "").replace("Basketball ", "")
         is_nba = 'NBA' in league
         
@@ -209,24 +212,27 @@ def process_game(game):
         
         tip, odd = None, 0
         
+        # Estratégia Vencedor
         if h2h:
             outcomes = sorted(h2h['outcomes'], key=lambda x: x['price'])
             fav = outcomes[0]
             min_odd = 1.10 if is_nba else 1.25
-            if min_odd <= fav['price'] <= 2.40:
+            if min_odd <= fav['price'] <= 2.30: # Max 2.30 para ser "seguro"
                 tip, odd = f"Vence {fav['name']}", fav['price']
         
-        if (not tip or odd < 1.25) and totals:
+        # Estratégia Over
+        if (not tip) and totals:
             line = totals['outcomes'][0]
             if is_nba:
                 over = next((o for o in totals['outcomes'] if o['name'] == 'Over'), None)
                 if over and 1.50 <= over['price'] <= 2.10:
                     tip, odd = f"Over {line.get('point',0)} Pontos", over['price']
             else:
+                # Futebol: Busca Over 2.5 ou Over 1.5 (mais seguro)
                 over25 = next((o for o in totals['outcomes'] if o['name'] == 'Over' and o['point'] == 2.5), None)
-                if over25 and 1.50 <= over25['price'] <= 2.20:
+                if over25 and 1.50 <= over25['price'] <= 2.10:
                     tip, odd = "Over 2.5 Gols", over25['price']
-        
+
         if tip:
             return {"match": f"{game['home_team']} x {game['away_team']}", "tip": tip, "odd": odd, "league": league, "time": time_str}
     except: return None
@@ -234,7 +240,7 @@ def process_game(game):
 
 def generate_simulated_matches():
     return [
-        {"match": "Arsenal x Chelsea", "tip": "Ambas Marcam", "odd": 1.75, "league": "Simulado", "time": "17:00"},
+        {"match": "Man City x Arsenal", "tip": "Ambas Marcam", "odd": 1.75, "league": "Simulado", "time": "17:00"},
         {"match": "Real Madrid x Barça", "tip": "Over 2.5", "odd": 1.80, "league": "Simulado", "time": "20:00"}
     ]
 
@@ -244,45 +250,42 @@ def get_main_keyboard():
         ["🔮 Analisar Jogo", "🧮 Calculadora"],
         ["🦓 Zebra do Dia", "🛡️ Aposta Segura"],
         ["💰 Gestão Banca", "🤖 Guru IA"],
-        ["🏆 Ligas", "📋 Jogos Hoje"],
+        ["🏆 Ligas", "📋 Jogos de Hoje"],
         ["📚 Glossário", "🎫 Meu Status"]
     ], resize_keyboard=True)
 
-# ================= FUNÇÕES DO BOT (HANDLERS) =================
+# ================= HANDLERS =================
 async def start(u, c):
-    logger.info(f"User {u.effective_user.id} iniciou.")
-    uid = str(u.effective_user.id)
+    uid=str(u.effective_user.id)
     if uid not in db["users"]: db["users"][uid] = {"vip_expiry": ""}
     save_db(db)
-    await u.message.reply_text("👋 **DVD TIPS V11.0**\nAgora muito mais rápido!", reply_markup=get_main_keyboard())
+    await c.bot.delete_webhook(drop_pending_updates=True)
+    await u.message.reply_text("👋 **DVD TIPS V12.0**\nFiltro: Elite Hoje (Brasil & Top 20)", reply_markup=get_main_keyboard())
 
-# Análise
+async def direct_jogos(u, c):
+    await u.message.reply_text("🔄 Filtrando jogos de HOJE na Elite...")
+    tips = await get_real_matches(True)
+    if not tips: return await u.message.reply_text("📭 Sem jogos principais hoje.")
+    
+    txt = ""
+    for t in tips[:15]:
+        txt += f"⏰ {t['time']} | {t['league']}\n⚔️ {t['match']}\n👉 **{t['tip']}** (@{t['odd']})\n\n"
+    await u.message.reply_text(f"📋 **Agenda Elite Hoje:**\n\n{txt}", parse_mode="Markdown")
+
+async def direct_ligas(u, c):
+    tips = await get_real_matches(False)
+    if tips:
+        ls = sorted(list(set([t['league'] for t in tips])))
+        await u.message.reply_text(f"🏆 **Ligas Ativas Hoje:**\n" + "\n".join([f"• {l}" for l in ls]))
+    else: await u.message.reply_text("📭 Nada.")
+
+# --- Outras Funções (Análise, Calc, etc) ---
 async def start_analise(u, c): await u.message.reply_text("⚽/🏀 **Qual jogo?**"); return INPUT_ANALISE
 async def handle_analise(u, c):
     await u.message.reply_text("🧠 _Analisando..._")
     res = await get_smart_analysis(u.message.text, "", "analise")
     await u.message.reply_text(f"🤖 **Análise:**\n{res}", parse_mode="Markdown"); return ConversationHandler.END
 
-# Listas
-async def direct_jogos(u, c):
-    logger.info("Comando Jogos Hoje solicitado")
-    await u.message.reply_text("🔄 Buscando na API...")
-    tips = await get_real_matches(True) # Agora é Await!
-    if not tips: return await u.message.reply_text("📭 Sem jogos.")
-    
-    txt = ""
-    for t in tips[:12]:
-        txt += f"⏰ {t['time']} | {t['league']}\n⚔️ {t['match']}\n👉 **{t['tip']}** (@{t['odd']})\n\n"
-    await u.message.reply_text(f"📋 **Grade de Hoje:**\n\n{txt}", parse_mode="Markdown")
-
-async def direct_ligas(u, c):
-    tips = await get_real_matches(False)
-    if tips:
-        ls = sorted(list(set([t['league'] for t in tips])))
-        await u.message.reply_text(f"🏆 **Ligas:**\n" + "\n".join([f"• {l}" for l in ls]))
-    else: await u.message.reply_text("📭 Nada.")
-
-# Outros
 async def start_calc(u, c): await u.message.reply_text("🧮 `Valor Odd`"); return INPUT_CALC
 async def handle_calc(u, c): 
     try: v,o=map(float,u.message.text.replace(",", ".").split()); await u.message.reply_text(f"✅ Lucro: {v*(o-1):.2f}")
@@ -330,7 +333,7 @@ async def force_tips(u, c):
     if not tips: await u.callback_query.message.reply_text("❌ Nada."); return
     for uid in db["users"]:
         try:
-            await c.bot.send_message(uid, "📅 **TIPS DE HOJE:**")
+            await c.bot.send_message(uid, "📅 **TIPS DE HOJE (ELITE):**")
             for t in tips[:6]:
                 rs = await get_smart_analysis(t['match'], t['tip'], "tip")
                 await c.bot.send_message(uid, f"🏆 {t['league']}\n⏰ {t['time']} | ⚔️ {t['match']}\n🎯 **{t['tip']}** (@{t['odd']})\n🧠 _{rs}_", parse_mode="Markdown")
@@ -349,29 +352,23 @@ async def handle_vip(u, c):
     return ConversationHandler.END
 async def cancel(u, c): await u.message.reply_text("❌", reply_markup=get_main_keyboard()); return ConversationHandler.END
 
-# ================= LOOP AUTOMÁTICO (CORRIGIDO) =================
+# Agendador
 async def scheduler(app):
     while True:
-        now = datetime.now() - timedelta(hours=3) # Horário BR
-        # Se for 08:00 e ainda não rodou hoje
+        now = datetime.now() - timedelta(hours=3)
         if now.strftime("%H:%M") == "08:00" and db["last_run"] != now.strftime("%Y-%m-%d"):
-            logger.info("⏰ Hora das Tips Automáticas!")
             tips = await get_real_matches(True)
             if tips:
                 for uid in db["users"]:
                     try:
-                        await app.bot.send_message(uid, "☀️ **Bom dia! Tips de Hoje:**")
-                        for t in tips[:5]:
-                            await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
+                        await app.bot.send_message(uid, "☀️ **Tips da Elite Hoje:**")
+                        for t in tips[:5]: await app.bot.send_message(uid, f"⚽ {t['match']}\n🎯 {t['tip']} (@{t['odd']})")
                     except: pass
-                db["last_run"] = now.strftime("%Y-%m-%d")
-                save_db(db)
+                db["last_run"] = now.strftime("%Y-%m-%d"); save_db(db)
         await asyncio.sleep(60)
 
 async def post_init(app):
-    # Inicia o agendador como uma tarefa de fundo segura
     asyncio.create_task(scheduler(app))
-    # Limpa webhook para evitar conflitos antigos
     await app.bot.delete_webhook(drop_pending_updates=True)
 
 if __name__ == "__main__":
@@ -390,13 +387,13 @@ if __name__ == "__main__":
         app.add_handler(MessageHandler(filters.Regex("^🦓 Zebra do Dia$"), direct_zebra))
         app.add_handler(MessageHandler(filters.Regex("^🛡️ Aposta Segura$"), direct_segura))
         app.add_handler(MessageHandler(filters.Regex("^🏆 Ligas$"), direct_ligas))
-        app.add_handler(MessageHandler(filters.Regex("^📋 Jogos Hoje$"), direct_jogos))
+        app.add_handler(MessageHandler(filters.Regex("^📋 Jogos de Hoje$"), direct_jogos))
         app.add_handler(MessageHandler(filters.Regex("^📚 Glossário$"), direct_glossario))
         app.add_handler(MessageHandler(filters.Regex("^🎫 Meu Status$"), direct_status))
         app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
         app.add_handler(CallbackQueryHandler(gen_key_h, pattern="^gen_key$"))
 
-        print("🤖 V11.0 ONLINE (NON-BLOCKING)")
+        print("🤖 V12.0 ONLINE (DATA RIGOROSA + ELITE)")
         app.run_polling()
     except Conflict:
         print("🚨 CONFLITO! Reiniciando...")
