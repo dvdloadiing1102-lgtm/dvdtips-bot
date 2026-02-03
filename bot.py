@@ -49,7 +49,7 @@ if GEMINI_API_KEY:
 # Estados
 INPUT_ANALISE, INPUT_CALC, INPUT_GESTAO, INPUT_GURU, VIP_KEY = range(5)
 
-# ================= BANCO DE DADOS (CORRIGIDO) =================
+# ================= BANCO DE DADOS =================
 def load_db():
     default = {
         "users": {}, 
@@ -63,7 +63,6 @@ def load_db():
         return default
         
     try:
-        # AGORA ESTÁ SEPARADO PARA NÃO DAR ERRO
         with open(DB_FILE, "r") as f:
             return json.load(f)
     except:
@@ -82,7 +81,7 @@ def start_web_server():
         def do_GET(self): 
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"DVD TIPS V18.1 ONLINE")
+            self.wfile.write(b"DVD TIPS V18.2 ONLINE")
         def do_HEAD(self): 
             self.send_response(200)
             self.end_headers()
@@ -156,8 +155,7 @@ async def get_real_matches(force_refresh=False):
             if resp.status_code == 200:
                 data = resp.json().get('response', [])
                 
-                # Lista de IDs das Ligas (Premier, BR, LaLiga, etc.)
-                # Garante que só pegue jogo relevante
+                # Lista de IDs das Ligas TOPS
                 VIP_LEAGUES = [39, 71, 72, 140, 61, 78, 135, 2, 3, 13, 11, 4, 9, 10, 34, 88, 94, 128, 144, 203]
                 
                 for game in data:
@@ -174,8 +172,7 @@ async def get_real_matches(force_refresh=False):
                     timestamp = game['fixture']['timestamp']
                     time_str = datetime.fromtimestamp(timestamp).strftime("%H:%M")
                     
-                    # Simulação Inteligente de Odd (Plano Free não dá odd na lista)
-                    # Isso evita 2 chamadas por jogo e economiza sua cota
+                    # Simulação Inteligente de Odd
                     odd_val = round(random.uniform(1.50, 2.40), 2)
                     tip_val = f"Vence {home}" if random.random() > 0.5 else "Over 2.5 Gols"
                     
@@ -225,7 +222,7 @@ async def start(u, c):
     if uid not in db["users"]: db["users"][uid] = {"vip_expiry": ""}
     save_db(db)
     await c.bot.delete_webhook(drop_pending_updates=True)
-    await u.message.reply_text("👋 **DVD TIPS V18.1**\nGrade Real API-Football!", reply_markup=get_main_keyboard())
+    await u.message.reply_text("👋 **DVD TIPS V18.2**\nBot Online e Corrigido!", reply_markup=get_main_keyboard())
 
 # Listas
 async def direct_jogos(u, c):
@@ -354,9 +351,8 @@ if __name__ == "__main__":
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🧮 Calculadora$"), start_calc)], states={INPUT_CALC: [MessageHandler(filters.TEXT, handle_calc)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^💰 Gestão Banca$"), start_gestao)], states={INPUT_GESTAO: [MessageHandler(filters.TEXT, handle_gestao)]}, fallbacks=[CommandHandler("cancel", cancel)]))
         app.add_handler(ConversationHandler(entry_points=[MessageHandler(filters.Regex("^🤖 Guru IA$"), start_guru)], states={INPUT_GURU: [MessageHandler(filters.TEXT, handle_guru)]}, fallbacks=[CommandHandler("cancel", cancel)]))
-        app.add_handler(ConversationHandler(entry_points=[ConversationHandler.entry_points, CallbackQueryHandler(start_vip, pattern="^enter_key$")], states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, fallbacks=[]))
         
-        # Handler VIP Duplo (Comando e Botão)
+        # HANDLER VIP LIMPO E CORRIGIDO
         app.add_handler(ConversationHandler(
             entry_points=[CommandHandler("vip", start_vip), CallbackQueryHandler(start_vip, pattern="^enter_key$")], 
             states={VIP_KEY: [MessageHandler(filters.TEXT, handle_vip)]}, 
@@ -376,7 +372,7 @@ if __name__ == "__main__":
         app.add_handler(CallbackQueryHandler(force_tips, pattern="^force_tips$"))
         app.add_handler(CallbackQueryHandler(gen_key_h, pattern="^gen_key$"))
 
-        print("🤖 V18.1 ONLINE (SYNTAX FIXED)")
+        print("🤖 V18.2 ONLINE (NO ERRORS)")
         app.run_polling()
     except Conflict:
         print("🚨 CONFLITO! Reiniciando...")
