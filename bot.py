@@ -335,33 +335,28 @@ async def main():
     app.add_handler(CallbackQueryHandler(admin_callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    async with app:
-        await app.initialize()
-        await app.start()
-        
+    await app.initialize()
+    await app.start()
+    
+    try:
+        logger.info("Bot iniciado. Rodando serviços...")
         await asyncio.gather(
             app.updater.start_polling(allowed_updates=Update.ALL_TYPES),
             start_web_server(),
             run_pinger()
         )
+    except KeyboardInterrupt:
+        logger.info("Interrupção do usuário.")
+    finally:
+        logger.info("Desligando...")
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+        await save_db()
+        logger.info("Desligamento completo.")
 
 if __name__ == "__main__":
-    import signal
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    def signal_handler(sig, frame):
-        logger.info(f"Recebido sinal {sig}, desligando...")
-        loop.stop()
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Bot finalizado.")
-    finally:
-        loop.run_until_complete(save_db())
-        loop.close()
