@@ -7,12 +7,12 @@ import secrets
 import random
 from datetime import datetime, timedelta, timezone
 
-# --- AUTO-INSTALAÇÃO ---
+# --- AUTO-INSTALAÇÃO DE DEPENDÊNCIAS ---
 try:
     import httpx
     import google.generativeai as genai
     from telegram import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, Update
-    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, ApplicationBuilder
     from telegram.constants import ParseMode
     from telegram.error import Conflict, NetworkError
     from aiohttp import web
@@ -28,7 +28,7 @@ ADMIN_ID = os.getenv("ADMIN_ID")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PORT = int(os.environ.get("PORT", 10000))
-DB_FILE = "dvd_tips_v30.json"
+DB_FILE = "dvd_tips_v31.json"
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -119,12 +119,12 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         if uid not in db_data["users"]:
             db_data["users"][uid] = {"vip": None}
             await save_db()
-    await u.message.reply_text("👋 **DVD TIPS V30**\nOnline!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
+    await u.message.reply_text("👋 **DVD TIPS V31**\nReiniciado e Limpo!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
 
 async def show_games(u: Update, c: ContextTypes.DEFAULT_TYPE):
     msg = await u.message.reply_text("🔄 ...")
     m = await get_real_matches()
-    if not m: return await msg.edit_text("📭 Grade Vazia.")
+    if not m: return await msg.edit_text("📭 Vazio.")
     txt = "*📋 GRADE HOJE:*\n\n"
     for g in m[:25]: txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
     await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
@@ -184,8 +184,8 @@ async def activate(u: Update, c: ContextTypes.DEFAULT_TYPE):
             await u.message.reply_text("✅ OK!")
         else: await u.message.reply_text("❌ Erro.")
 
-# ================= WEB SERVER (SEPARADO) =================
-async def health_check(request): return web.Response(text="V30 ONLINE")
+# ================= WEB SERVER (SEGURA O RENDER) =================
+async def health_check(request): return web.Response(text="V31 ONLINE")
 
 async def start_web():
     app = web.Application()
@@ -196,18 +196,19 @@ async def start_web():
     await site.start()
     logger.info(f"✅ WEB SERVER: Porta {PORT}")
 
-# ================= MAIN (A SOLUÇÃO DO ERRO) =================
+# ================= MAIN (A FÊNIX) =================
 async def main():
     if not TOKEN: sys.exit("Falta TOKEN")
     await load_db()
     
-    # 1. Inicia o Site (Isso evita o erro 'Timed Out')
+    # 1. Inicia o Site (Para o Render não desligar)
     await start_web()
 
-    # 2. Loop de Reinicialização do Bot (Isso evita o erro 'HTTPXRequest')
-    logger.info("🤖 Iniciando Bot loop...")
+    # 2. Loop de Reinicialização (Fênix)
+    logger.info("🤖 Iniciando Loop V31...")
     
     while True:
+        app = None # Garante que está vazio
         try:
             # CRIAMOS UM BOT NOVO A CADA LOOP (O segredo está aqui)
             app = Application.builder().token(TOKEN).build()
@@ -222,25 +223,38 @@ async def main():
             app.add_handler(MessageHandler(filters.TEXT, text_handle))
 
             # Inicializa e Roda
+            logger.info("🔌 Conectando ao Telegram...")
             await app.initialize()
             await app.start()
+            
+            # Limpa qualquer webhook velho que esteja travando
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
-            logger.info("✅ Bot conectado! Pressione Ctrl+C para parar.")
+            logger.info("✅ Bot V31 Operacional!")
             
-            # Mantém vivo até dar erro
-            while True: await asyncio.sleep(3600)
+            # Mantém vivo enquanto não der erro
+            while True: 
+                await asyncio.sleep(600)
+                # Verifica se o bot ainda está rodando internamente
+                if not app.updater.running:
+                    raise RuntimeError("Updater parou sozinho!")
 
         except Conflict:
-            logger.error("🚨 CONFLITO! Reiniciando em 15s...")
-            try: await app.shutdown()
-            except: pass
-            await asyncio.sleep(15)
+            logger.error("🚨 CONFLITO! Outro bot está usando a chave.")
+            logger.error("💤 Reiniciando em 20s...")
+            # Encerra o bot atual antes de criar o novo
+            if app:
+                try: await app.updater.stop(); await app.stop(); await app.shutdown()
+                except: pass
+            await asyncio.sleep(20)
             
         except Exception as e:
-            logger.error(f"❌ Erro: {e}")
-            try: await app.shutdown()
-            except: pass
+            logger.error(f"❌ Erro Geral: {e}")
+            if app:
+                try: await app.updater.stop(); await app.stop(); await app.shutdown()
+                except: pass
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
