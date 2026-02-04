@@ -32,15 +32,9 @@ LOG_LEVEL = "INFO"
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# ================= FILTROS DE ELITE (V51) =================
-# IDs das Ligas (Prioridade Absoluta)
-# 71=Brasileirão, 39=Premier League, 140=La Liga, 135=Serie A, 12=NBA (Basquete)
+# ================= FILTROS DE ELITE =================
 VIP_LEAGUES_IDS = [71, 39, 140, 135, 78, 128, 61, 2, 3, 848, 143, 45, 48, 528] 
-
-# Termos PROIBIDOS (Para não pegar Sub-19, Feminino, etc)
 BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RESERVES", "LADIES", "JUNIOR"]
-
-# Times VIP (Para garantir que apareçam mesmo em copas)
 VIP_TEAMS_NAMES = ["FLAMENGO", "PALMEIRAS", "SAO PAULO", "CORINTHIANS", "SANTOS", "GREMIO", "INTERNACIONAL", "ATLETICO MINEIRO", "BOTAFOGO", "FLUMINENSE", "VASCO", "CRUZEIRO", "BAHIA", "FORTALEZA", "MANCHESTER CITY", "REAL MADRID", "BARCELONA", "LIVERPOOL", "ARSENAL", "PSG", "INTER", "MILAN", "JUVENTUS", "BAYERN", "BOCA JUNIORS", "RIVER PLATE"]
 
 def normalize_str(s):
@@ -51,7 +45,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V51 ONLINE - ANTI-JUNK FILTER")
+        self.wfile.write(b"BOT V51.1 ONLINE")
 
 def start_fake_server():
     try:
@@ -69,9 +63,14 @@ class Database:
     def get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        try: yield conn; conn.commit()
-        except: conn.rollback(); raise
-        finally: conn.close()
+        try: 
+            yield conn
+            conn.commit()
+        except: 
+            conn.rollback()
+            raise
+        finally: 
+            conn.close()
     
     def init_db(self):
         with self.get_conn() as conn:
@@ -109,10 +108,13 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
+        # --- CORREÇÃO DE SINTAXE AQUI ---
+        try: 
+            with self.get_conn() as conn: 
+                conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
-# ================= API DE ESPORTES (FILTRAGEM V51) =================
+# ================= API DE ESPORTES =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
@@ -123,7 +125,6 @@ class SportsAPI:
         
         matches = []
         status_msg = "API Oficial"
-        # DATA BRASIL (UTC-3) para pegar os jogos da noite corretamente
         today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
         
         if API_FOOTBALL_KEY:
@@ -136,32 +137,23 @@ class SportsAPI:
                     if r.status_code == 200:
                         data = r.json().get("response", [])
                         for g in data:
-                            # Ignora cancelados
                             if g["fixture"]["status"]["short"] in ["CANC", "ABD", "PST", "FT"]: continue
                             
                             league_id = g["league"]["id"]
                             h_team = normalize_str(g["teams"]["home"]["name"])
                             a_team = normalize_str(g["teams"]["away"]["name"])
                             
-                            # --- FILTRO ANTI-JUNK (V51) ---
-                            # Se tiver "U19", "WOMEN" no nome, PULA FORA!
                             if any(bad in h_team for bad in BLOCKLIST_TERMS) or any(bad in a_team for bad in BLOCKLIST_TERMS):
                                 continue
 
-                            # PONTUAÇÃO DE PRIORIDADE
                             priority_score = 0
-                            
-                            # É Liga VIP? (Brasileirão, Premier, etc) -> +1000 pontos
                             if league_id in VIP_LEAGUES_IDS: 
                                 priority_score += 1000
-                            # É Time VIP? (Flamengo, Real Madrid) -> +500 pontos
                             elif any(vip in h_team for vip in VIP_TEAMS_NAMES) or any(vip in a_team for vip in VIP_TEAMS_NAMES): 
                                 priority_score += 500
                             
-                            # Se não for VIP nem tiver time VIP, ignora (Joga fora o lixo)
                             if priority_score == 0: continue
 
-                            # GERA ODDS E TIPS (Simulado para Free Plan)
                             odd_h = round(random.uniform(1.3, 2.9), 2)
                             tip_text = "Casa Vence"
                             if odd_h > 2.4: tip_text = "Empate ou Visitante"
@@ -179,10 +171,9 @@ class SportsAPI:
                                 "score": priority_score
                             })
 
-                # 2. NBA (BUSCA ESPECÍFICA)
+                # 2. NBA
                 headers_nba = {"x-rapidapi-host": "v1.basketball.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
                 async with httpx.AsyncClient(timeout=15) as client:
-                    # ID 12 = NBA
                     r_nba = await client.get(f"https://v1.basketball.api-sports.io/games?date={today}&league=12", headers=headers_nba)
                     if r_nba.status_code == 200:
                         nba_data = r_nba.json().get("response", [])
@@ -196,14 +187,11 @@ class SportsAPI:
                                 "odd": 1.90,
                                 "tip": "Over Pontos",
                                 "ts": g["timestamp"],
-                                "score": 2000 # NBA TEM PRIORIDADE MÁXIMA
+                                "score": 2000
                             })
-                    else:
-                        logger.error(f"Erro NBA API: {r_nba.status_code} (Verifique se sua key cobre Basquete)")
-
             except Exception as e: logger.error(f"Erro API Geral: {e}")
 
-        # BACKUP (Só ativa se não achou NADA)
+        # BACKUP
         if not matches:
             status_msg = "Backup (API Vazia)"
             base_ts = datetime.now().timestamp()
@@ -212,15 +200,12 @@ class SportsAPI:
                 {"sport": "🏀", "match": "Lakers x Celtics [Sim]", "league": "NBA", "time": "22:00", "odd": 1.90, "tip": "Over 220", "ts": base_ts, "score": 300}
             ]
 
-        # ORDENAÇÃO: 1º Score (NBA/VIP), 2º Horário
         matches.sort(key=lambda x: (-x["score"], x["ts"]))
-        
-        # Pega o Top 15 para ter material para as múltiplas
         top_matches = matches[:15]
         await asyncio.to_thread(self.db.set_cache, "top10_matches", top_matches)
         return top_matches, status_msg
 
-# ================= SISTEMA DE ENVIO P/ CANAL (FORMATO TIPSTER) =================
+# ================= SISTEMA DE ENVIO =================
 async def send_channel_report(app, db, api):
     if not CHANNEL_ID: return False, "Sem Channel ID"
     await asyncio.to_thread(db.clear_cache)
@@ -229,14 +214,12 @@ async def send_channel_report(app, db, api):
 
     today_str = datetime.now().strftime("%d/%m")
     
-    # Separa por categoria
     nba_games = [g for g in m if g['sport'] == '🏀']
     foot_games = [g for g in m if g['sport'] == '⚽']
     
     post = f"🦁 **BOLETIM VIP - {today_str}**\n"
     post += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    # 1. JOGO DO DIA (O Top 1 do Futebol)
     if foot_games:
         best = foot_games[0]
         post += f"💎 **JOGO DE OURO (MAX)**\n"
@@ -245,18 +228,16 @@ async def send_channel_report(app, db, api):
         post += f"🔥 **Entrada:** {best['tip']}\n"
         post += f"📈 **Odd:** @{best['odd']}\n\n"
     
-    # 2. NBA (Se tiver)
     if nba_games:
         post += f"🏀 **SESSÃO NBA**\n"
-        for g in nba_games[:2]: # Mostra até 2 da NBA
+        for g in nba_games[:2]:
             post += f"🇺🇸 {g['match']}\n"
             post += f"🎯 {g['tip']} (@{g['odd']})\n\n"
 
-    # 3. LISTA DE FUTEBOL (Resumo)
     post += "📋 **GRADE DE ELITE**\n"
     count = 0
-    for g in foot_games[1:]: # Pula o primeiro que já foi destaque
-        if count >= 5: break # Max 5 jogos na lista
+    for g in foot_games[1:]:
+        if count >= 5: break
         post += f"⚔️ {g['match']}\n"
         post += f"   ↳ {g['tip']} (@{g['odd']})\n"
         count += 1
@@ -264,7 +245,6 @@ async def send_channel_report(app, db, api):
     post += "\n━━━━━━━━━━━━━━━━━━━━\n"
     post += f"💣 **TROCO DO PÃO (RISCO)**\n"
     
-    # Monta uma múltipla fake de risco
     risk_odd = round(random.uniform(15.0, 25.0), 2)
     post += f"Combinação Secreta gerada pelo Bot.\n"
     post += f"💰 **Odd Total:** @{risk_odd}\n\n"
@@ -275,6 +255,17 @@ async def send_channel_report(app, db, api):
         await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
         return True, "Sucesso"
     except Exception as e: return False, str(e)
+
+# ================= AGENDADOR =================
+async def daily_scheduler(app, db, api):
+    while True:
+        try:
+            now_br = datetime.now(timezone.utc) - timedelta(hours=3)
+            if now_br.hour == 8 and now_br.minute == 0:
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61)
+            await asyncio.sleep(30)
+        except: await asyncio.sleep(60)
 
 # ================= HANDLERS =================
 class Handlers:
@@ -316,24 +307,22 @@ class Handlers:
         report = f"📊 Status: {status}\nJogos: {len(m)}\n\n"
         for g in m:
             report += f"{g['sport']} {g['match']} (Score: {g['score']})\n"
-            
-        await u.message.reply_text(report[:4000]) # Limite Telegram
+        
+        await u.message.reply_text(report[:4000])
 
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
             key_input = c.args[0]
             success = await asyncio.to_thread(self.db.use_key, key_input, u.effective_user.id)
             if success:
-                invite_link = "Erro"
                 try:
                     if CHANNEL_ID:
                         link = await c.bot.create_chat_invite_link(chat_id=CHANNEL_ID, member_limit=1, expire_date=datetime.now() + timedelta(hours=24))
                         invite_link = link.invite_link
-                except: invite_link = "(Peça o link ao suporte)"
+                    else: invite_link = "(Sem ID Canal)"
+                except: invite_link = "(Erro Link)"
 
-                msg = (f"✅ **VIP ATIVADO!**\n\n"
-                       f"Entre no canal agora:\n👉 {invite_link}\n\n"
-                       f"⚠️ _Link válido por 24h._")
+                msg = (f"✅ **VIP ATIVADO!**\n\nEntre no canal:\n👉 {invite_link}")
                 await u.message.reply_text(msg)
             else:
                 await u.message.reply_text("❌ Chave inválida.")
@@ -353,7 +342,7 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V51.0...")
+            logger.info("🔥 Iniciando Bot V51.1...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
@@ -367,6 +356,7 @@ async def main():
             
             await app.initialize()
             await app.start()
+            asyncio.create_task(daily_scheduler(app, db, api))
             await app.bot.delete_webhook(drop_pending_updates=True)
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
