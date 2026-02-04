@@ -45,7 +45,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V53 ONLINE - ESPN NBA EDITION")
+        self.wfile.write(b"BOT V54 ONLINE - ESPN REAL ODDS")
 
 def start_fake_server():
     try:
@@ -113,7 +113,7 @@ class Database:
                 conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
-# ================= API HÍBRIDA (FUTEBOL + ESPN NBA) =================
+# ================= API HÍBRIDA (FUTEBOL + ESPN PRO) =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
@@ -123,7 +123,7 @@ class SportsAPI:
             if cached: return cached, "Cache"
         
         matches = []
-        status_msg = "API Mista (Sport + ESPN)"
+        status_msg = "API Mista (Sport + ESPN Pro)"
         today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
         
         # 1. FUTEBOL (Sua API Paga)
@@ -171,10 +171,9 @@ class SportsAPI:
                             })
             except Exception as e: logger.error(f"Erro Futebol: {e}")
 
-        # 2. NBA (VIA ESPN - 100% GRÁTIS E GARANTIDO)
+        # 2. NBA (VIA ESPN - COM ODDS REAIS)
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                # Endpoint público da ESPN
                 url_espn = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
                 r_nba = await client.get(url_espn)
                 
@@ -183,27 +182,51 @@ class SportsAPI:
                     events = data.get('events', [])
                     
                     for event in events:
-                        # Pega nomes dos times
+                        # Extração de Dados Reais
                         comps = event['competitions'][0]
-                        team_a = comps['competitors'][1]['team']['displayName'] # Home
-                        team_b = comps['competitors'][0]['team']['displayName'] # Away
+                        team_home = comps['competitors'][0]
+                        team_away = comps['competitors'][1]
                         
-                        # Data do jogo
-                        game_date = event['date'] # ISO String
+                        name_h = team_home['team']['displayName']
+                        name_a = team_away['team']['displayName']
+                        
+                        # Tenta pegar Odds Reais (Handicap e Over/Under)
+                        odds_data = comps.get('odds', [{}])[0] # Pega o primeiro provider
+                        details = odds_data.get('details', 'N/A') # Ex: LAL -5.5
+                        over_under = odds_data.get('overUnder', 0) # Ex: 224.5
+                        
+                        # Data
+                        game_date = event['date']
                         dt_obj = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
                         
-                        # Verifica se o jogo é HOJE ou MADRUGADA (ajuste fuso)
-                        # Como ESPN mostra tudo, filtramos para mostrar apenas próximos
-                        
+                        # LÓGICA DE TIP INTELIGENTE (BASEADA NA LINHA REAL)
+                        # Se não tiver odd (off season), ignora
+                        if details == 'N/A':
+                             tip_final = "Aguardando Linhas"
+                             odd_final = 1.90
+                        else:
+                            # Se o favorito for o time da casa (Ex: LAL -5.5)
+                            if "-" in details and team_home['team']['abbreviation'] in details:
+                                tip_final = f"{team_home['team']['shortDisplayName']} vence"
+                                odd_final = 1.75 # Odd média de favorito
+                            # Se o favorito for visitante
+                            elif "-" in details and team_away['team']['abbreviation'] in details:
+                                tip_final = f"{team_away['team']['shortDisplayName']} vence"
+                                odd_final = 1.75
+                            else:
+                                # Se não der pra saber o vencedor, vai de Over
+                                tip_final = f"Over {over_under} Pts"
+                                odd_final = 1.90
+
                         matches.append({
                             "sport": "🏀",
-                            "match": f"{team_a} x {team_b}",
+                            "match": f"{name_h} x {name_a}",
                             "league": "NBA",
                             "time": (dt_obj - timedelta(hours=3)).strftime("%H:%M"),
-                            "odd": 1.90, # Padrão NBA
-                            "tip": "Over Pontos",
+                            "odd": odd_final, 
+                            "tip": tip_final, # TIP REAL BASEADA NO HANDICAP
                             "ts": dt_obj.timestamp(),
-                            "score": 5000 # PRIORIDADE MÁXIMA NA LISTA
+                            "score": 5000
                         })
         except Exception as e:
             logger.error(f"Erro ESPN NBA: {e}")
@@ -246,10 +269,10 @@ async def send_channel_report(app, db, api):
         post += f"🔥 **Entrada:** {best['tip']}\n"
         post += f"📈 **Odd:** @{best['odd']}\n\n"
     
-    # 2. NBA (Agora Garantido pela ESPN)
+    # 2. NBA
     if nba_games:
-        post += f"🏀 **SESSÃO NBA**\n"
-        for g in nba_games: # Mostra todos que achar
+        post += f"🏀 **SESSÃO NBA (Odds ESPN)**\n"
+        for g in nba_games:
             post += f"🇺🇸 {g['match']}\n"
             post += f"🎯 {g['tip']} (@{g['odd']})\n\n"
 
@@ -403,7 +426,7 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V53.0 (ESPN)...")
+            logger.info("🔥 Iniciando Bot V54.0 (ESPN)...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
