@@ -6,31 +6,41 @@ import sqlite3
 import json
 import secrets
 import random
+import threading
 import httpx
 import google.generativeai as genai
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Optional, Dict, List, Any
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Telegram Imports
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError
 from dotenv import load_dotenv
 
+# Carrega variáveis de ambiente
 load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN", "seu_token_aqui")
-ADMIN_ID = os.getenv("ADMIN_ID", "seu_admin_id")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "sua_chave_gemini")
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY", "sua_chave_api_sports")
-PORT = int(os.getenv("PORT", 10000))
+
+# ================= CONFIGURAÇÕES =================
+# Nota: No Render, configure estas variáveis no "Environment"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+PORT = int(os.getenv("PORT", 10000)) # Porta obrigatória do Render
 DB_PATH = os.getenv("DB_PATH", "betting_bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Constantes do Bot
 API_TIMEOUT = 25
 CACHE_EXPIRY = 900
 VIP_LEAGUE_IDS = [39, 40, 41, 42, 48, 140, 141, 143, 78, 79, 529, 135, 136, 137, 61, 62, 66, 71, 72, 73, 475, 479, 2, 3, 13, 11, 203, 128]
 
+# Emojis
 EMOJI_SOCCER = "⚽"
 EMOJI_BASKETBALL = "🏀"
 EMOJI_LOADING = "🔄"
@@ -46,7 +56,8 @@ EMOJI_ADMIN = "🔑"
 EMOJI_WELCOME = "👋"
 EMOJI_MENU = "❓"
 
-MSG_WELCOME = f"{EMOJI_WELCOME} **BET TIPS PRO V1**\nBem-vindo ao seu assistente de apostas!"
+# Mensagens
+MSG_WELCOME = f"{EMOJI_WELCOME} **BET TIPS PRO V35**\nBem-vindo ao seu assistente de apostas!"
 MSG_LOADING = f"{EMOJI_LOADING} Carregando..."
 MSG_EMPTY = f"{EMOJI_EMPTY} Nenhum jogo disponível no momento."
 MSG_ERROR = f"{EMOJI_ERROR} Erro ao processar sua solicitação."
@@ -54,9 +65,31 @@ MSG_IA_OFF = f"{EMOJI_ERROR} IA desativada no momento."
 MSG_FEW_GAMES = f"{EMOJI_WARNING} Poucos jogos disponíveis para múltipla."
 MSG_MENU = f"{EMOJI_MENU} Use o menu para navegar."
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=getattr(logging, LOG_LEVEL), handlers=[logging.FileHandler('bot.log'), logging.StreamHandler()])
+# Configuração de Log
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
+    level=getattr(logging, LOG_LEVEL), 
+    handlers=[logging.StreamHandler()] # No Render, StreamHandler é melhor que FileHandler
+)
 logger = logging.getLogger(__name__)
 
+# ================= SERVIDOR WEB FAKE (PARA O RENDER) =================
+class FakeHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"BOT ONLINE - KEEP ALIVE")
+
+def start_fake_server():
+    """Inicia um servidor web simples para enganar o timeout do Render"""
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
+        logger.info(f"🌍 WEB SERVER INICIADO NA PORTA {PORT}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Erro no Web Server: {e}")
+
+# ================= BANCO DE DADOS =================
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -84,7 +117,6 @@ class Database:
             cursor.execute("CREATE TABLE IF NOT EXISTS vip_keys (key_id INTEGER PRIMARY KEY AUTOINCREMENT, key_code TEXT UNIQUE NOT NULL, expiry_date TEXT NOT NULL, used_by INTEGER, used_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
             cursor.execute("CREATE TABLE IF NOT EXISTS betting_history (bet_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, match_info TEXT NOT NULL, tip TEXT NOT NULL, odds REAL NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (user_id) REFERENCES users(user_id))")
             cursor.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_id INTEGER PRIMARY KEY AUTOINCREMENT, cache_key TEXT UNIQUE NOT NULL, cache_data TEXT NOT NULL, expires_at TIMESTAMP NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-            cursor.execute("CREATE TABLE IF NOT EXISTS logs (log_id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
             conn.commit()
             logger.info("✅ Banco de dados inicializado")
     
@@ -107,20 +139,12 @@ class Database:
             user = cursor.fetchone()
             return dict(user) if user else None
     
-    def update_user_vip(self, user_id: int, is_vip: bool, expiry: str = None) -> bool:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE users SET is_vip = ?, vip_expiry = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (is_vip, expiry, user_id))
-            conn.commit()
-            return cursor.rowcount > 0
-    
     def create_vip_key(self, expiry_date: str) -> str:
         key_code = "VIP-" + secrets.token_hex(6).upper()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (key_code, expiry_date))
             conn.commit()
-            logger.info(f"✅ Chave VIP criada: {key_code}")
             return key_code
     
     def get_vip_key(self, key_code: str) -> Optional[Dict]:
@@ -138,39 +162,16 @@ class Database:
             if not key or key["used_by"]:
                 return False
             cursor.execute("UPDATE vip_keys SET used_by = ?, used_at = CURRENT_TIMESTAMP WHERE key_code = ?", (user_id, key_code))
-            cursor.execute("UPDATE users SET is_vip = ?, vip_expiry = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (True, key["expiry_date"], user_id))
+            cursor.execute("UPDATE users SET is_vip = 1, vip_expiry = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (key["expiry_date"], user_id))
             conn.commit()
-            logger.info(f"✅ Chave VIP ativada para usuário {user_id}")
             return True
-    
-    def delete_vip_key(self, key_code: str) -> bool:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM vip_keys WHERE key_code = ?", (key_code,))
-            conn.commit()
-            return cursor.rowcount > 0
-    
-    def add_bet_history(self, user_id: int, match_info: str, tip: str, odds: float) -> bool:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO betting_history (user_id, match_info, tip, odds) VALUES (?, ?, ?, ?)", (user_id, match_info, tip, odds))
-            conn.commit()
-            return cursor.rowcount > 0
-    
-    def get_user_history(self, user_id: int, limit: int = 10) -> List[Dict]:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM betting_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit))
-            return [dict(row) for row in cursor.fetchall()]
     
     def set_cache(self, key: str, data: Dict, expiry_seconds: int) -> bool:
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expiry_seconds)).isoformat()
         data_json = json.dumps(data)
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("UPDATE api_cache SET cache_data = ?, expires_at = ? WHERE cache_key = ?", (data_json, expires_at, key))
-            if cursor.rowcount == 0:
-                cursor.execute("INSERT INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, data_json, expires_at))
+            cursor.execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, data_json, expires_at))
             conn.commit()
             return True
     
@@ -190,6 +191,7 @@ class Database:
             conn.commit()
             return cursor.rowcount
 
+# ================= API DE ESPORTES =================
 class SportsAPIService:
     def __init__(self, db):
         self.db = db
@@ -221,11 +223,40 @@ class SportsAPIService:
                 ]
                 responses = await asyncio.gather(*tasks, return_exceptions=True)
                 
+                # Futebol
                 if not isinstance(responses[0], Exception) and responses[0].status_code == 200:
-                    matches.extend(self._parse_football(responses[0].json()))
+                    data = responses[0].json().get("response", [])
+                    for game in data:
+                        if game["league"]["id"] not in VIP_LEAGUE_IDS: continue
+                        ts = game["fixture"]["timestamp"]
+                        if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=4): continue
+                        
+                        matches.append({
+                            "sport": EMOJI_SOCCER,
+                            "match": f"{game['teams']['home']['name']} x {game['teams']['away']['name']}",
+                            "league": game["league"]["name"],
+                            "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
+                            "odd": round(random.uniform(1.5, 2.5), 2),
+                            "tip": "Over 2.5" if random.random() > 0.5 else "Casa",
+                            "ts": ts
+                        })
                 
+                # Basquete
                 if not isinstance(responses[1], Exception) and responses[1].status_code == 200:
-                    matches.extend(self._parse_basketball(responses[1].json()))
+                    data = responses[1].json().get("response", [])
+                    for game in data:
+                        if game["league"]["id"] != 12: continue
+                        ts = game["timestamp"]
+                        matches.append({
+                            "sport": EMOJI_BASKETBALL,
+                            "match": f"{game['teams']['home']['name']} x {game['teams']['away']['name']}",
+                            "league": "NBA",
+                            "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
+                            "odd": round(random.uniform(1.4, 2.2), 2),
+                            "tip": "Casa",
+                            "ts": ts
+                        })
+
         except Exception as e:
             logger.error(f"❌ Erro ao buscar partidas: {e}")
             return []
@@ -233,74 +264,21 @@ class SportsAPIService:
         if matches:
             matches.sort(key=lambda x: x["ts"])
             self.db.set_cache(cache_key, matches, 900)
-            logger.info(f"✅ {len(matches)} partidas carregadas")
+            logger.info(f"✅ {len(matches)} partidas carregadas da API")
         
-        return matches
-    
-    def _parse_football(self, data: Dict) -> List[Dict]:
-        matches = []
-        try:
-            for game in data.get("response", []):
-                if game["league"]["id"] not in VIP_LEAGUE_IDS:
-                    continue
-                ts = game["fixture"]["timestamp"]
-                match_time = datetime.fromtimestamp(ts)
-                if match_time < datetime.now() - timedelta(hours=4):
-                    continue
-                match = {
-                    "sport": EMOJI_SOCCER,
-                    "match": f"{game['teams']['home']['name']} x {game['teams']['away']['name']}",
-                    "league": game["league"]["name"],
-                    "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
-                    "odd": round(random.uniform(1.5, 2.5), 2),
-                    "tip": "Over 2.5" if random.random() > 0.5 else "Casa",
-                    "ts": ts,
-                    "status": game["fixture"]["status"]["short"]
-                }
-                matches.append(match)
-        except Exception as e:
-            logger.error(f"❌ Erro ao processar futebol: {e}")
-        return matches
-    
-    def _parse_basketball(self, data: Dict) -> List[Dict]:
-        matches = []
-        try:
-            for game in data.get("response", []):
-                if game["league"]["id"] != 12:
-                    continue
-                ts = game["timestamp"]
-                match_time = datetime.fromtimestamp(ts)
-                if match_time < datetime.now() - timedelta(hours=4):
-                    continue
-                match = {
-                    "sport": EMOJI_BASKETBALL,
-                    "match": f"{game['teams']['home']['name']} x {game['teams']['away']['name']}",
-                    "league": "NBA",
-                    "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
-                    "odd": round(random.uniform(1.4, 2.2), 2),
-                    "tip": "Casa",
-                    "ts": ts,
-                    "status": game["status"]
-                }
-                matches.append(match)
-        except Exception as e:
-            logger.error(f"❌ Erro ao processar basquete: {e}")
         return matches
     
     @staticmethod
     def get_multiple(matches: List[Dict], count: int = 4) -> Optional[Dict]:
-        if not matches or len(matches) < count:
-            return None
+        if not matches or len(matches) < count: return None
         selected = random.sample(matches, count)
         total_odd = 1.0
-        for match in selected:
-            total_odd *= match["odd"]
+        for match in selected: total_odd *= match["odd"]
         return {"games": selected, "total": round(total_odd, 2), "count": count}
     
     @staticmethod
     def format_matches_message(matches: List[Dict], limit: int = 25) -> str:
-        if not matches:
-            return "📭 Nenhuma partida disponível"
+        if not matches: return MSG_EMPTY
         message = "*📋 GRADE DE HOJE:*\n\n"
         for match in matches[:limit]:
             message += f"{match['sport']} {match['time']} | {match['league']}\n⚔️ {match['match']}\n👉 *{match['tip']}* (@{match['odd']})\n\n"
@@ -308,42 +286,35 @@ class SportsAPIService:
     
     @staticmethod
     def format_multiple_message(multiple: Dict) -> str:
-        if not multiple:
-            return "⚠️ Poucos jogos para múltipla"
+        if not multiple: return MSG_FEW_GAMES
         message = f"*🚀 MÚLTIPLA {multiple['count']}x:*\n\n"
         for game in multiple["games"]:
             message += f"• {game['sport']} {game['match']} ({game['tip']})\n"
         message += f"\n💰 *ODD TOTAL: {multiple['total']}*"
         return message
 
+# ================= SERVIÇO DE IA =================
 class AIService:
     def __init__(self):
         if GEMINI_API_KEY and GEMINI_API_KEY != "sua_chave_gemini":
             genai.configure(api_key=GEMINI_API_KEY)
             self.model = genai.GenerativeModel('gemini-1.5-flash')
             self.enabled = True
-            logger.info("✅ IA Guru ativada")
         else:
             self.enabled = False
             logger.warning("⚠️ IA Guru desativada - chave não configurada")
     
     async def ask_guru(self, question: str) -> Optional[str]:
-        if not self.enabled:
-            return None
+        if not self.enabled: return None
         try:
+            # Executa em thread separada para não bloquear o bot
             response = await asyncio.to_thread(self.model.generate_content, question)
-            if response and response.text:
-                logger.info(f"✅ Resposta do Guru gerada com sucesso")
-                return response.text
-            return None
+            return response.text if response else None
         except Exception as e:
-            logger.error(f"❌ Erro ao chamar IA: {e}")
+            logger.error(f"❌ Erro IA: {e}")
             return None
-    
-    @staticmethod
-    def format_guru_response(response: str) -> str:
-        return f"🎓 *Guru IA:*\n\n{response}"
 
+# ================= HANDLERS =================
 class BotHandlers:
     def __init__(self, db, sports_api, ai_service):
         self.db = db
@@ -361,281 +332,158 @@ class BotHandlers:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             user = update.effective_user
-            user_id = user.id
-            self.db.get_or_create_user(user_id, username=user.username, first_name=user.first_name)
+            self.db.get_or_create_user(user.id, username=user.username, first_name=user.first_name)
             await update.message.reply_text(MSG_WELCOME, reply_markup=self.get_main_keyboard(), parse_mode=ParseMode.MARKDOWN)
-            logger.info(f"✅ Usuário iniciado: {user_id}")
         except Exception as e:
-            logger.error(f"❌ Erro em /start: {e}")
-            await update.message.reply_text(MSG_ERROR)
+            logger.error(f"Erro start: {e}")
     
     async def show_games(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            msg = await update.message.reply_text(MSG_LOADING)
-            matches = await self.sports_api.get_real_matches()
-            if not matches:
-                await msg.edit_text(MSG_EMPTY)
-                return
+        msg = await update.message.reply_text(MSG_LOADING)
+        matches = await self.sports_api.get_real_matches()
+        if not matches:
+            await msg.edit_text(MSG_EMPTY)
+        else:
             text = self.sports_api.format_matches_message(matches)
             await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
-            logger.info(f"✅ Jogos exibidos para usuário {update.effective_user.id}")
-        except Exception as e:
-            logger.error(f"❌ Erro em show_games: {e}")
-            await update.message.reply_text(MSG_ERROR)
     
     async def show_multiple(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            msg = await update.message.reply_text(MSG_LOADING)
-            matches = await self.sports_api.get_real_matches()
-            multiple = self.sports_api.get_multiple(matches, count=4)
-            if not multiple:
-                await msg.edit_text(MSG_FEW_GAMES)
-                return
+        msg = await update.message.reply_text(MSG_LOADING)
+        matches = await self.sports_api.get_real_matches()
+        multiple = self.sports_api.get_multiple(matches, count=4)
+        if not multiple:
+            await msg.edit_text(MSG_FEW_GAMES)
+        else:
             text = self.sports_api.format_multiple_message(multiple)
             await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
-            logger.info(f"✅ Múltipla exibida para usuário {update.effective_user.id}")
-        except Exception as e:
-            logger.error(f"❌ Erro em show_multiple: {e}")
-            await update.message.reply_text(MSG_ERROR)
     
     async def show_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user_id = update.effective_user.id
-            user = self.db.get_user(user_id)
-            if not user:
-                status_text = f"{EMOJI_VIP} *STATUS:* ❌ Free"
-            else:
-                if user["is_vip"]:
-                    expiry = user["vip_expiry"]
-                    status_text = f"{EMOJI_VIP} *STATUS:* ✅ VIP\n📅 Válido até: {expiry}"
-                else:
-                    status_text = f"{EMOJI_VIP} *STATUS:* ❌ Free"
-            await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
-            logger.info(f"✅ Status exibido para usuário {user_id}")
-        except Exception as e:
-            logger.error(f"❌ Erro em show_status: {e}")
-            await update.message.reply_text(MSG_ERROR)
+        user = self.db.get_user(update.effective_user.id)
+        if user and user["is_vip"]:
+            status_text = f"{EMOJI_VIP} *STATUS:* ✅ VIP\n📅 Válido até: {user['vip_expiry']}"
+        else:
+            status_text = f"{EMOJI_VIP} *STATUS:* ❌ Free"
+        await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
     async def guru_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not self.ai_service.enabled:
-                await update.message.reply_text(MSG_IA_OFF)
-                return
-            await update.message.reply_text(f"{EMOJI_GURU} Faça sua pergunta sobre apostas:")
-            context.user_data["guru_mode"] = True
-            logger.info(f"✅ Modo Guru ativado para usuário {update.effective_user.id}")
-        except Exception as e:
-            logger.error(f"❌ Erro em guru_mode: {e}")
-            await update.message.reply_text(MSG_ERROR)
+        if not self.ai_service.enabled:
+            await update.message.reply_text(MSG_IA_OFF)
+            return
+        await update.message.reply_text(f"{EMOJI_GURU} Faça sua pergunta sobre apostas:")
+        context.user_data["guru_mode"] = True
     
     async def handle_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if context.user_data.get("guru_mode"):
-                context.user_data["guru_mode"] = False
-                msg = await update.message.reply_text(MSG_LOADING)
-                response = await self.ai_service.ask_guru(update.message.text)
-                if response:
-                    text = self.ai_service.format_guru_response(response)
-                    await msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
-                else:
-                    await msg.edit_text(MSG_ERROR)
-                logger.info(f"✅ Pergunta do Guru respondida para usuário {update.effective_user.id}")
+        if context.user_data.get("guru_mode"):
+            context.user_data["guru_mode"] = False
+            msg = await update.message.reply_text(MSG_LOADING)
+            response = await self.ai_service.ask_guru(update.message.text)
+            if response:
+                await msg.edit_text(f"🎓 *Guru IA:*\n\n{response}", parse_mode=ParseMode.MARKDOWN)
             else:
-                await update.message.reply_text(MSG_MENU)
-        except Exception as e:
-            logger.error(f"❌ Erro em handle_text: {e}")
-            await update.message.reply_text(MSG_ERROR)
+                await msg.edit_text(MSG_ERROR)
+        else:
+            await update.message.reply_text(MSG_MENU)
     
     async def admin_panel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user_id = str(update.effective_user.id)
-            if user_id != str(ADMIN_ID):
-                await update.message.reply_text(f"{EMOJI_ERROR} Acesso negado")
-                return
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Gerar Chave VIP", callback_data="gen_key")],
-                [InlineKeyboardButton("📊 Estatísticas", callback_data="stats")],
-                [InlineKeyboardButton("🗑️ Limpar Cache", callback_data="clear_cache")]
-            ])
-            await update.message.reply_text(f"{EMOJI_ADMIN} *Painel Admin*", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
-            logger.info(f"✅ Painel admin acessado por {user_id}")
-        except Exception as e:
-            logger.error(f"❌ Erro em admin_panel: {e}")
-            await update.message.reply_text(MSG_ERROR)
+        if str(update.effective_user.id) != str(ADMIN_ID): return
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Gerar Chave VIP", callback_data="gen_key")],
+            [InlineKeyboardButton("🗑️ Limpar Cache", callback_data="clear_cache")]
+        ])
+        await update.message.reply_text(f"{EMOJI_ADMIN} *Painel Admin*", reply_markup=keyboard, parse_mode=ParseMode.MARKDOWN)
     
     async def admin_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            query = update.callback_query
-            user_id = str(query.from_user.id)
-            if user_id != str(ADMIN_ID):
-                await query.answer(f"{EMOJI_ERROR} Acesso negado", show_alert=True)
-                return
-            await query.answer()
-            if query.data == "gen_key":
-                expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-                key = self.db.create_vip_key(expiry)
-                await query.edit_message_text(f"{EMOJI_SUCCESS} *Chave Gerada:*\n`{key}`\n\nVálida até: {expiry}", parse_mode=ParseMode.MARKDOWN)
-                logger.info(f"✅ Chave VIP gerada: {key}")
-            elif query.data == "stats":
-                stats_text = f"{EMOJI_ADMIN} *Estatísticas:*\n\n📊 Sistema operacional"
-                await query.edit_message_text(stats_text, parse_mode=ParseMode.MARKDOWN)
-            elif query.data == "clear_cache":
-                cleared = self.db.clear_expired_cache()
-                await query.edit_message_text(f"{EMOJI_SUCCESS} Cache limpo!\nRegistros removidos: {cleared}", parse_mode=ParseMode.MARKDOWN)
-                logger.info(f"✅ Cache limpo: {cleared} registros")
-        except Exception as e:
-            logger.error(f"❌ Erro em admin_callback: {e}")
-            await update.callback_query.answer(MSG_ERROR, show_alert=True)
+        query = update.callback_query
+        if str(query.from_user.id) != str(ADMIN_ID):
+            await query.answer("Acesso negado", show_alert=True)
+            return
+        await query.answer()
+        
+        if query.data == "gen_key":
+            expiry = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            key = self.db.create_vip_key(expiry)
+            await query.edit_message_text(f"{EMOJI_SUCCESS} *Chave Gerada:*\n`{key}`\nValidade: {expiry}", parse_mode=ParseMode.MARKDOWN)
+        elif query.data == "clear_cache":
+            cleared = self.db.clear_expired_cache()
+            await query.edit_message_text(f"{EMOJI_SUCCESS} Cache limpo ({cleared} registros).", parse_mode=ParseMode.MARKDOWN)
     
     async def activate_vip(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if not context.args:
-                await update.message.reply_text(f"{EMOJI_ERROR} Use: `/ativar CHAVE`", parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text("Use: `/ativar CHAVE`", parse_mode=ParseMode.MARKDOWN)
                 return
             key_code = context.args[0].upper()
             user_id = update.effective_user.id
-            key = self.db.get_vip_key(key_code)
-            if not key:
-                await update.message.reply_text(f"{EMOJI_ERROR} Chave inválida")
-                logger.warning(f"⚠️ Tentativa de ativar chave inválida: {key_code}")
-                return
-            if key["used_by"]:
-                await update.message.reply_text(f"{EMOJI_ERROR} Chave já foi utilizada")
-                logger.warning(f"⚠️ Tentativa de reusar chave: {key_code}")
-                return
             if self.db.use_vip_key(key_code, user_id):
-                await update.message.reply_text(f"{EMOJI_SUCCESS} VIP ativado com sucesso!\nVálido até: {key['expiry_date']}", parse_mode=ParseMode.MARKDOWN)
-                logger.info(f"✅ VIP ativado para usuário {user_id}")
+                await update.message.reply_text(f"{EMOJI_SUCCESS} VIP ativado!", parse_mode=ParseMode.MARKDOWN)
             else:
-                await update.message.reply_text(f"{EMOJI_ERROR} Erro ao ativar chave")
-        except Exception as e:
-            logger.error(f"❌ Erro em activate_vip: {e}")
+                await update.message.reply_text(f"{EMOJI_ERROR} Chave inválida ou usada.")
+        except:
             await update.message.reply_text(MSG_ERROR)
 
-db = None
-sports_api = None
-ai_service = None
-handlers = None
-app = None
-
-async def initialize_services():
-    global db, sports_api, ai_service, handlers
-    try:
-        logger.info("🚀 Inicializando serviços...")
-        db = Database(DB_PATH)
-        logger.info("✅ Banco de dados inicializado")
-        sports_api = SportsAPIService(db)
-        logger.info("✅ Serviço de esportes inicializado")
-        ai_service = AIService()
-        logger.info("✅ Serviço de IA inicializado")
-        handlers = BotHandlers(db, sports_api, ai_service)
-        logger.info("✅ Handlers inicializados")
-        logger.info("✅ Todos os serviços inicializados com sucesso!")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Erro ao inicializar serviços: {e}")
-        return False
-
-def setup_handlers(application: Application):
-    try:
-        application.add_handler(CommandHandler("start", handlers.start))
-        application.add_handler(CommandHandler("admin", handlers.admin_panel))
-        application.add_handler(CommandHandler("ativar", handlers.activate_vip))
-        application.add_handler(MessageHandler(filters.Regex(f"^📋"), handlers.show_games))
-        application.add_handler(MessageHandler(filters.Regex(f"^🚀"), handlers.show_multiple))
-        application.add_handler(MessageHandler(filters.Regex(f"^🤖"), handlers.guru_mode))
-        application.add_handler(MessageHandler(filters.Regex(f"^🎫"), handlers.show_status))
-        application.add_handler(CallbackQueryHandler(handlers.admin_callback))
-        application.add_handler(MessageHandler(filters.TEXT, handlers.handle_text))
-        logger.info("✅ Handlers configurados com sucesso")
-    except Exception as e:
-        logger.error(f"❌ Erro ao configurar handlers: {e}")
-        raise
-
-async def run_bot():
-    global app
+# ================= EXECUÇÃO PRINCIPAL =================
+async def main():
+    # Verifica se o token foi configurado
     if not BOT_TOKEN or BOT_TOKEN == "seu_token_aqui":
-        logger.error("❌ BOT_TOKEN não configurado!")
-        sys.exit(1)
-    if not await initialize_services():
-        logger.error("❌ Falha ao inicializar serviços")
-        sys.exit(1)
-    reconnect_attempts = 0
-    max_reconnect_attempts = 5
-    reconnect_delay = 5
+        print("❌ ERRO CRÍTICO: BOT_TOKEN não configurado no Environment!")
+        return
+
+    # 1. Inicia o Web Server Falso (Thread separada)
+    # Isso impede que o Render mate o bot por falta de porta web
+    server_thread = threading.Thread(target=start_fake_server, daemon=True)
+    server_thread.start()
+
+    # 2. Inicializa Serviços
+    db = Database(DB_PATH)
+    sports_api = SportsAPIService(db)
+    ai_service = AIService()
+    handlers = BotHandlers(db, sports_api, ai_service)
+
+    # 3. Loop de Conexão com Retry (Anti-Conflito)
     while True:
         try:
-            logger.info("🔥 Iniciando bot (Modo Polling)...")
+            logger.info("🔥 Iniciando conexão com Telegram...")
             app = Application.builder().token(BOT_TOKEN).build()
-            setup_handlers(app)
+            
+            # Registra Handlers
+            app.add_handler(CommandHandler("start", handlers.start))
+            app.add_handler(CommandHandler("admin", handlers.admin_panel))
+            app.add_handler(CommandHandler("ativar", handlers.activate_vip))
+            app.add_handler(MessageHandler(filters.Regex("^📋"), handlers.show_games))
+            app.add_handler(MessageHandler(filters.Regex("^🚀"), handlers.show_multiple))
+            app.add_handler(MessageHandler(filters.Regex("^🤖"), handlers.guru_mode))
+            app.add_handler(MessageHandler(filters.Regex("^🎫"), handlers.show_status))
+            app.add_handler(CallbackQueryHandler(handlers.admin_callback))
+            app.add_handler(MessageHandler(filters.TEXT, handlers.handle_text))
+
+            # Inicia
             await app.initialize()
             await app.start()
-            logger.info("✅ Bot iniciado com sucesso!")
-            logger.info("🎯 Aguardando mensagens...")
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, poll_interval=1.0, timeout=30)
-            logger.info("⏹️ Bot desligado normalmente")
-            break
-        except Conflict as e:
-            logger.error(f"🚨 CONFLITO DETECTADO: {e}")
-            logger.error("⚠️ Outro bot está rodando com este token!")
-            logger.info(f"⏳ Aguardando {reconnect_delay}s antes de reconectar...")
-            try:
-                if app:
-                    await app.stop()
-                    await app.shutdown()
-            except:
-                pass
-            reconnect_attempts += 1
-            if reconnect_attempts >= max_reconnect_attempts:
-                logger.error(f"❌ Máximo de tentativas de reconexão atingido ({max_reconnect_attempts})")
-                sys.exit(1)
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, 60)
-        except NetworkError as e:
-            logger.error(f"🌐 ERRO DE REDE: {e}")
-            logger.info(f"⏳ Aguardando {reconnect_delay}s antes de reconectar...")
-            try:
-                if app:
-                    await app.stop()
-                    await app.shutdown()
-            except:
-                pass
-            reconnect_attempts += 1
-            if reconnect_attempts >= max_reconnect_attempts:
-                logger.error(f"❌ Máximo de tentativas de reconexão atingido ({max_reconnect_attempts})")
-                sys.exit(1)
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, 60)
+            
+            # Limpa webhook velho
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            
+            # Roda
+            logger.info("✅ Bot Conectado!")
+            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+            
+            # Mantém vivo se polling rodar sem bloquear
+            while True: await asyncio.sleep(3600)
+            
+        except Conflict:
+            logger.error("🚨 CONFLITO DETECTADO! Outro bot está usando este token.")
+            logger.info("⏳ Esperando 30s antes de tentar reconectar...")
+            try: await app.shutdown() 
+            except: pass
+            await asyncio.sleep(30)
+            
         except Exception as e:
-            logger.error(f"❌ ERRO INESPERADO: {e}", exc_info=True)
-            logger.info(f"⏳ Aguardando {reconnect_delay}s antes de reconectar...")
-            try:
-                if app:
-                    await app.stop()
-                    await app.shutdown()
-            except:
-                pass
-            reconnect_attempts += 1
-            if reconnect_attempts >= max_reconnect_attempts:
-                logger.error(f"❌ Máximo de tentativas de reconexão atingido ({max_reconnect_attempts})")
-                sys.exit(1)
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, 60)
-
-async def main():
-    try:
-        await run_bot()
-    except KeyboardInterrupt:
-        logger.info("⏹️ Bot interrompido pelo usuário")
-    except Exception as e:
-        logger.error(f"❌ Erro fatal: {e}", exc_info=True)
-        sys.exit(1)
+            logger.error(f"❌ Erro Geral: {e}")
+            try: await app.shutdown()
+            except: pass
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("✅ Bot finalizado")
-    except Exception as e:
-        logger.error(f"❌ Erro ao executar bot: {e}", exc_info=True)
-        sys.exit(1)
+        pass
