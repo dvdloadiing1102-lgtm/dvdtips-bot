@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import unicodedata
 import re
+import xml.etree.ElementTree as ET
 
 # Telegram Imports
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
@@ -39,9 +40,15 @@ BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RE
 VIP_TEAMS_NAMES = ["FLAMENGO", "PALMEIRAS", "SAO PAULO", "CORINTHIANS", "SANTOS", "GREMIO", "INTERNACIONAL", "ATLETICO MINEIRO", "BOTAFOGO", "FLUMINENSE", "VASCO", "CRUZEIRO", "BAHIA", "FORTALEZA", "MANCHESTER CITY", "REAL MADRID", "BARCELONA", "LIVERPOOL", "ARSENAL", "PSG", "INTER", "MILAN", "JUVENTUS", "BAYERN", "BOCA JUNIORS", "RIVER PLATE"]
 
 # Palavras-chave para filtrar notícias (Anti-Fofoca)
-BETTING_KEYWORDS = ["lesão", "lesionado", "machucou", "cirurgia", "desfalque", "fora", "dúvida", "poupado", "suspenso", "vetado", "dores", "contratado", "vendido", "assina", "reforço", "saída", "troca", "emprestado", "rescindiu", "banco", "reserva", "titular", "relacionado", "injury", "injured", "surgery", "out", "questionable", "doubtful", "sidelined", "trade", "traded", "signed", "bench", "suspended", "waived", "miss"]
+# Adicionei termos comuns em PT-BR como "desfalque", "vetado", "negocia"
+BETTING_KEYWORDS = [
+    "lesão", "lesionado", "machucou", "cirurgia", "desfalque", "fora", "dúvida", "poupado", "suspenso", "vetado", "dores", 
+    "contratado", "vendido", "assina", "reforço", "saída", "troca", "emprestado", "rescindiu", "banco", "reserva", "titular", 
+    "relacionado", "negocia", "acerta", "injury", "injured", "surgery", "out", "questionable", "doubtful", "sidelined", 
+    "trade", "traded", "signed", "bench", "suspended", "waived", "miss"
+]
 
-# Dicionário de Tradução (Inglês -> Português)
+# Dicionário de Tradução (Inglês -> Português para NBA)
 TRANSLATION_MAP = {
     "injury": "LESÃO", "injured": "LESIONADO", "surgery": "CIRURGIA",
     "out": "FORA", "questionable": "DÚVIDA", "doubtful": "IMPROVÁVEL",
@@ -62,7 +69,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V60.1 ONLINE - SYNTAX FIXED")
+        self.wfile.write(b"BOT V61.0 ONLINE - UOL NEWS ACTIVE")
 
 def start_fake_server():
     try:
@@ -171,10 +178,8 @@ class SportsAPI:
     
     def translate_text(self, text):
         if not text: return ""
-        # Tradução simples baseada em dicionário
         translated = text
         for eng, pt in TRANSLATION_MAP.items():
-            # Substitui mantendo case insensitive com regex
             pattern = re.compile(re.escape(eng), re.IGNORECASE)
             translated = pattern.sub(pt, translated)
         return translated
@@ -321,29 +326,42 @@ class SportsAPI:
         news_list = []
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                # NBA NEWS
-                r1 = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news")
-                if r1.status_code == 200:
-                    for a in r1.json().get('articles', []):
+                # 1. NBA NEWS (ESPN EUA - Traduzida)
+                r_nba = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news")
+                if r_nba.status_code == 200:
+                    for a in r_nba.json().get('articles', []):
                         full = (a.get('headline','')+" "+a.get('description','')).lower()
-                        # Verifica Palavras Chave
                         if any(k in full for k in BETTING_KEYWORDS):
-                            # TRADUZ
                             pt_title = self.translate_text(a.get('headline',''))
                             pt_desc = self.translate_text(a.get('description',''))
                             news_list.append({"title": pt_title, "desc": pt_desc, "url": a['links']['web']['href'], "img": a['images'][0]['url'] if a.get('images') else None, "tag": "🏀 NBA INFO"})
                 
-                # FUT NEWS
-                r2 = await client.get("https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/news")
-                if r2.status_code == 200:
-                    for a in r2.json().get('articles', []):
-                        full = (a.get('headline','')+" "+a.get('description','')).lower()
-                        if any(k in full for k in BETTING_KEYWORDS):
-                            # Traduz
-                            pt_title = self.translate_text(a.get('headline',''))
-                            pt_desc = self.translate_text(a.get('description',''))
-                            news_list.append({"title": pt_title, "desc": pt_desc, "url": a['links']['web']['href'], "img": a['images'][0]['url'] if a.get('images') else None, "tag": "⚽ FUT NEWS"})
-        except: pass
+                # 2. FUTEBOL NEWS (RSS UOL - PT-BR Nativo)
+                # Puxa o XML direto do UOL
+                r_uol = await client.get("http://rss.uol.com.br/feed/esporte.xml")
+                if r_uol.status_code == 200:
+                    root = ET.fromstring(r_uol.content)
+                    # Itera sobre os itens do RSS
+                    for item in root.findall('./channel/item')[:15]: # Olha os últimos 15
+                        title = item.find('title').text
+                        link = item.find('link').text
+                        desc = item.find('description').text or ""
+                        
+                        full_check = (title + " " + desc).lower()
+                        
+                        # Filtro Anti-Fofoca
+                        if any(k in full_check for k in BETTING_KEYWORDS):
+                            # Tenta achar imagem se tiver (complexo em RSS, vamos sem img pra simplificar ou usar padrão)
+                            news_list.append({
+                                "title": title,
+                                "desc": desc[:200] + "...", # Limita tamanho
+                                "url": link,
+                                "img": None, # Telegram puxa preview do link
+                                "tag": "🇧🇷 UOL ESPORTE"
+                            })
+                            if len(news_list) >= 4: break # Não encher demais
+                            
+        except Exception as e: logger.error(f"News Error: {e}")
         return news_list
 
 # ================= SISTEMA DE ENVIO =================
@@ -437,7 +455,7 @@ class Handlers:
     async def start(self, u, c):
         if not self.is_admin(u.effective_user.id): return await u.message.reply_text("⛔ `/ativar SUA-CHAVE`")
         kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Escrever Notícia", "📢 Publicar no Canal"], ["🎫 Gerar Key"]], resize_keyboard=True)
-        await u.message.reply_text(f"🦁 **PAINEL V60.1**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text(f"🦁 **PAINEL V61.0**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     
     async def ask_news(self, u, c):
         c.user_data['waiting_news'] = True
@@ -507,7 +525,7 @@ async def main():
     db = Database(DB_PATH); api = SportsAPI(db); h = Handlers(db, api)
     while True:
         try:
-            logger.info("🔥 Bot V60.1 Iniciado...")
+            logger.info("🔥 Bot V61.0 Iniciado...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", h.start)); app.add_handler(CommandHandler("publicar", h.publish)); app.add_handler(CommandHandler("ativar", h.active))
             app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games)); app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview))
