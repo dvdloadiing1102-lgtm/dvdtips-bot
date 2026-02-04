@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Telegram Imports (AGORA COM ApplicationBuilder)
+# Telegram Imports
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
@@ -23,35 +23,28 @@ from telegram.error import Conflict
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = os.getenv("ADMIN_ID", "") # Padrão vazio para não quebrar
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 PORT = int(os.getenv("PORT", 10000))
 DB_PATH = "betting_bot.db"
 LOG_LEVEL = "INFO"
 
-# Configuração de Log
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
-    level=logging.INFO, 
-    handlers=[logging.StreamHandler()]
-)
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# ================= SERVIDOR WEB FAKE (MANTÉM O BOT VIVO) =================
+# ================= SERVIDOR WEB FAKE =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V38.1 ONLINE")
+        self.wfile.write(b"BOT V40 ONLINE")
 
 def start_fake_server():
     try:
         server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
-        logger.info(f"🌍 WEB SERVER RODANDO NA PORTA {PORT}")
         server.serve_forever()
-    except Exception as e:
-        logger.error(f"❌ Erro no Web Server: {e}")
+    except: pass
 
 # ================= BANCO DE DADOS =================
 class Database:
@@ -98,7 +91,7 @@ class Database:
             return True
 
     def set_cache(self, key, data):
-        exp = (datetime.now() + timedelta(minutes=30)).isoformat()
+        exp = (datetime.now() + timedelta(minutes=15)).isoformat()
         with self.get_conn() as conn:
             conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
 
@@ -115,62 +108,42 @@ class SportsAPI:
         cached = self.db.get_cache("all_matches")
         if cached: return cached
         
-        if not API_FOOTBALL_KEY: return []
-        
-        today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
-        headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
-        headers_nba = {"x-rapidapi-host": "v1.basketball.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
-        
         matches = []
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                r_ft, r_bk = await asyncio.gather(
-                    client.get(f"https://v3.football.api-sports.io/fixtures?date={today}&status=NS-LIVE-FT", headers=headers),
-                    client.get(f"https://v1.basketball.api-sports.io/games?date={today}", headers=headers_nba),
-                    return_exceptions=True
-                )
-                
-                if not isinstance(r_ft, Exception) and r_ft.status_code == 200:
-                    data = r_ft.json().get("response", [])
-                    VIP_IDS = [39, 40, 140, 141, 78, 79, 135, 136, 61, 71, 72, 2, 3, 13, 11, 4, 9, 10, 203, 88, 94, 128, 144, 253, 307]
-                    
-                    for g in data:
-                        lid = g["league"]["id"]
-                        if lid not in VIP_IDS and "Serie A" not in g["league"]["name"]: continue
-                        ts = g["fixture"]["timestamp"]
-                        if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=6): continue
-                        
-                        odd_val = round(random.uniform(1.45, 2.65), 2)
-                        matches.append({
-                            "sport": "⚽", 
-                            "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
-                            "league": g["league"]["name"],
-                            "time": (datetime.fromtimestamp(ts)-timedelta(hours=3)).strftime("%H:%M"),
-                            "odd": odd_val,
-                            "tip": "Over 2.5 Gols" if random.random() > 0.5 else f"Vence {g['teams']['home']['name']}",
-                            "ts": ts
-                        })
-
-                if not isinstance(r_bk, Exception) and r_bk.status_code == 200:
-                    for g in r_bk.json().get("response", []):
-                        if g["league"]["id"] != 12: continue
-                        ts = g["timestamp"]
-                        matches.append({
-                            "sport": "🏀",
-                            "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
-                            "league": "NBA",
-                            "time": (datetime.fromtimestamp(ts)-timedelta(hours=3)).strftime("%H:%M"),
-                            "odd": round(random.uniform(1.4, 2.3), 2),
-                            "tip": f"Vence {g['teams']['home']['name']}",
-                            "ts": ts
-                        })
-        except Exception as e:
-            logger.error(f"Erro API: {e}")
-
-        if matches:
-            matches.sort(key=lambda x: x["ts"])
-            self.db.set_cache("all_matches", matches)
+        today = datetime.now().strftime("%Y-%m-%d")
         
+        if API_FOOTBALL_KEY:
+            try:
+                headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
+                async with httpx.AsyncClient(timeout=15) as client:
+                    url = f"https://v3.football.api-sports.io/fixtures?date={today}"
+                    r = await client.get(url, headers=headers)
+                    if r.status_code == 200:
+                        data = r.json().get("response", [])
+                        for g in data:
+                            if g["fixture"]["status"]["short"] in ["CANC", "ABD", "PST"]: continue
+                            odd_val = round(random.uniform(1.3, 3.5), 2)
+                            matches.append({
+                                "sport": "⚽", 
+                                "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
+                                "league": g["league"]["name"],
+                                "time": (datetime.fromtimestamp(g["fixture"]["timestamp"])-timedelta(hours=3)).strftime("%H:%M"),
+                                "odd": odd_val,
+                                "tip": "Over 1.5" if odd_val < 1.8 else "Casa Vence",
+                                "ts": g["fixture"]["timestamp"]
+                            })
+            except Exception as e:
+                logger.error(f"Erro Conexão API: {e}")
+
+        # BACKUP
+        if not matches:
+            base_ts = datetime.now().timestamp()
+            matches = [
+                {"sport": "⚽", "match": "Teste A x Teste B (Backup)", "league": "Liga Backup", "time": "20:00", "odd": 2.10, "tip": "Casa", "ts": base_ts},
+                {"sport": "🏀", "match": "Lakers x Bulls (Backup)", "league": "NBA Teste", "time": "22:00", "odd": 1.90, "tip": "Over", "ts": base_ts+3600},
+            ]
+
+        matches.sort(key=lambda x: x["ts"])
+        self.db.set_cache("all_matches", matches)
         return matches
 
 # ================= HANDLERS =================
@@ -187,21 +160,24 @@ class Handlers:
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         self.db.get_or_create_user(u.effective_user.id)
-        await u.message.reply_text("👋 **DVD TIPS V38.1**\nCorrigido e Online!", reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
+        # MOSTRA O ID DO USUÁRIO PARA CONFERÊNCIA
+        await u.message.reply_text(
+            f"👋 **DVD TIPS V40**\nSeu ID: `{u.effective_user.id}`\n(Copie este ID para colocar no ADMIN_ID do Render se precisar)", 
+            reply_markup=self.get_kb(), 
+            parse_mode=ParseMode.MARKDOWN
+        )
 
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        msg = await u.message.reply_text("🔄 Buscando grade...")
+        msg = await u.message.reply_text("🔄 Buscando...")
         m = await self.api.get_matches()
-        if not m: return await msg.edit_text("📭 Nenhum jogo encontrado. Use /debug")
-        
-        txt = "*📋 JOGOS DE HOJE:*\n\n"
+        txt = "*📋 JOGOS ENCONTRADOS:*\n\n"
         for g in m[:20]: 
             txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def multi(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
-        if not m or len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos.")
+        if len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos.")
         sel = random.sample(m, 4)
         total = 1.0
         txt = "*🚀 MÚLTIPLA SUGERIDA:*\n\n"
@@ -213,82 +189,88 @@ class Handlers:
 
     async def zebra(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
         zebra = max(m, key=lambda x: x['odd'])
-        txt = f"🦓 **ZEBRA DO DIA:**\n\n🏆 {zebra['league']}\n⚔️ {zebra['match']}\n🔥 **{zebra['tip']}**\n📈 Odd: **@{zebra['odd']}**"
+        txt = f"🦓 **ZEBRA:**\n🏆 {zebra['league']}\n⚔️ {zebra['match']}\n🔥 **{zebra['tip']}** (@{zebra['odd']})"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def safe(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
         safe = min(m, key=lambda x: x['odd'])
-        txt = f"🛡️ **APOSTA SEGURA:**\n\n🏆 {safe['league']}\n⚔️ {safe['match']}\n✅ **{safe['tip']}**\n📉 Odd: **@{safe['odd']}**"
+        txt = f"🛡️ **SEGURA:**\n🏆 {safe['league']}\n⚔️ {safe['match']}\n✅ **{safe['tip']}** (@{safe['odd']})"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def leagues(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
         ls = sorted(list(set([g['league'] for g in m])))
-        txt = "*🏆 Ligas na Grade:*\n\n" + "\n".join([f"• {l}" for l in ls])
+        txt = "*🏆 Ligas:*\n" + "\n".join([f"• {l}" for l in ls[:50]])
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def glossario(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        txt = "📚 **GLOSSÁRIO:**\n\n• **Over:** Mais de\n• **Under:** Menos de\n• **ML:** Vencedor\n• **BTTS:** Ambas Marcam"
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text("📚 *Glossário*\nOver=Mais\nUnder=Menos\nML=Vencedor", parse_mode=ParseMode.MARKDOWN)
 
+    # === DIAGNÓSTICO DO ID ===
     async def debug(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if str(u.effective_user.id) != str(ADMIN_ID): return
+        user_id = str(u.effective_user.id)
+        admin_id_env = str(ADMIN_ID).strip()
+        
+        # Se o ID não bater, ele avisa (antes ele ficava mudo)
+        if user_id != admin_id_env:
+            msg = f"⛔ **ACESSO NEGADO**\n\nSeu ID: `{user_id}`\nAdmin ID no Render: `{admin_id_env}`\n\n⚠️ Copie o 'Seu ID' e coloque no Render!"
+            return await u.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+        # Se bater, roda o teste
+        await u.message.reply_text("🔎 ID Confirmado! Testando API...")
         self.db.get_conn().cursor().execute("DELETE FROM api_cache")
         m = await self.api.get_matches()
-        await u.message.reply_text(f"🔍 Debug API: {len(m)} jogos encontrados.")
+        status = "✅ API OK" if "Backup" not in m[0]['match'] else "⚠️ API Falhou (Usando Backup)"
+        await u.message.reply_text(f"{status}\nJogos: {len(m)}")
 
     async def guru(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        await u.message.reply_text("🤖 **Guru:** Mande sua dúvida:", parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text("🤖 Mande sua dúvida:")
         c.user_data["guru"] = True
 
     async def text(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if c.user_data.get("guru"):
             c.user_data["guru"] = False
             if not self.ai: return await u.message.reply_text("❌ IA Off.")
-            msg = await u.message.reply_text("🤔 Analisando...")
+            msg = await u.message.reply_text("🤔 ...")
             try:
                 res = await asyncio.to_thread(self.ai.generate_content, u.message.text)
-                await msg.edit_text(f"🎓 *Guru Responde:*\n\n{res.text}", parse_mode=ParseMode.MARKDOWN)
-            except: await msg.edit_text("❌ Erro na IA.")
-        else: await u.message.reply_text("❓ Use o menu.")
+                await msg.edit_text(f"🎓 *Guru:*\n{res.text}", parse_mode=ParseMode.MARKDOWN)
+            except: await msg.edit_text("❌ Erro IA.")
+        else: await u.message.reply_text("❓ Menu")
 
     async def status(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         usr = self.db.get_user(u.effective_user.id)
         st = f"✅ VIP até {usr['vip_expiry']}" if usr and usr['is_vip'] else "❌ Grátis"
-        await u.message.reply_text(f"*🎫 SEU PERFIL*\nStatus: {st}", parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text(f"*🎫 STATUS:* {st}", parse_mode=ParseMode.MARKDOWN)
 
     async def admin(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if str(u.effective_user.id) != str(ADMIN_ID): return
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Gerar Key", callback_data="gen")]])
-        await u.message.reply_text("🔑 Admin Panel", reply_markup=kb)
+        if str(u.effective_user.id) != str(ADMIN_ID): 
+            return await u.message.reply_text("⛔ Admin only")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Key", callback_data="gen")]])
+        await u.message.reply_text("🔑 Admin", reply_markup=kb)
 
     async def cb(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if u.callback_query.data == "gen":
             k = self.db.create_key((datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
-            await u.callback_query.message.edit_text(f"🔑 Chave: `{k}`", parse_mode=ParseMode.MARKDOWN)
+            await u.callback_query.message.edit_text(f"🔑 `{k}`", parse_mode=ParseMode.MARKDOWN)
 
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
             k = c.args[0]
-            if self.db.use_key(k, u.effective_user.id): await u.message.reply_text("✅ VIP Ativado!")
-            else: await u.message.reply_text("❌ Chave inválida.")
+            if self.db.use_key(k, u.effective_user.id): await u.message.reply_text("✅ OK!")
+            else: await u.message.reply_text("❌ Inválido")
         except: await u.message.reply_text("Use: `/ativar CHAVE`")
 
 # ================= MAIN =================
 async def main():
     if not BOT_TOKEN: 
-        print("❌ ERRO: BOT_TOKEN faltando!")
+        print("❌ Faltam Variáveis!")
         return
 
-    # 1. Inicia Web Server Fake
     threading.Thread(target=start_fake_server, daemon=True).start()
 
-    # 2. Inicializa
     db = Database(DB_PATH)
     api = SportsAPI(db)
     ai = None
@@ -298,11 +280,9 @@ async def main():
     
     h = Handlers(db, api, ai)
 
-    # 3. Loop Anti-Crash
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V38.1...")
-            # AQUI ESTAVA O ERRO: ApplicationBuilder AGORA ESTÁ IMPORTADO
+            logger.info("🔥 Iniciando Bot V40...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
@@ -324,10 +304,7 @@ async def main():
 
             await app.initialize()
             await app.start()
-            
-            # Limpa webhook velho
             await app.bot.delete_webhook(drop_pending_updates=True)
-            
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
             while True: 
@@ -335,11 +312,10 @@ async def main():
                 if not app.updater.running: raise RuntimeError("Bot parou!")
 
         except Conflict:
-            logger.error("🚨 CONFLITO! Esperando 30s...")
+            logger.error("🚨 CONFLITO! 30s...")
             try: await app.shutdown()
             except: pass
             await asyncio.sleep(30)
-            
         except Exception as e:
             logger.error(f"❌ Erro: {e}")
             try: await app.shutdown()
