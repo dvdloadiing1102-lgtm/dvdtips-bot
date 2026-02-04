@@ -5,17 +5,15 @@ import asyncio
 import logging
 import secrets
 import random
-import time
 from datetime import datetime, timedelta, timezone
 
-# --- AUTO-INSTALAÇÃO ---
+# --- AUTO-INSTALAÇÃO DE DEPENDÊNCIAS ---
 try:
     import httpx
     import google.generativeai as genai
     from telegram import ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, ApplicationBuilder
     from telegram.constants import ParseMode
-    from telegram.error import Conflict, NetworkError
     from aiohttp import web
 except ImportError:
     import subprocess
@@ -28,8 +26,10 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# A URL do seu bot no Render (ex: https://seu-bot.onrender.com)
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") 
 PORT = int(os.environ.get("PORT", 10000))
-DB_FILE = "dvd_tips_v32.json"
+DB_FILE = "dvd_tips_v34.json"
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # ================= BANCO DE DADOS =================
 db_data = {}
 db_lock = asyncio.Lock()
-app = None
 
 async def load_db():
     global db_data
@@ -45,29 +44,23 @@ async def load_db():
         db_data = {"users": {}, "keys": {}, "api_cache": {}}
         return
     try:
-        with open(DB_FILE, "r", encoding="utf-8") as f:
-            db_data = json.load(f)
-    except:
-        db_data = {"users": {}, "keys": {}, "api_cache": {}}
+        with open(DB_FILE, "r", encoding="utf-8") as f: db_data = json.load(f)
+    except: db_data = {"users": {}, "keys": {}, "api_cache": {}}
 
 async def save_db():
     async with db_lock:
         try:
-            with open(DB_FILE, "w", encoding="utf-8") as f:
-                json.dump(db_data, f, indent=2)
-        except:
-            pass
+            with open(DB_FILE, "w", encoding="utf-8") as f: json.dump(db_data, f, indent=2)
+        except: pass
 
 # ================= MOTOR DE ODDS =================
 async def get_real_matches():
     cache = db_data.get("api_cache", {})
     if cache.get("ts"):
         last = datetime.fromisoformat(cache["ts"])
-        if (datetime.now() - last).total_seconds() < 900:
-            return cache["matches"]
+        if (datetime.now() - last).total_seconds() < 900: return cache["matches"]
 
-    if not API_FOOTBALL_KEY:
-        return []
+    if not API_FOOTBALL_KEY: return []
 
     today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
     headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
@@ -82,52 +75,37 @@ async def get_real_matches():
                 return_exceptions=True
             )
             if not isinstance(r_ft, Exception) and r_ft.status_code == 200:
-                VIP_IDS = [39, 40, 41, 42, 48, 140, 141, 143, 78, 79, 529, 135, 136, 137, 61, 62, 66, 71, 72, 73, 475, 479, 2, 3, 13, 11, 203, 128]
+                VIP_IDS = [39,40,41,42,48, 140,141,143, 78,79,529, 135,136,137, 61,62,66, 71,72,73, 475,479, 2,3,13,11, 203,128]
                 for g in r_ft.json().get("response", []):
-                    if g["league"]["id"] not in VIP_IDS:
-                        continue
+                    if g["league"]["id"] not in VIP_IDS: continue
                     ts = g["fixture"]["timestamp"]
-                    if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=4):
-                        continue
+                    if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=4): continue
                     matches.append({
-                        "sport": "⚽",
-                        "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
-                        "league": g["league"]["name"],
-                        "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
-                        "odd": round(random.uniform(1.5, 2.5), 2),
-                        "tip": "Over 2.5" if random.random() > 0.5 else "Casa",
-                        "ts": ts
+                        "sport": "⚽", "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
+                        "league": g["league"]["name"], "time": (datetime.fromtimestamp(ts, tz=timezone.utc)-timedelta(hours=3)).strftime("%H:%M"),
+                        "odd": round(random.uniform(1.5, 2.5), 2), "tip": "Over 2.5" if random.random() > 0.5 else "Casa", "ts": ts
                     })
             if not isinstance(r_bk, Exception) and r_bk.status_code == 200:
                 for g in r_bk.json().get("response", []):
-                    if g["league"]["id"] != 12:
-                        continue
+                    if g["league"]["id"] != 12: continue
                     ts = g["timestamp"]
                     matches.append({
-                        "sport": "🏀",
-                        "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
-                        "league": "NBA",
-                        "time": (datetime.fromtimestamp(ts, tz=timezone.utc) - timedelta(hours=3)).strftime("%H:%M"),
-                        "odd": round(random.uniform(1.4, 2.2), 2),
-                        "tip": "Casa",
-                        "ts": ts
+                        "sport": "🏀", "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
+                        "league": "NBA", "time": (datetime.fromtimestamp(ts, tz=timezone.utc)-timedelta(hours=3)).strftime("%H:%M"),
+                        "odd": round(random.uniform(1.4, 2.2), 2), "tip": "Casa", "ts": ts
                     })
-        except:
-            pass
+        except: pass
 
     if matches:
         matches.sort(key=lambda x: x["ts"])
-        async with db_lock:
-            db_data["api_cache"] = {"matches": matches, "ts": datetime.now().isoformat()}
+        async with db_lock: db_data["api_cache"] = {"matches": matches, "ts": datetime.now().isoformat()}
     return matches
 
 def get_multiple(matches):
-    if not matches or len(matches) < 4:
-        return None
+    if not matches or len(matches) < 4: return None
     sel = random.sample(matches, 4)
     total = 1.0
-    for m in sel:
-        total *= m["odd"]
+    for m in sel: total *= m["odd"]
     return {"games": sel, "total": round(total, 2)}
 
 # ================= HANDLERS =================
@@ -140,26 +118,22 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         if uid not in db_data["users"]:
             db_data["users"][uid] = {"vip": None}
             await save_db()
-    await u.message.reply_text("👋 **DVD TIPS V32**\nImortal!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
+    await u.message.reply_text("👋 **DVD TIPS V34**\nModo Webhook Ativo!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
 
 async def show_games(u: Update, c: ContextTypes.DEFAULT_TYPE):
     msg = await u.message.reply_text("🔄 ...")
     m = await get_real_matches()
-    if not m:
-        return await msg.edit_text("📭 Vazio.")
+    if not m: return await msg.edit_text("📭 Vazio.")
     txt = "*📋 GRADE HOJE:*\n\n"
-    for g in m[:25]:
-        txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
+    for g in m[:25]: txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
     await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 async def show_multi(u: Update, c: ContextTypes.DEFAULT_TYPE):
     m = await get_real_matches()
     multi = get_multiple(m)
-    if not multi:
-        return await u.message.reply_text("⚠️ Poucos jogos.")
+    if not multi: return await u.message.reply_text("⚠️ Poucos jogos.")
     txt = "*🚀 MÚLTIPLA:*\n\n"
-    for g in multi["games"]:
-        txt += f"• {g['sport']} {g['match']} ({g['tip']})\n"
+    for g in multi["games"]: txt += f"• {g['sport']} {g['match']} ({g['tip']})\n"
     txt += f"\n💰 *ODD: {multi['total']}*"
     await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
@@ -175,124 +149,14 @@ async def guru(u: Update, c: ContextTypes.DEFAULT_TYPE):
 async def text_handle(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if c.user_data.get("guru"):
         c.user_data["guru"] = False
-        if not GEMINI_API_KEY:
-            return await u.message.reply_text("❌ IA Off.")
+        if not GEMINI_API_KEY: return await u.message.reply_text("❌ IA Off.")
         msg = await u.message.reply_text("🤔 ...")
         try:
-            genai.configure(api_key=GEMINI_API_KEY)
             model = genai.GenerativeModel('gemini-1.5-flash')
             res = await asyncio.to_thread(model.generate_content, u.message.text)
             await msg.edit_text(f"🎓 *Guru:*\n{res.text}", parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            logger.error(f"Erro IA: {e}")
-            await msg.edit_text("❌ Erro IA.")
-    else:
-        await u.message.reply_text("❓ Menu")
+        except: await msg.edit_text("Erro IA.")
+    else: await u.message.reply_text("❓ Menu")
 
 async def admin_cmds(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    if str(u.effective_user.id) != str(ADMIN_ID):
-        return
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Key", callback_data="add")]])
-    await u.message.reply_text("🔑 Admin", reply_markup=kb)
-
-async def admin_cb(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    q = u.callback_query
-    await q.answer()
-    if q.data == "add":
-        k = "VIP-" + secrets.token_hex(4).upper()
-        async with db_lock:
-            db_data["keys"][k] = {"exp": "2030-12-31", "used": None}
-            await save_db()
-        await q.edit_message_text(f"🔑 `{k}`", parse_mode=ParseMode.MARKDOWN)
-
-async def activate(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    try:
-        k = c.args[0]
-    except:
-        return await u.message.reply_text("Use `/ativar CHAVE`")
-    async with db_lock:
-        if k in db_data["keys"] and not db_data["keys"][k]["used"]:
-            db_data["keys"][k]["used"] = str(u.effective_user.id)
-            db_data["users"][str(u.effective_user.id)]["vip"] = db_data["keys"][k]["exp"]
-            await save_db()
-            await u.message.reply_text("✅ OK!")
-        else:
-            await u.message.reply_text("❌ Erro.")
-
-# ================= MOTOR DO SITE (WEB) =================
-async def health_check(request):
-    return web.Response(text="V32 OK")
-
-async def start_web():
-    app_web = web.Application()
-    app_web.router.add_get("/", health_check)
-    runner = web.AppRunner(app_web)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info(f"✅ Web Server Porta {PORT}")
-
-# ================= LOOP IMORTAL (V32) =================
-async def main():
-    global app
-    
-    if not TOKEN:
-        sys.exit("Falta TOKEN")
-    await load_db()
-    
-    # 1. Sobe o Site (Para o Render não reclamar)
-    await start_web()
-
-    # 2. Loop de Ressurreição
-    while True:
-        try:
-            logger.info("🔥 Iniciando Bot (Modo Polling)...")
-            
-            # Recria o Bot do Zero
-            app = ApplicationBuilder().token(TOKEN).build()
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(CommandHandler("admin", admin_cmds))
-            app.add_handler(CommandHandler("ativar", activate))
-            app.add_handler(MessageHandler(filters.Regex("^📋"), show_games))
-            app.add_handler(MessageHandler(filters.Regex("^🚀"), show_multi))
-            app.add_handler(MessageHandler(filters.Regex("^🤖"), guru))
-            app.add_handler(MessageHandler(filters.Regex("^🎫"), show_status))
-            app.add_handler(CallbackQueryHandler(admin_cb))
-            app.add_handler(MessageHandler(filters.TEXT, text_handle))
-
-            # Roda e bloqueia aqui. Se der conflito, o run_polling solta erro.
-            # allowed_updates=Update.ALL_TYPES garante que pegue tudo
-            await app.initialize()
-            await app.start()
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-            
-            # Mantém vivo se nada der errado
-            while True:
-                await asyncio.sleep(3600)
-
-        except Conflict:
-            logger.error("🚨 CONFLITO DETECTADO! (Tem outro bot rodando).")
-            logger.error("⏳ Esperando 30 segundos para tentar reconectar...")
-            # Não fecha o programa! Só espera e tenta de novo no próximo loop.
-            try:
-                if app:
-                    await app.shutdown()
-            except:
-                pass
-            await asyncio.sleep(30)
-            
-        except Exception as e:
-            logger.error(f"❌ Erro: {e}")
-            logger.info("Reiniciando em 5s...")
-            try:
-                if app:
-                    await app.shutdown()
-            except:
-                pass
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    if str(u.effective_user.id) != str(ADMIN
