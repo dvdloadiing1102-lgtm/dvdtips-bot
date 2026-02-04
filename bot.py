@@ -8,65 +8,31 @@ import secrets
 import random
 import threading
 import httpx
-import google.generativeai as genai
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from contextlib import contextmanager
-from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import unicodedata
 
 # Telegram Imports
-from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
-from telegram.error import Conflict
+from telegram.error import Conflict, BadRequest
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ADMIN_ID = os.getenv("ADMIN_ID", "") # SEU ID OBRIGATÓRIO AQUI (OU NO RENDER)
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+CHANNEL_ID = os.getenv("CHANNEL_ID") # ID DO CANAL (Ex: -100....)
 PORT = int(os.getenv("PORT", 10000))
 DB_PATH = "betting_bot.db"
 LOG_LEVEL = "INFO"
 
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# ================= LISTAS VIP (O SEU PEDIDO) =================
-# IDs das Ligas API-Football
-VIP_LEAGUES_IDS = [
-    39,   # Premier League (England)
-    140,  # La Liga (Spain)
-    135,  # Serie A (Italy)
-    71,   # Brasileirão Série A (Brazil)
-    78,   # Bundesliga (Germany)
-    128,  # Liga Profesional (Argentina)
-    94,   # Liga Portugal
-    61,   # Ligue 1 (France)
-    144,  # Jupiler Pro League (Belgium)
-    88,   # Eredivisie (Netherlands)
-    203,  # Süper Lig (Turkey)
-    239,  # Categoría Primera A (Colombia)
-    197,  # Super League (Greece)
-    345,  # Fortuna Liga (Czech Republic)
-    268,  # Primera División (Uruguay)
-    233,  # Premier League (Egypt)
-    252,  # Primera División (Paraguay)
-    262,  # Liga MX (Mexico)
-    179,  # Premiership (Scotland)
-    98    # J1 League (Japan)
-]
-
-# Times que SEMPRE devem aparecer (Normalizados sem acento)
-VIP_TEAMS_NAMES = [
-    "MANCHESTER CITY", "REAL MADRID", "INTER", "PORTO", "AL AHLY", "FLAMENGO", 
-    "MANCHESTER UNITED", "PALMEIRAS", "FIORENTINA", "NAPOLI", "RB LEIPZIG", "PSV", 
-    "FORTALEZA", "BAYERN MUNICH", "SAO PAULO", "BENFICA", "FENERBAHCE", "JUVENTUS", 
-    "ROMA", "ARSENAL", "FLUMINENSE", "INTERNACIONAL", "BARCELONA", "UNION ST GILLOISE", 
-    "FEYENOORD", "MILAN", "WEST HAM", "SEVILLA", "SPORTING CP", "BOTAFOGO"
-]
+# ================= LISTAS VIP =================
+VIP_LEAGUES_IDS = [39, 140, 135, 71, 78, 128, 94, 61, 144, 88, 203, 239, 197, 345, 268, 233, 252, 262, 179, 98]
+VIP_TEAMS_NAMES = ["MANCHESTER CITY", "REAL MADRID", "INTER", "PORTO", "AL AHLY", "FLAMENGO", "MANCHESTER UNITED", "PALMEIRAS", "FIORENTINA", "NAPOLI", "RB LEIPZIG", "PSV", "FORTALEZA", "BAYERN MUNICH", "SAO PAULO", "BENFICA", "FENERBAHCE", "JUVENTUS", "ROMA", "ARSENAL", "FLUMINENSE", "INTERNACIONAL", "BARCELONA", "UNION ST GILLOISE", "FEYENOORD", "MILAN", "WEST HAM", "SEVILLA", "SPORTING CP", "BOTAFOGO", "LAKERS", "CELTICS", "WARRIORS", "HEAT", "BUCKS", "NUGGETS"]
 
 def normalize_str(s):
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn').upper()
@@ -76,7 +42,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V43 ONLINE - ELITE FILTER")
+        self.wfile.write(b"BOT V49 - ADMIN MODE ONLY")
 
 def start_fake_server():
     try:
@@ -101,22 +67,9 @@ class Database:
     def init_db(self):
         with self.get_conn() as conn:
             c = conn.cursor()
-            c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, is_vip BOOLEAN DEFAULT 0, vip_expiry TEXT)")
+            c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, is_vip BOOLEAN DEFAULT 0)")
             c.execute("CREATE TABLE IF NOT EXISTS vip_keys (key_code TEXT UNIQUE, expiry_date TEXT, used_by INTEGER)")
             c.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_key TEXT UNIQUE, cache_data TEXT, expires_at TIMESTAMP)")
-
-    def get_or_create_user(self, uid):
-        try:
-            with self.get_conn() as conn:
-                conn.cursor().execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
-        except: pass
-
-    def get_user(self, uid):
-        try:
-            with self.get_conn() as conn:
-                res = conn.cursor().execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
-                return dict(res) if res else None
-        except: return None
 
     def create_key(self, expiry):
         k = "VIP-" + secrets.token_hex(4).upper()
@@ -129,11 +82,11 @@ class Database:
             k = conn.cursor().execute("SELECT * FROM vip_keys WHERE key_code = ? AND used_by IS NULL", (key,)).fetchone()
             if not k: return False
             conn.cursor().execute("UPDATE vip_keys SET used_by = ? WHERE key_code = ?", (uid, key))
-            conn.cursor().execute("UPDATE users SET is_vip = 1, vip_expiry = ? WHERE user_id = ?", (k['expiry_date'], uid))
+            conn.cursor().execute("INSERT OR IGNORE INTO users (user_id, is_vip) VALUES (?, 1)", (uid,))
             return True
 
     def set_cache(self, key, data):
-        exp = (datetime.now() + timedelta(minutes=20)).isoformat()
+        exp = (datetime.now() + timedelta(minutes=45)).isoformat()
         try:
             with self.get_conn() as conn:
                 conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
@@ -147,17 +100,16 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try:
-            with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
+        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
-# ================= API DE ESPORTES (FILTRADA) =================
+# ================= API DE ESPORTES =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
     async def get_matches(self, force_debug=False):
         if not force_debug:
-            cached = await asyncio.to_thread(self.db.get_cache, "all_matches")
+            cached = await asyncio.to_thread(self.db.get_cache, "top10_matches")
             if cached: return cached, "Cache"
         
         matches = []
@@ -166,203 +118,222 @@ class SportsAPI:
         
         if API_FOOTBALL_KEY:
             try:
-                # REQUISIÇÃO FUTEBOL
+                # FUTEBOL
                 headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
-                async with httpx.AsyncClient(timeout=15) as client:
-                    # Busca jogos não iniciados ou ao vivo
+                async with httpx.AsyncClient(timeout=20) as client:
                     url = f"https://v3.football.api-sports.io/fixtures?date={today}"
                     r = await client.get(url, headers=headers)
-                    
                     if r.status_code == 200:
                         data = r.json().get("response", [])
                         for g in data:
-                            # Ignora cancelados
-                            if g["fixture"]["status"]["short"] in ["CANC", "ABD", "PST"]: continue
+                            if g["fixture"]["status"]["short"] in ["CANC", "ABD", "PST", "FT", "AET", "PEN"]: continue
                             
-                            # LOGICA DO FILTRO DE ELITE
                             league_id = g["league"]["id"]
-                            home_team = normalize_str(g["teams"]["home"]["name"])
-                            away_team = normalize_str(g["teams"]["away"]["name"])
+                            h_team = normalize_str(g["teams"]["home"]["name"])
+                            a_team = normalize_str(g["teams"]["away"]["name"])
                             
-                            is_vip_league = league_id in VIP_LEAGUES_IDS
-                            is_vip_team = any(vip in home_team for vip in VIP_TEAMS_NAMES) or any(vip in away_team for vip in VIP_TEAMS_NAMES)
+                            priority_score = 0
+                            if league_id in VIP_LEAGUES_IDS: priority_score += 10
+                            elif "Serie A" in g["league"]["name"]: priority_score += 5
                             
-                            # Só passa se for Liga VIP ou Time VIP
-                            if not (is_vip_league or is_vip_team):
-                                continue
+                            if any(vip in h_team for vip in VIP_TEAMS_NAMES): priority_score += 100
+                            if any(vip in a_team for vip in VIP_TEAMS_NAMES): priority_score += 100
+                            
+                            if priority_score == 0: continue
 
-                            odd_val = round(random.uniform(1.3, 3.5), 2)
+                            odd_h = round(random.uniform(1.4, 3.5), 2)
+                            tip_text = "Casa Vence"
+                            if odd_h > 2.5: tip_text = "Empate ou Visitante"
+                            elif odd_h < 1.7: tip_text = "Casa Vence"
+                            else: tip_text = "Over 1.5 Gols"
+
                             matches.append({
                                 "sport": "⚽", 
                                 "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
                                 "league": g["league"]["name"],
                                 "time": (datetime.fromtimestamp(g["fixture"]["timestamp"])-timedelta(hours=3)).strftime("%H:%M"),
-                                "odd": odd_val,
-                                "tip": "Over 1.5" if odd_val < 1.8 else "Casa Vence",
-                                "ts": g["fixture"]["timestamp"]
+                                "odd": odd_h,
+                                "tip": tip_text,
+                                "ts": g["fixture"]["timestamp"],
+                                "score": priority_score
                             })
-                    else:
-                        logger.error(f"Erro Foot API: {r.status_code}")
 
-                # REQUISIÇÃO BASQUETE (NBA)
-                # Nota: As vezes a chave de Futebol não funciona no Basquete, depende do plano.
+                # NBA
                 headers_nba = {"x-rapidapi-host": "v1.basketball.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
                 async with httpx.AsyncClient(timeout=15) as client:
-                    url_nba = f"https://v1.basketball.api-sports.io/games?date={today}&league=12" # ID 12 = NBA
-                    r_nba = await client.get(url_nba, headers=headers_nba)
-                    
+                    r_nba = await client.get(f"https://v1.basketball.api-sports.io/games?date={today}&league=12", headers=headers_nba)
                     if r_nba.status_code == 200:
-                        data_nba = r_nba.json().get("response", [])
-                        for g in data_nba:
-                            # NBA não precisa de filtro extra, ID 12 já filtra
+                        for g in r_nba.json().get("response", []):
+                            if g["status"]["short"] == "FT": continue
                             matches.append({
                                 "sport": "🏀",
                                 "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
                                 "league": "NBA",
                                 "time": (datetime.fromtimestamp(g["timestamp"])-timedelta(hours=3)).strftime("%H:%M"),
-                                "odd": round(random.uniform(1.8, 2.2), 2),
-                                "tip": "Over Points",
-                                "ts": g["timestamp"]
+                                "odd": 1.90,
+                                "tip": "Over Pontos",
+                                "ts": g["timestamp"],
+                                "score": 300
                             })
-                    else:
-                         logger.error(f"Erro NBA API: {r_nba.status_code} (Pode ser falta de assinatura na API de Basquete)")
+            except Exception as e: logger.error(f"Erro API Geral: {e}")
 
-            except Exception as e:
-                logger.error(f"Exceção API: {e}")
-
-        # BACKUP (SÓ SE NÃO ACHAR NADA DO QUE VOCÊ PEDIU)
+        # BACKUP
         if not matches:
-            status_msg = "Modo Backup (Filtro muito restrito ou API Off)"
+            status_msg = "Backup"
             base_ts = datetime.now().timestamp()
             matches = [
-                {"sport": "⚽", "match": "Flamengo x Palmeiras [Simulado]", "league": "Brasileirão", "time": "16:00", "odd": 2.10, "tip": "Casa", "ts": base_ts},
-                {"sport": "🏀", "match": "Lakers x Warriors [Simulado]", "league": "NBA", "time": "22:00", "odd": 1.90, "tip": "Over", "ts": base_ts+3600},
+                {"sport": "⚽", "match": "Flamengo x Palmeiras [Sim]", "league": "Brasileirão", "time": "16:00", "odd": 2.10, "tip": "Casa", "ts": base_ts, "score": 200},
+                {"sport": "🏀", "match": "Lakers x Celtics [Sim]", "league": "NBA", "time": "22:00", "odd": 1.90, "tip": "Over", "ts": base_ts, "score": 300}
             ]
 
-        matches.sort(key=lambda x: x["ts"])
-        await asyncio.to_thread(self.db.set_cache, "all_matches", matches)
-        return matches, status_msg
+        matches.sort(key=lambda x: (-x["score"], x["ts"]))
+        top_matches = matches[:15]
+        await asyncio.to_thread(self.db.set_cache, "top10_matches", top_matches)
+        return top_matches, status_msg
 
-# ================= HANDLERS =================
+# ================= SISTEMA DE ENVIO P/ CANAL =================
+async def send_channel_report(app, db, api):
+    if not CHANNEL_ID: return False, "Sem Channel ID"
+    await asyncio.to_thread(db.clear_cache)
+    m, source = await api.get_matches(force_debug=True)
+    if not m: return False, "Sem jogos"
+
+    today_str = datetime.now().strftime("%d/%m")
+    post = f"🦁 **BOLETIM VIP - {today_str}**\n\n"
+    best = m[0]
+    post += f"💎 **JOGO DE OURO:**\n{best['sport']} {best['match']}\n👉 {best['tip']} (@{best['odd']})\n\n"
+    post += "📋 **GRADE SELECIONADA:**\n"
+    for g in m[1:8]: post += f"{g['sport']} {g['time']} ▸ {g['match']}\n"
+    post += "\n━━━━━━━━━━━━━━━━\n🎯 *MÚLTIPLA DO DIA DISPONÍVEL NO BOT!*\n"
+    post += f"🤖 [Acesse Aqui](https://t.me/{app.bot.username})"
+
+    try:
+        await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        return True, "Sucesso"
+    except Exception as e: return False, str(e)
+
+# ================= HANDLERS (COM PROTEÇÃO ADMIN) =================
 class Handlers:
-    def __init__(self, db, api, ai): self.db, self.api, self.ai = db, api, ai
+    def __init__(self, db, api): self.db, self.api = db, api
     
-    def get_kb(self):
-        return ReplyKeyboardMarkup([
-            ["📋 Jogos de Hoje", "🚀 Múltipla 20x"],
-            ["🦓 Zebra do Dia", "🛡️ Aposta Segura"],
-            ["🏆 Ligas", "🤖 Guru IA"],
-            ["📚 Glossário", "🎫 Meu Status"]
-        ], resize_keyboard=True)
+    # Verifica se é o dono
+    def is_admin(self, uid):
+        return str(uid) == str(ADMIN_ID)
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        await asyncio.to_thread(self.db.get_or_create_user, u.effective_user.id)
-        msg = f"👋 **DVD TIPS V43 - ELITE**\nFiltro de Ligas: ATIVO\nFiltro de Times: ATIVO\nNBA: ATIVO"
-        await u.message.reply_text(msg, reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
+        uid = u.effective_user.id
+        
+        # SE FOR CLIENTE (NÃO ADMIN)
+        if not self.is_admin(uid):
+            msg = (f"👋 **Bem-vindo ao DVD TIPS**\n\n"
+                   f"🔐 Este bot é exclusivo para membros VIP.\n"
+                   f"Para acessar o canal de palpites, compre uma chave e digite:\n\n"
+                   f"`/ativar SUA-CHAVE-AQUI`")
+            # Remove teclado para ele não clicar em nada
+            return await u.message.reply_text(msg, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.MARKDOWN)
 
+        # SE FOR ADMIN (DONO)
+        msg = f"👋 **PAINEL DE CONTROLE (DONO)**\n\nVocê tem acesso total. O que deseja fazer hoje?"
+        kb = ReplyKeyboardMarkup([
+            ["🔥 Top Jogos", "🚀 Múltipla Segura"],
+            ["💣 Troco do Pão (Odd 20+)", "🏀 NBA"],
+            ["📢 Publicar no Canal", "🎫 Gerar Key"]
+        ], resize_keyboard=True)
+        
+        await u.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+    # === FUNÇÕES BLINDADAS (SÓ ADMIN ACESSA) ===
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        msg = await u.message.reply_text("🔄 Buscando na grade VIP...")
-        try:
-            m, source = await asyncio.wait_for(self.api.get_matches(), timeout=20)
-        except asyncio.TimeoutError:
-            return await msg.edit_text("⚠️ Timeout API.")
-            
-        if not m: return await msg.edit_text("📭 Nenhum jogo VIP hoje.")
-            
-        txt = f"*📋 JOGOS VIP ({len(m)}):*\n\n"
-        for g in m[:25]: # Mostra até 25 jogos
-            txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
+        if not self.is_admin(u.effective_user.id): return
+        msg = await u.message.reply_text("🔎 Analisando grade...")
+        m, _ = await self.api.get_matches()
+        if not m: return await msg.edit_text("📭 Sem jogos.")
+        txt = f"*🔥 GRADE DE ELITE:*\n\n"
+        for g in m[:10]:
+            icon = g['sport']
+            txt += f"{icon} *{g['time']}* | {g['league']}\n⚔️ {g['match']}\n💡 {g['tip']} (@{g['odd']})\n\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    async def multi(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+    async def nba_only(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        msg = await u.message.reply_text("🏀 Buscando...")
         m, _ = await self.api.get_matches()
-        if len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos VIP para múltipla.")
-        sel = random.sample(m, 4)
+        nba = [g for g in m if g['sport'] == "🏀"]
+        if not nba: return await msg.edit_text("📭 Sem NBA hoje.")
+        txt = "*🏀 JOGOS NBA:*\n\n"
+        for g in nba: txt += f"• {g['match']}\n⏰ {g['time']} | 📈 {g['odd']}\n👉 {g['tip']}\n\n"
+        await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
+
+    async def multi_safe(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        m, _ = await self.api.get_matches()
+        safe = [g for g in m if g['odd'] < 1.9]
+        if len(safe)<3: return await u.message.reply_text("⚠️ Poucos jogos.")
+        sel = random.sample(safe, min(3, len(safe)))
         total = 1.0
-        txt = "*🚀 MÚLTIPLA VIP:*\n\n"
+        txt = "*🚀 TRIPLA SEGURA:*\n\n"
         for g in sel: 
             total *= g['odd']
-            txt += f"• {g['match']} ({g['tip']})\n"
-        txt += f"\n💰 *ODD TOTAL: {total:.2f}*"
+            txt += f"✅ {g['match']} ({g['tip']})\n"
+        txt += f"\n💰 *ODD: {total:.2f}*"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    async def zebra(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+    async def multi_risk(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
         m, _ = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
-        zebra = max(m, key=lambda x: x['odd'])
-        txt = f"🦓 **ZEBRA:**\n🏆 {zebra['league']}\n⚔️ {zebra['match']}\n🔥 **{zebra['tip']}** (@{zebra['odd']})"
+        hard = [g for g in m if g['odd'] >= 2.0]
+        if len(hard)<4: hard = m
+        sel = random.sample(hard, min(4, len(hard)))
+        total = 1.0
+        txt = "*💣 TROCO DO PÃO:*\n\n"
+        for g in sel: 
+            total *= g['odd']
+            txt += f"🔥 {g['match']}\n   ↳ {g['tip']} (@{g['odd']})\n"
+        if total < 15: total = random.uniform(15.5, 24.9)
+        txt += f"\n💰 *ODD: {total:.2f}*"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    async def safe(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m, _ = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
-        safe = min(m, key=lambda x: x['odd'])
-        txt = f"🛡️ **SEGURA:**\n🏆 {safe['league']}\n⚔️ {safe['match']}\n✅ **{safe['tip']}** (@{safe['odd']})"
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+    async def publish(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        msg = await u.message.reply_text("⏳ Postando...")
+        ok, info = await send_channel_report(c.application, self.db, self.api)
+        await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
 
-    async def leagues(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m, _ = await self.api.get_matches()
-        if not m: return await u.message.reply_text("📭 Sem dados.")
-        ls = sorted(list(set([g['league'] for g in m])))
-        txt = "*🏆 Ligas Encontradas:*\n" + "\n".join([f"• {l}" for l in ls])
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+    # === GERADOR DE KEY (ADMIN ONLY) ===
+    # Como não temos botões no menu do cliente, o admin usa comando ou botão do painel
+    async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
+        await u.message.reply_text(f"🔑 **NOVA CHAVE GERADA:**\n`{k}`\n\nEnvie para o cliente.", parse_mode=ParseMode.MARKDOWN)
 
-    async def glossario(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        await u.message.reply_text("📚 *Glossário*\nOver=Mais\nUnder=Menos\nML=Vencedor", parse_mode=ParseMode.MARKDOWN)
-
-    async def debug(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        user_id = str(u.effective_user.id)
-        admin_id_env = str(ADMIN_ID).strip()
-        if user_id != admin_id_env:
-            return await u.message.reply_text(f"⛔ ACESSO NEGADO.", parse_mode=ParseMode.MARKDOWN)
-
-        msg = await u.message.reply_text("🔍 Limpando Cache e Testando...")
-        await asyncio.to_thread(self.db.clear_cache)
-        m, status = await self.api.get_matches(force_debug=True)
-        
-        nba_count = len([g for g in m if g['sport'] == '🏀'])
-        foot_count = len([g for g in m if g['sport'] == '⚽'])
-        
-        await msg.edit_text(f"✅ STATUS: {status}\n⚽ Futebol: {foot_count}\n🏀 NBA: {nba_count}\nTotal: {len(m)}")
-
-    async def guru(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        await u.message.reply_text("🤖 Mande sua dúvida:")
-        c.user_data["guru"] = True
-
-    async def text(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if c.user_data.get("guru"):
-            c.user_data["guru"] = False
-            if not self.ai: return await u.message.reply_text("❌ IA Off.")
-            msg = await u.message.reply_text("🤔 Analisando...")
-            try:
-                res = await asyncio.to_thread(self.ai.generate_content, u.message.text)
-                await msg.edit_text(f"🎓 *Guru Responde:*\n\n{res.text}", parse_mode=ParseMode.MARKDOWN)
-            except: await msg.edit_text("❌ Erro IA.")
-        else: await u.message.reply_text("❓ Use o menu.")
-
-    async def status(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        usr = await asyncio.to_thread(self.db.get_user, u.effective_user.id)
-        st = f"✅ VIP até {usr['vip_expiry']}" if usr and usr['is_vip'] else "❌ Grátis"
-        await u.message.reply_text(f"*🎫 STATUS:* {st}", parse_mode=ParseMode.MARKDOWN)
-
-    async def admin(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if str(u.effective_user.id) != str(ADMIN_ID): 
-            return await u.message.reply_text("⛔ Admin only")
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Key", callback_data="gen")]])
-        await u.message.reply_text("🔑 Admin", reply_markup=kb)
-
-    async def cb(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if u.callback_query.data == "gen":
-            k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
-            await u.callback_query.message.edit_text(f"🔑 `{k}`", parse_mode=ParseMode.MARKDOWN)
-
+    # === ATIVAÇÃO (PÚBLICO) ===
+    # Única função que o cliente pode usar
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
-            k = c.args[0]
-            success = await asyncio.to_thread(self.db.use_key, k, u.effective_user.id)
-            if success: await u.message.reply_text("✅ OK!")
-            else: await u.message.reply_text("❌ Inválido")
-        except: await u.message.reply_text("Use: `/ativar CHAVE`")
+            key_input = c.args[0]
+            success = await asyncio.to_thread(self.db.use_key, key_input, u.effective_user.id)
+            
+            if success:
+                # GERA LINK DE CONVITE ÚNICO
+                invite_link = "Erro ao gerar link"
+                try:
+                    if CHANNEL_ID:
+                        # Link para 1 pessoa, dura 24h
+                        link = await c.bot.create_chat_invite_link(chat_id=CHANNEL_ID, member_limit=1, expire_date=datetime.now() + timedelta(hours=24))
+                        invite_link = link.invite_link
+                except Exception as e:
+                    logger.error(f"Erro invite: {e}")
+                    invite_link = "(Peça o link ao suporte, erro no bot)"
+
+                msg = (f"✅ **VIP ATIVADO COM SUCESSO!**\n\n"
+                       f"Aqui está seu acesso exclusivo ao canal:\n"
+                       f"👉 {invite_link}\n\n"
+                       f"⚠️ _Este link só funciona 1 vez e expira amanhã._")
+                
+                await u.message.reply_text(msg)
+            else:
+                await u.message.reply_text("❌ Chave inválida ou já usada.")
+        except: await u.message.reply_text("❌ Use: `/ativar CHAVE`")
 
 # ================= MAIN =================
 async def main():
@@ -374,37 +345,29 @@ async def main():
 
     db = Database(DB_PATH)
     api = SportsAPI(db)
-    ai = None
-    if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        ai = genai.GenerativeModel('gemini-1.5-flash')
-    
-    h = Handlers(db, api, ai)
+    h = Handlers(db, api)
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V43...")
+            logger.info("🔥 Iniciando Bot V49 (Admin Locked)...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
+            # Comandos
             app.add_handler(CommandHandler("start", h.start))
-            app.add_handler(CommandHandler("admin", h.admin))
+            app.add_handler(CommandHandler("publicar", h.publish))
             app.add_handler(CommandHandler("ativar", h.active))
-            app.add_handler(CommandHandler("debug", h.debug))
             
-            app.add_handler(MessageHandler(filters.Regex("^📋"), h.games))
-            app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi))
-            app.add_handler(MessageHandler(filters.Regex("^🦓"), h.zebra))
-            app.add_handler(MessageHandler(filters.Regex("^🛡️"), h.safe))
-            app.add_handler(MessageHandler(filters.Regex("^🏆"), h.leagues))
-            app.add_handler(MessageHandler(filters.Regex("^📚"), h.glossario))
-            app.add_handler(MessageHandler(filters.Regex("^🤖"), h.guru))
-            app.add_handler(MessageHandler(filters.Regex("^🎫"), h.status))
+            # Botões do Painel Admin
+            app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games))
+            app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi_safe))
+            app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk))
+            app.add_handler(MessageHandler(filters.Regex("^🏀"), h.nba_only))
+            app.add_handler(MessageHandler(filters.Regex("^📢"), h.publish))
+            app.add_handler(MessageHandler(filters.Regex("^🎫"), h.gen_key_btn))
             
-            app.add_handler(CallbackQueryHandler(h.cb))
-            app.add_handler(MessageHandler(filters.TEXT, h.text))
-
             await app.initialize()
             await app.start()
+            
             await app.bot.delete_webhook(drop_pending_updates=True)
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
