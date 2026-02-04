@@ -20,9 +20,9 @@ from telegram.error import Conflict, BadRequest
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID", "") # SEU ID OBRIGATÓRIO AQUI (OU NO RENDER)
+ADMIN_ID = os.getenv("ADMIN_ID", "") 
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-CHANNEL_ID = os.getenv("CHANNEL_ID") # ID DO CANAL (Ex: -100....)
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 DB_PATH = "betting_bot.db"
 LOG_LEVEL = "INFO"
@@ -42,7 +42,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V49 - ADMIN MODE ONLY")
+        self.wfile.write(b"BOT V49.1 - SYNTAX FIXED")
 
 def start_fake_server():
     try:
@@ -60,9 +60,14 @@ class Database:
     def get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        try: yield conn; conn.commit()
-        except: conn.rollback(); raise
-        finally: conn.close()
+        try: 
+            yield conn
+            conn.commit()
+        except: 
+            conn.rollback()
+            raise
+        finally: 
+            conn.close()
     
     def init_db(self):
         with self.get_conn() as conn:
@@ -100,8 +105,12 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
-        except: pass
+        # CORREÇÃO AQUI: Try/Except indentado corretamente
+        try: 
+            with self.get_conn() as conn: 
+                conn.cursor().execute("DELETE FROM api_cache")
+        except: 
+            pass
 
 # ================= API DE ESPORTES =================
 class SportsAPI:
@@ -300,25 +309,21 @@ class Handlers:
         await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
 
     # === GERADOR DE KEY (ADMIN ONLY) ===
-    # Como não temos botões no menu do cliente, o admin usa comando ou botão do painel
     async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(u.effective_user.id): return
         k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
         await u.message.reply_text(f"🔑 **NOVA CHAVE GERADA:**\n`{k}`\n\nEnvie para o cliente.", parse_mode=ParseMode.MARKDOWN)
 
     # === ATIVAÇÃO (PÚBLICO) ===
-    # Única função que o cliente pode usar
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
             key_input = c.args[0]
             success = await asyncio.to_thread(self.db.use_key, key_input, u.effective_user.id)
             
             if success:
-                # GERA LINK DE CONVITE ÚNICO
                 invite_link = "Erro ao gerar link"
                 try:
                     if CHANNEL_ID:
-                        # Link para 1 pessoa, dura 24h
                         link = await c.bot.create_chat_invite_link(chat_id=CHANNEL_ID, member_limit=1, expire_date=datetime.now() + timedelta(hours=24))
                         invite_link = link.invite_link
                 except Exception as e:
@@ -349,7 +354,7 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V49 (Admin Locked)...")
+            logger.info("🔥 Iniciando Bot V49.1...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             # Comandos
