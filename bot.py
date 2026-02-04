@@ -33,11 +33,26 @@ LOG_LEVEL = "INFO"
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-# ================= FILTROS =================
+# ================= FILTROS E DICIONÁRIOS =================
 VIP_LEAGUES_IDS = [71, 39, 140, 135, 78, 128, 61, 2, 3, 848, 143, 45, 48, 528] 
 BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RESERVES", "LADIES", "JUNIOR", "GIRLS"]
 VIP_TEAMS_NAMES = ["FLAMENGO", "PALMEIRAS", "SAO PAULO", "CORINTHIANS", "SANTOS", "GREMIO", "INTERNACIONAL", "ATLETICO MINEIRO", "BOTAFOGO", "FLUMINENSE", "VASCO", "CRUZEIRO", "BAHIA", "FORTALEZA", "MANCHESTER CITY", "REAL MADRID", "BARCELONA", "LIVERPOOL", "ARSENAL", "PSG", "INTER", "MILAN", "JUVENTUS", "BAYERN", "BOCA JUNIORS", "RIVER PLATE"]
-BETTING_KEYWORDS = ["lesão", "lesionado", "machucou", "cirurgia", "desfalque", "fora", "dúvida", "poupado", "suspenso", "vetado", "dores", "contratado", "vendido", "assina", "reforço", "saída", "troca", "emprestado", "rescindiu", "banco", "reserva", "titular", "relacionado", "injury", "injured", "surgery", "out", "questionable", "doubtful", "sidelined", "trade", "traded", "signed", "bench", "suspended"]
+
+# Palavras-chave para filtrar notícias (Anti-Fofoca)
+BETTING_KEYWORDS = ["lesão", "lesionado", "machucou", "cirurgia", "desfalque", "fora", "dúvida", "poupado", "suspenso", "vetado", "dores", "contratado", "vendido", "assina", "reforço", "saída", "troca", "emprestado", "rescindiu", "banco", "reserva", "titular", "relacionado", "injury", "injured", "surgery", "out", "questionable", "doubtful", "sidelined", "trade", "traded", "signed", "bench", "suspended", "waived", "miss"]
+
+# Dicionário de Tradução (Inglês -> Português)
+TRANSLATION_MAP = {
+    "injury": "LESÃO", "injured": "LESIONADO", "surgery": "CIRURGIA",
+    "out": "FORA", "questionable": "DÚVIDA", "doubtful": "IMPROVÁVEL",
+    "sidelined": "AFASTADO", "suspended": "SUSPENSO", "waived": "DISPENSADO",
+    "trade": "TROCA", "traded": "TROCADO", "signed": "ASSINOU",
+    "bench": "BANCO", "miss": "PERDE", "return": "RETORNA",
+    "ankle": "TORNOZELO", "knee": "JOELHO", "foot": "PÉ", "hand": "MÃO",
+    "season": "TEMPORADA", "game": "JOGO", "sources": "FONTES",
+    "expected": "ESPERADO", "indefinitely": "TEMPO INDETERMINADO",
+    "soreness": "DORES", "back": "COSTAS", "hamstring": "COXA"
+}
 
 def normalize_str(s):
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn').upper()
@@ -45,14 +60,9 @@ def normalize_str(s):
 # ================= SERVIDOR WEB FAKE =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"BOT V59.1 ONLINE - SYNTAX FIXED")
-
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V60 ONLINE - TRANSLATOR ACTIVE")
 def start_fake_server():
-    try:
-        server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
-        server.serve_forever()
+    try: server = HTTPServer(('0.0.0.0', PORT), FakeHandler); server.serve_forever()
     except: pass
 
 # ================= BANCO DE DADOS =================
@@ -65,14 +75,9 @@ class Database:
     def get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        try: 
-            yield conn
-            conn.commit()
-        except: 
-            conn.rollback()
-            raise
-        finally: 
-            conn.close()
+        try: yield conn; conn.commit()
+        except: conn.rollback(); raise
+        finally: conn.close()
     
     def init_db(self):
         with self.get_conn() as conn:
@@ -81,22 +86,13 @@ class Database:
             c.execute("CREATE TABLE IF NOT EXISTS vip_keys (key_code TEXT UNIQUE, expiry_date TEXT, used_by INTEGER)")
             c.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_key TEXT UNIQUE, cache_data TEXT, expires_at TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS sent_news (news_url TEXT PRIMARY KEY, sent_at TIMESTAMP)")
-            # Tabela Histórico de Tips
             c.execute("""CREATE TABLE IF NOT EXISTS tips_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        match_id TEXT,
-                        match_name TEXT,
-                        league TEXT,
-                        tip_type TEXT,
-                        odd REAL,
-                        date_sent DATE,
-                        status TEXT DEFAULT 'PENDING' 
-                      )""")
+                        match_id TEXT, match_name TEXT, league TEXT, tip_type TEXT, odd REAL, date_sent DATE, status TEXT DEFAULT 'PENDING')""")
 
     def create_key(self, expiry):
         k = "VIP-" + secrets.token_hex(4).upper()
-        with self.get_conn() as conn:
-            conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
+        with self.get_conn() as conn: conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
         return k
 
     def use_key(self, key, uid):
@@ -110,8 +106,7 @@ class Database:
     def set_cache(self, key, data):
         exp = (datetime.now() + timedelta(minutes=30)).isoformat()
         try:
-            with self.get_conn() as conn:
-                conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
+            with self.get_conn() as conn: conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
         except: pass
 
     def get_cache(self, key):
@@ -122,51 +117,49 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try:
-            with self.get_conn() as conn:
-                conn.cursor().execute("DELETE FROM api_cache")
+        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
     def is_news_sent(self, url):
         try:
-            with self.get_conn() as conn:
-                res = conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone()
-                return res is not None
+            with self.get_conn() as conn: return conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone() is not None
         except: return False
 
     def mark_news_sent(self, url):
-        try:
-            with self.get_conn() as conn:
-                conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
+        try: with self.get_conn() as conn: conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
         except: pass
 
-    # --- FUNÇÕES GREEN/RED ---
     def save_tip(self, match_id, match_name, league, tip, odd):
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             with self.get_conn() as conn:
-                conn.cursor().execute("INSERT INTO tips_history (match_id, match_name, league, tip_type, odd, date_sent) VALUES (?, ?, ?, ?, ?, ?)", 
-                                      (str(match_id), match_name, league, tip, odd, today))
-        except Exception as e: logger.error(f"Erro ao salvar tip: {e}")
+                conn.cursor().execute("INSERT INTO tips_history (match_id, match_name, league, tip_type, odd, date_sent) VALUES (?, ?, ?, ?, ?, ?)", (str(match_id), match_name, league, tip, odd, today))
+        except Exception as e: logger.error(f"Erro save: {e}")
 
     def get_pending_tips(self):
         try:
-            with self.get_conn() as conn:
-                # Pega tips pendentes
-                return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
+            with self.get_conn() as conn: return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
         except: return []
 
     def update_tip_status(self, tip_id, status):
         try:
-            with self.get_conn() as conn:
-                conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
+            with self.get_conn() as conn: conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
         except: pass
 
 # ================= API INTELLIGENCE =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
-    # --- GET MATCHES (PARA ENVIAR) ---
+    def translate_text(self, text):
+        if not text: return ""
+        # Tradução simples baseada em dicionário
+        translated = text
+        for eng, pt in TRANSLATION_MAP.items():
+            # Substitui mantendo case insensitive com regex
+            pattern = re.compile(re.escape(eng), re.IGNORECASE)
+            translated = pattern.sub(pt, translated)
+        return translated
+
     async def get_matches(self, force_debug=False):
         if not force_debug:
             cached = await asyncio.to_thread(self.db.get_cache, "top10_matches")
@@ -204,15 +197,10 @@ class SportsAPI:
                             else: tip_text = "Over 1.5 Gols"
 
                             matches.append({
-                                "id": g["fixture"]["id"],
-                                "sport": "⚽", 
+                                "id": g["fixture"]["id"], "sport": "⚽", 
                                 "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
-                                "league": g["league"]["name"],
-                                "time": (datetime.fromtimestamp(g["fixture"]["timestamp"])-timedelta(hours=3)).strftime("%H:%M"),
-                                "odd": odd_h, 
-                                "tip": tip_text, 
-                                "ts": g["fixture"]["timestamp"], 
-                                "score": priority_score
+                                "league": g["league"]["name"], "time": (datetime.fromtimestamp(g["fixture"]["timestamp"])-timedelta(hours=3)).strftime("%H:%M"),
+                                "odd": odd_h, "tip": tip_text, "ts": g["fixture"]["timestamp"], "score": priority_score
                             })
             except Exception as e: logger.error(f"Erro Futebol: {e}")
 
@@ -225,147 +213,117 @@ class SportsAPI:
                     data = r_nba.json()
                     for event in data.get('events', []):
                         comps = event['competitions'][0]
-                        team_home = comps['competitors'][0]
-                        team_away = comps['competitors'][1]
-                        name_h = team_home['team']['displayName']
-                        name_a = team_away['team']['displayName']
+                        team_home, team_away = comps['competitors'][0], comps['competitors'][1]
+                        name_h, name_a = team_home['team']['displayName'], team_away['team']['displayName']
                         
                         odds_data = comps.get('odds', [{}])[0]
-                        details = odds_data.get('details', 'N/A')
-                        over_under = odds_data.get('overUnder', 0)
-                        
+                        details, over_under = odds_data.get('details', 'N/A'), odds_data.get('overUnder', 0)
                         game_date = event['date']
                         dt_obj = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
                         
                         if details != 'N/A':
-                            if "-" in details and team_home['team']['abbreviation'] in details:
-                                tip_final, odd_final = f"{team_home['team']['shortDisplayName']} vence", 1.75
-                            elif "-" in details and team_away['team']['abbreviation'] in details:
-                                tip_final, odd_final = f"{team_away['team']['shortDisplayName']} vence", 1.75
-                            else:
-                                tip_final, odd_final = f"Over {over_under} Pts", 1.90
+                            if "-" in details and team_home['team']['abbreviation'] in details: tip_final, odd_final = f"{team_home['team']['shortDisplayName']} vence", 1.75
+                            elif "-" in details and team_away['team']['abbreviation'] in details: tip_final, odd_final = f"{team_away['team']['shortDisplayName']} vence", 1.75
+                            else: tip_final, odd_final = f"Over {over_under} Pts", 1.90
                         else:
-                            options = [
-                                (f"{team_home['team']['shortDisplayName']} vence", 1.80),
-                                (f"{team_away['team']['shortDisplayName']} vence", 2.10),
-                                (f"Over {random.randint(218, 235)} Pts", 1.90)
-                            ]
+                            options = [(f"{team_home['team']['shortDisplayName']} vence", 1.80), (f"{team_away['team']['shortDisplayName']} vence", 2.10), (f"Over {random.randint(218, 235)} Pts", 1.90)]
                             tip_final, odd_final = random.choice(options)
 
                         matches.append({
-                            "id": event['id'],
-                            "sport": "🏀", 
-                            "match": f"{name_h} x {name_a}",
-                            "league": "NBA", 
-                            "time": (dt_obj - timedelta(hours=3)).strftime("%H:%M"),
-                            "odd": odd_final, 
-                            "tip": tip_final, 
-                            "ts": dt_obj.timestamp(), 
-                            "score": 5000
+                            "id": event['id'], "sport": "🏀", "match": f"{name_h} x {name_a}", "league": "NBA",
+                            "time": (dt_obj - timedelta(hours=3)).strftime("%H:%M"), "odd": odd_final, "tip": tip_final, "ts": dt_obj.timestamp(), "score": 5000
                         })
         except Exception as e: logger.error(f"Erro ESPN NBA: {e}")
 
         if not matches: matches = []
-
         matches.sort(key=lambda x: (-x["score"], x["ts"]))
         top_matches = matches[:20] 
         await asyncio.to_thread(self.db.set_cache, "top10_matches", top_matches)
         return top_matches, status_msg
 
-    # --- VERIFICADOR DE RESULTADOS (GREEN/RED) ---
     async def check_results(self):
         pending = await asyncio.to_thread(self.db.get_pending_tips)
         if not pending: return []
-
         results = {"greens": 0, "reds": 0}
-        
         ids_nba = [p for p in pending if p['league'] == 'NBA']
         ids_foot = [p for p in pending if p['league'] != 'NBA']
         
-        # CHECAR NBA (ESPN)
         if ids_nba:
             try:
                 yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y%m%d")
-                url_espn = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}"
-                
                 async with httpx.AsyncClient() as client:
-                    r = await client.get(url_espn)
+                    r = await client.get(f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={yesterday}")
                     if r.status_code == 200:
                         events = r.json().get('events', [])
                         for tip in ids_nba:
                             game = next((e for e in events if str(e['id']) == str(tip['match_id'])), None)
                             if game and game['status']['type']['completed']:
                                 comps = game['competitions'][0]
-                                score_h = int(comps['competitors'][0]['score'])
-                                score_a = int(comps['competitors'][1]['score'])
-                                name_h = comps['competitors'][0]['team']['shortDisplayName']
-                                name_a = comps['competitors'][1]['team']['shortDisplayName']
+                                score_h, score_a = int(comps['competitors'][0]['score']), int(comps['competitors'][1]['score'])
+                                name_h, name_a = comps['competitors'][0]['team']['shortDisplayName'], comps['competitors'][1]['team']['shortDisplayName']
                                 total = score_h + score_a
-                                
                                 result_status = "RED"
                                 if "Over" in tip['tip_type']:
-                                    try:
-                                        line = float(re.findall(r"[\d\.]+", tip['tip_type'])[0])
-                                        if total > line: result_status = "GREEN"
+                                    try: 
+                                        if total > float(re.findall(r"[\d\.]+", tip['tip_type'])[0]): result_status = "GREEN"
                                     except: pass
                                 elif "vence" in tip['tip_type']:
                                     winner = name_h if score_h > score_a else name_a
                                     if winner in tip['tip_type']: result_status = "GREEN"
-                                
                                 await asyncio.to_thread(self.db.update_tip_status, tip['id'], result_status)
-                                if result_status == "GREEN": results["greens"] += 1
-                                else: results["reds"] += 1
-            except Exception as e: logger.error(f"Erro Check NBA: {e}")
+                                results["greens" if result_status=="GREEN" else "reds"] += 1
+            except: pass
 
-        # CHECAR FUTEBOL
         if ids_foot and API_FOOTBALL_KEY:
             try:
-                match_ids_str = "-".join([str(p['match_id']) for p in ids_foot[:10]])
+                ids_str = "-".join([str(p['match_id']) for p in ids_foot[:10]])
                 headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
                 async with httpx.AsyncClient() as client:
-                    r = await client.get(f"https://v3.football.api-sports.io/fixtures?ids={match_ids_str}", headers=headers)
+                    r = await client.get(f"https://v3.football.api-sports.io/fixtures?ids={ids_str}", headers=headers)
                     if r.status_code == 200:
                         for game in r.json().get('response', []):
                             if game['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
-                                score_h = game['goals']['home']
-                                score_a = game['goals']['away']
+                                score_h, score_a = game['goals']['home'], game['goals']['away']
                                 total = score_h + score_a
                                 tip = next((p for p in ids_foot if str(p['match_id']) == str(game['fixture']['id'])), None)
                                 if tip:
                                     res = "RED"
-                                    t_text = tip['tip_type']
-                                    if "Casa Vence" in t_text and score_h > score_a: res = "GREEN"
-                                    elif "Visitante" in t_text and score_a > score_h: res = "GREEN"
-                                    elif "Empate" in t_text and (score_h == score_a or score_a > score_h): res = "GREEN"
-                                    elif "Over" in t_text and total > 1: res = "GREEN"
-                                    
+                                    t = tip['tip_type']
+                                    if "Casa Vence" in t and score_h > score_a: res = "GREEN"
+                                    elif "Visitante" in t and score_a > score_h: res = "GREEN"
+                                    elif "Empate" in t and (score_h == score_a or score_a > score_h): res = "GREEN"
+                                    elif "Over" in t and total > 1: res = "GREEN"
                                     await asyncio.to_thread(self.db.update_tip_status, tip['id'], res)
-                                    if res == "GREEN": results["greens"] += 1
-                                    else: results["reds"] += 1
-            except Exception as e: logger.error(f"Erro Check Fut: {e}")
-            
+                                    results["greens" if res=="GREEN" else "reds"] += 1
+            except: pass
         return results
 
-    # --- NEWS ---
     async def get_hot_news(self):
         news_list = []
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                url_nba = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news"
-                r1 = await client.get(url_nba)
+                # NBA NEWS
+                r1 = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news")
                 if r1.status_code == 200:
                     for a in r1.json().get('articles', []):
                         full = (a.get('headline','')+" "+a.get('description','')).lower()
+                        # Verifica Palavras Chave
                         if any(k in full for k in BETTING_KEYWORDS):
-                            news_list.append({"title":a.get('headline'),"desc":a.get('description'),"url":a['links']['web']['href'],"img":a['images'][0]['url'] if a.get('images') else None,"tag":"🏀 NBA INFO"})
+                            # TRADUZ
+                            pt_title = self.translate_text(a.get('headline',''))
+                            pt_desc = self.translate_text(a.get('description',''))
+                            news_list.append({"title": pt_title, "desc": pt_desc, "url": a['links']['web']['href'], "img": a['images'][0]['url'] if a.get('images') else None, "tag": "🏀 NBA INFO"})
                 
-                url_soc = "https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/news"
-                r2 = await client.get(url_soc)
+                # FUT NEWS
+                r2 = await client.get("https://site.api.espn.com/apis/site/v2/sports/soccer/bra.1/news")
                 if r2.status_code == 200:
                     for a in r2.json().get('articles', []):
                         full = (a.get('headline','')+" "+a.get('description','')).lower()
                         if any(k in full for k in BETTING_KEYWORDS):
-                            news_list.append({"title":a.get('headline'),"desc":a.get('description'),"url":a['links']['web']['href'],"img":a['images'][0]['url'] if a.get('images') else None,"tag":"⚽ FUT NEWS"})
+                            # Traduz (mesmo sendo BR as vezes ajuda limpar)
+                            pt_title = self.translate_text(a.get('headline',''))
+                            pt_desc = self.translate_text(a.get('description',''))
+                            news_list.append({"title": pt_title, "desc": pt_desc, "url": a['links']['web']['href'], "img": a['images'][0]['url'] if a.get('images') else None, "tag": "⚽ FUT NEWS"})
         except: pass
         return news_list
 
@@ -375,41 +333,30 @@ async def send_channel_report(app, db, api):
     await asyncio.to_thread(db.clear_cache)
     m, source = await api.get_matches(force_debug=True)
     if not m: return False, "Sem jogos"
-
-    for g in m:
-        await asyncio.to_thread(db.save_tip, g['id'], g['match'], g['league'], g['tip'], g['odd'])
+    for g in m: await asyncio.to_thread(db.save_tip, g['id'], g['match'], g['league'], g['tip'], g['odd'])
 
     today_str = datetime.now().strftime("%d/%m")
-    nba_games = [g for g in m if g['sport'] == '🏀']
-    foot_games = [g for g in m if g['sport'] == '⚽']
+    nba, fut = [g for g in m if g['sport'] == '🏀'], [g for g in m if g['sport'] == '⚽']
     
     post = f"🦁 **BOLETIM VIP - {today_str}**\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    if foot_games:
-        best = foot_games[0]
+    if fut:
+        best = fut[0]
         post += f"💎 **JOGO DE OURO (MAX)**\n⚽ {best['match']}\n🏆 {best['league']} | 🕒 {best['time']}\n🔥 **Entrada:** {best['tip']}\n📈 **Odd:** @{best['odd']}\n\n"
-    
-    if nba_games:
+    if nba:
         post += f"🏀 **SESSÃO NBA**\n"
-        for g in nba_games: post += f"🇺🇸 {g['match']}\n🎯 {g['tip']} (@{g['odd']})\n\n"
-
+        for g in nba: post += f"🇺🇸 {g['match']}\n🎯 {g['tip']} (@{g['odd']})\n\n"
     post += "📋 **GRADE DE ELITE**\n"
-    for g in foot_games[1:6]:
-        post += f"⚔️ {g['match']}\n   ↳ {g['tip']} (@{g['odd']})\n"
-        
-    post += "\n━━━━━━━━━━━━━━━━━━━━\n💣 **TROCO DO PÃO**\n"
-    risk_candidates = [g for g in m if g['odd'] >= 1.90] or m
-    sel_risk = random.sample(risk_candidates, min(4, len(risk_candidates)))
-    total_risk = 1.0
-    for g in sel_risk:
-        total_risk *= g['odd']
-        post += f"🔥 {g['match']}\n   👉 {g['tip']} (@{g['odd']})\n"
+    for g in fut[1:6]: post += f"⚔️ {g['match']}\n   ↳ {g['tip']} (@{g['odd']})\n"
     
-    if total_risk < 15: total_risk = random.uniform(15.5, 25.0)
-    post += f"\n💰 **ODD FINAL: @{total_risk:.2f}**\n⚠️ _Gestão de banca sempre!_ 🦁"
+    risk = [g for g in m if g['odd'] >= 1.90] or m
+    sel = random.sample(risk, min(4, len(risk)))
+    total = 1.0
+    post += "\n━━━━━━━━━━━━━━━━━━━━\n💣 **TROCO DO PÃO**\n"
+    for g in sel: total *= g['odd']; post += f"🔥 {g['match']}\n   👉 {g['tip']} (@{g['odd']})\n"
+    if total < 15: total = random.uniform(15.5, 25.0)
+    post += f"\n💰 **ODD FINAL: @{total:.2f}**\n⚠️ _Gestão de banca sempre!_ 🦁"
 
-    try:
-        await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
-        return True, "Sucesso"
+    try: await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True); return True, "Sucesso"
     except Exception as e: return False, str(e)
 
 async def check_and_send_news(app, db, api):
@@ -418,7 +365,12 @@ async def check_and_send_news(app, db, api):
     for item in news:
         if await asyncio.to_thread(db.is_news_sent, item['url']): continue
         await asyncio.to_thread(db.mark_news_sent, item['url'])
-        txt = f"{item['tag']}\n\n🚨 **{item['title']}**\n\n{item['desc']}\n\n🦁 _Plantão Automático_"
+        
+        # TEXTO TRADUZIDO E LINK FORMATADO
+        txt = f"{item['tag']}\n\n🚨 **{item['title']}**\n\n{item['desc']}\n\n"
+        txt += f"[🔗 Ler na Íntegra]({item['url']})\n\n"
+        txt += f"🦁 _Plantão Automático_"
+        
         try:
             if item['img']: await app.bot.send_photo(chat_id=CHANNEL_ID, photo=item['img'], caption=txt, parse_mode=ParseMode.MARKDOWN)
             else: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.MARKDOWN)
@@ -427,118 +379,82 @@ async def check_and_send_news(app, db, api):
 
 async def send_green_red_report(app, db, api):
     if not CHANNEL_ID: return
-    logger.info("Verificando resultados...")
     res = await api.check_results()
-    
     if res and (res['greens'] > 0 or res['reds'] > 0):
-        total = res['greens'] + res['reds']
-        rate = (res['greens'] / total) * 100
-        msg = f"📊 **RELATÓRIO DA VERDADE**\n\n"
-        msg += f"Ontem fechamos assim:\n"
-        msg += f"✅ **{res['greens']} Greens**\n"
-        msg += f"❌ **{res['reds']} Reds**\n\n"
-        msg += f"📈 Aproveitamento: **{rate:.1f}%**\n"
-        msg += f"Transparência total! 🦁"
-        try:
-            await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+        t = res['greens'] + res['reds']
+        msg = f"📊 **RELATÓRIO DA VERDADE**\n\nOntem fechamos assim:\n✅ **{res['greens']} Greens**\n❌ **{res['reds']} Reds**\n\n📈 Aproveitamento: **{(res['greens']/t)*100:.1f}%**\nTransparência total! 🦁"
+        try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
         except: pass
 
-# ================= AGENDADOR 24H =================
+# ================= HANDLERS E MAIN =================
 async def daily_scheduler(app, db, api):
     logger.info("⏰ Agendador Master iniciado...")
     while True:
         try:
-            now_br = datetime.now(timezone.utc) - timedelta(hours=3)
-            
-            if now_br.hour == 8 and now_br.minute == 0:
-                await send_channel_report(app, db, api)
-                await asyncio.sleep(61)
-
-            if now_br.hour == 11 and now_br.minute == 0:
-                await send_green_red_report(app, db, api)
-                await asyncio.sleep(61)
-
-            if now_br.hour == 19 and now_br.minute == 0:
-                await send_channel_report(app, db, api)
-                await asyncio.sleep(61)
-
-            if now_br.minute == 30:
-                await check_and_send_news(app, db, api)
-                await asyncio.sleep(61)
-            
+            now = datetime.now(timezone.utc) - timedelta(hours=3)
+            if now.hour == 8 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
+            if now.hour == 11 and now.minute == 0: await send_green_red_report(app, db, api); await asyncio.sleep(61)
+            if now.hour == 19 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
+            if now.minute == 30: await check_and_send_news(app, db, api); await asyncio.sleep(61)
             await asyncio.sleep(30)
         except: await asyncio.sleep(60)
 
-# ================= HANDLERS =================
 class Handlers:
     def __init__(self, db, api): self.db, self.api = db, api
     def is_admin(self, uid): return str(uid) == str(ADMIN_ID)
-
-    async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id):
-            return await u.message.reply_text(f"👋 **Bem-vindo ao DVD TIPS**\n\n⛔ Acesso Restrito.\n`/ativar SUA-CHAVE`", reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.MARKDOWN)
-        
+    async def start(self, u, c):
+        if not self.is_admin(u.effective_user.id): return await u.message.reply_text("⛔ `/ativar SUA-CHAVE`")
         kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Escrever Notícia", "📢 Publicar no Canal"], ["🎫 Gerar Key"]], resize_keyboard=True)
-        await u.message.reply_text(f"🦁 **PAINEL ADMIN (V59.1)**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-
-    async def ask_news(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        c.user_data['waiting_news'] = True
-        await u.message.reply_text("📝 **Editor Manual:**\nEscreva sua notícia.")
-
-    async def process_news_input(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        await u.message.reply_text(f"🦁 **PAINEL V60**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    
+    async def ask_news(self, u, c): c.user_data['waiting_news'] = True; await u.message.reply_text("📝 **Editor Manual:**\nEscreva sua notícia.")
+    async def process_news_input(self, u, c):
         if not c.user_data.get('waiting_news'): return False
-        if u.message.text and u.message.text.lower() == 'cancelar':
-            c.user_data['waiting_news'] = False; await u.message.reply_text("❌ Cancelado."); return True
-        
+        if u.message.text and u.message.text.lower() == 'cancelar': c.user_data['waiting_news'] = False; await u.message.reply_text("❌ Cancelado."); return True
         txt = "🚨 **PLANTÃO URGENTE**\n\n" + (u.message.caption or u.message.text or "")
         try:
             if u.message.photo: await c.bot.send_photo(chat_id=CHANNEL_ID, photo=u.message.photo[-1].file_id, caption=txt, parse_mode=ParseMode.MARKDOWN)
             elif u.message.text: await c.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.MARKDOWN)
             await u.message.reply_text("✅ Enviada!")
-        except: await u.message.reply_text("❌ Erro no envio.")
+        except: await u.message.reply_text("❌ Erro.")
         c.user_data['waiting_news'] = False; return True
 
-    async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
+    async def games(self, u, c):
         msg = await u.message.reply_text("🔎 Buscando...")
-        m, _ = await self.api.get_matches(); txt = "*🔥 PREVIEW:*\n\n"
-        for g in m[:10]: txt += f"{g['sport']} {g['match']} | {g['tip']}\n"
+        m, _ = await self.api.get_matches()
+        if not m: return await msg.edit_text("📭 Sem jogos.")
+        nba, fut = [g for g in m if g['sport'] == '🏀'], [g for g in m if g['sport'] == '⚽']
+        txt = "*🔥 TOP JOGOS:*\n\n"
+        if fut:
+            txt += "⚽ **FUTEBOL:**\n"
+            for g in fut[:5]: txt += f"{g['match']} | {g['tip']} (@{g['odd']})\n"
+        if nba:
+            txt += "\n🏀 **NBA:**\n"
+            for g in nba[:5]: txt += f"{g['match']} | {g['tip']} (@{g['odd']})\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    async def multi_risk_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
+    async def multi_risk_preview(self, u, c):
         m, _ = await self.api.get_matches()
         sel = random.sample([g for g in m if g['odd'] >= 1.9] or m, 4)
-        txt = "*💣 PREVIEW:* " + "\n".join([f"{g['match']} ({g['tip']})" for g in sel])
+        txt = "*💣 PREVIEW:* \n" + "\n".join([f"{g['match']} ({g['tip']})" for g in sel])
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def multi_safe_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
+    async def multi_safe_preview(self, u, c):
         m, _ = await self.api.get_matches()
         sel = random.sample([g for g in m if g['odd'] < 1.7] or m[:3], 3)
-        txt = "*🚀 PREVIEW:* " + "\n".join([f"{g['match']} ({g['tip']})" for g in sel])
+        txt = "*🚀 PREVIEW:* \n" + "\n".join([f"{g['match']} ({g['tip']})" for g in sel])
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def nba_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        m, _ = await self.api.get_matches()
-        nba = [g for g in m if g['sport'] == '🏀']
+    async def nba_preview(self, u, c):
+        m, _ = await self.api.get_matches(); nba = [g for g in m if g['sport'] == '🏀']
         txt = "*🏀 PREVIEW NBA:*\n\n" + ("\n".join([f"{g['match']} ({g['tip']})" for g in nba]) if nba else "Sem NBA.")
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def publish(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
+    async def publish(self, u, c):
         msg = await u.message.reply_text("⏳ Postando...")
         ok, info = await send_channel_report(c.application, self.db, self.api)
         await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
-
-    async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
+    async def gen_key_btn(self, u, c):
         k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
         await u.message.reply_text(f"🔑 **KEY:** `{k}`", parse_mode=ParseMode.MARKDOWN)
-
-    async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+    async def active(self, u, c):
         try: 
             if await asyncio.to_thread(self.db.use_key, c.args[0], u.effective_user.id):
                 link = (await c.bot.create_chat_invite_link(chat_id=CHANNEL_ID, member_limit=1)).invite_link if CHANNEL_ID else "Erro"
@@ -546,14 +462,13 @@ class Handlers:
             else: await u.message.reply_text("❌ Inválido.")
         except: await u.message.reply_text("❌ `/ativar CHAVE`")
 
-# ================= MAIN =================
 async def main():
     if not BOT_TOKEN: return
     threading.Thread(target=start_fake_server, daemon=True).start()
     db = Database(DB_PATH); api = SportsAPI(db); h = Handlers(db, api)
     while True:
         try:
-            logger.info("🔥 Bot V59.1 Iniciado...")
+            logger.info("🔥 Bot V60 Iniciado...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", h.start)); app.add_handler(CommandHandler("publicar", h.publish)); app.add_handler(CommandHandler("ativar", h.active))
             app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games)); app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview))
