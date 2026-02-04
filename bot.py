@@ -19,6 +19,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
+from telegram.error import Conflict # <--- ESSA LINHA FALTAVA NA V37
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -42,7 +43,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V37 ONLINE - TUDO CERTO")
+        self.wfile.write(b"BOT V38 ONLINE - FIX IMPORT")
 
 def start_fake_server():
     try:
@@ -97,7 +98,7 @@ class Database:
             return True
 
     def set_cache(self, key, data):
-        # Cache de 30 minutos para economizar API
+        # Cache de 30 minutos
         exp = (datetime.now() + timedelta(minutes=30)).isoformat()
         with self.get_conn() as conn:
             conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
@@ -107,18 +108,16 @@ class Database:
             res = conn.cursor().execute("SELECT cache_data FROM api_cache WHERE cache_key = ? AND expires_at > ?", (key, datetime.now().isoformat())).fetchone()
             return json.loads(res[0]) if res else None
 
-# ================= API DE ESPORTES (AGORA PEGA TUDO) =================
+# ================= API DE ESPORTES =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
     async def get_matches(self):
-        # Tenta pegar do cache primeiro
         cached = self.db.get_cache("all_matches")
         if cached: return cached
         
         if not API_FOOTBALL_KEY: return []
         
-        # Data de hoje
         today = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
         headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
         headers_nba = {"x-rapidapi-host": "v1.basketball.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
@@ -126,32 +125,25 @@ class SportsAPI:
         matches = []
         try:
             async with httpx.AsyncClient(timeout=30) as client:
-                # Busca Futebol e Basquete em paralelo
                 r_ft, r_bk = await asyncio.gather(
                     client.get(f"https://v3.football.api-sports.io/fixtures?date={today}&status=NS-LIVE-FT", headers=headers),
                     client.get(f"https://v1.basketball.api-sports.io/games?date={today}", headers=headers_nba),
                     return_exceptions=True
                 )
                 
-                # Processa Futebol
+                # Futebol
                 if not isinstance(r_ft, Exception) and r_ft.status_code == 200:
                     data = r_ft.json().get("response", [])
-                    # IDs expandidos (Principais Ligas do Mundo)
-                    # Se não tiver na lista VIP, pega se for Série A de qualquer país
+                    # IDs principais + Lógica de Serie A
                     VIP_IDS = [39, 40, 140, 141, 78, 79, 135, 136, 61, 71, 72, 2, 3, 13, 11, 4, 9, 10, 203, 88, 94, 128, 144, 253, 307]
                     
                     for g in data:
                         lid = g["league"]["id"]
-                        # Filtra: Só VIPs ou Ligas principais que tem 'Serie A' no nome
-                        if lid not in VIP_IDS and "Serie A" not in g["league"]["name"]: 
-                            continue
+                        if lid not in VIP_IDS and "Serie A" not in g["league"]["name"]: continue
                             
                         ts = g["fixture"]["timestamp"]
-                        # Filtra jogos muito velhos (mais de 6h atrás)
                         if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=6): continue
                         
-                        # Simula Odds (Já que o plano Free não retorna odds na lista de fixtures)
-                        # Mas faz parecer real variando com o "favoritismo" implícito
                         odd_val = round(random.uniform(1.45, 2.65), 2)
                         
                         matches.append({
@@ -164,7 +156,7 @@ class SportsAPI:
                             "ts": ts
                         })
 
-                # Processa NBA
+                # NBA
                 if not isinstance(r_bk, Exception) and r_bk.status_code == 200:
                     for g in r_bk.json().get("response", []):
                         if g["league"]["id"] != 12: continue
@@ -181,18 +173,16 @@ class SportsAPI:
         except Exception as e:
             logger.error(f"Erro API: {e}")
 
-        # Ordena e Salva no Cache
         if matches:
             matches.sort(key=lambda x: x["ts"])
             self.db.set_cache("all_matches", matches)
         
         return matches
 
-# ================= HANDLERS (COM FUNÇÕES EXTRAS) =================
+# ================= HANDLERS =================
 class Handlers:
     def __init__(self, db, api, ai): self.db, self.api, self.ai = db, api, ai
     
-    # Teclado Completo V37
     def get_kb(self):
         return ReplyKeyboardMarkup([
             ["📋 Jogos de Hoje", "🚀 Múltipla 20x"],
@@ -203,25 +193,21 @@ class Handlers:
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         self.db.get_or_create_user(u.effective_user.id)
-        await u.message.reply_text("👋 **DVD TIPS V37 - COMPLETO**\nTodas as funções ativas!", reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text("👋 **DVD TIPS V38 - FIX**\nBot Corrigido e Operante!", reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
 
-    # Função 1: Lista de Jogos (Geral)
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        msg = await u.message.reply_text("🔄 Buscando na grade mundial...")
+        msg = await u.message.reply_text("🔄 Buscando grade...")
         m = await self.api.get_matches()
-        if not m: 
-            # Se falhar, tenta forçar uma mensagem de ajuda
-            return await msg.edit_text("📭 Nenhum jogo encontrado. Verifique se a API Key é válida com /debug")
+        if not m: return await msg.edit_text("📭 Nenhum jogo encontrado. Verifique com /debug")
         
         txt = "*📋 JOGOS DE HOJE:*\n\n"
         for g in m[:20]: 
             txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 2: Múltipla
     async def multi(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
-        if not m or len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos na grade.")
+        if not m or len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos.")
         sel = random.sample(m, 4)
         total = 1.0
         txt = "*🚀 MÚLTIPLA SUGERIDA:*\n\n"
@@ -231,16 +217,13 @@ class Handlers:
         txt += f"\n💰 *ODD TOTAL: {total:.2f}*"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 3: Zebra (Odd mais alta)
     async def zebra(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
         if not m: return await u.message.reply_text("📭 Sem dados.")
-        # Pega o jogo com maior odd
         zebra = max(m, key=lambda x: x['odd'])
         txt = f"🦓 **ZEBRA DO DIA:**\n\n🏆 {zebra['league']}\n⚔️ {zebra['match']}\n🔥 **{zebra['tip']}**\n📈 Odd: **@{zebra['odd']}**"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 4: Segura (Odd mais baixa)
     async def safe(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
         if not m: return await u.message.reply_text("📭 Sem dados.")
@@ -248,7 +231,6 @@ class Handlers:
         txt = f"🛡️ **APOSTA SEGURA:**\n\n🏆 {safe['league']}\n⚔️ {safe['match']}\n✅ **{safe['tip']}**\n📉 Odd: **@{safe['odd']}**"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 5: Lista de Ligas
     async def leagues(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         m = await self.api.get_matches()
         if not m: return await u.message.reply_text("📭 Sem dados.")
@@ -256,30 +238,18 @@ class Handlers:
         txt = "*🏆 Ligas na Grade:*\n\n" + "\n".join([f"• {l}" for l in ls])
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 6: Glossário
     async def glossario(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        txt = """📚 **GLOSSÁRIO DAS APOSTAS:**
-
-• **Over 2.5:** O jogo precisa ter 3 ou mais gols.
-• **Under 2.5:** O jogo precisa ter 2 ou menos gols.
-• **ML (Moneyline):** Apostar no vencedor seco.
-• **Ambas Marcam (BTTS):** Os dois times precisam fazer gol.
-• **HT:** Primeiro tempo / **FT:** Jogo completo."""
+        txt = "📚 **GLOSSÁRIO:**\n\n• **Over:** Mais de\n• **Under:** Menos de\n• **ML:** Vencedor\n• **BTTS:** Ambas Marcam"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    # Função 7: Debug (Para testar API)
     async def debug(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if str(u.effective_user.id) != str(ADMIN_ID): return
-        if not API_FOOTBALL_KEY: return await u.message.reply_text("❌ KEY não configurada.")
-        await u.message.reply_text(f"🔍 Testando API...\nKey: {API_FOOTBALL_KEY[:5]}...")
-        # Limpa cache para forçar teste
         self.db.get_conn().cursor().execute("DELETE FROM api_cache")
         m = await self.api.get_matches()
-        await u.message.reply_text(f"✅ Resultado: {len(m)} jogos encontrados.")
+        await u.message.reply_text(f"🔍 Debug API: {len(m)} jogos encontrados.")
 
-    # Guru IA
     async def guru(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        await u.message.reply_text("🤖 **Guru IA:** Mande sua dúvida sobre apostas:", parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text("🤖 **Guru:** Mande sua dúvida:", parse_mode=ParseMode.MARKDOWN)
         c.user_data["guru"] = True
 
     async def text(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -291,9 +261,8 @@ class Handlers:
                 res = await asyncio.to_thread(self.ai.generate_content, u.message.text)
                 await msg.edit_text(f"🎓 *Guru Responde:*\n\n{res.text}", parse_mode=ParseMode.MARKDOWN)
             except: await msg.edit_text("❌ Erro na IA.")
-        else: await u.message.reply_text("❓ Use o menu abaixo.")
+        else: await u.message.reply_text("❓ Use o menu.")
 
-    # Status e Admin (Mantidos iguais)
     async def status(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         usr = self.db.get_user(u.effective_user.id)
         st = f"✅ VIP até {usr['vip_expiry']}" if usr and usr['is_vip'] else "❌ Grátis"
@@ -322,7 +291,7 @@ async def main():
         print("❌ ERRO: BOT_TOKEN faltando!")
         return
 
-    # 1. Inicia Web Server Fake (Thread)
+    # 1. Inicia Web Server Fake
     threading.Thread(target=start_fake_server, daemon=True).start()
 
     # 2. Inicializa
@@ -338,22 +307,20 @@ async def main():
     # 3. Loop Anti-Crash
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V37...")
+            logger.info("🔥 Iniciando Bot V38...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
-            # Comandos e Menus
             app.add_handler(CommandHandler("start", h.start))
             app.add_handler(CommandHandler("admin", h.admin))
             app.add_handler(CommandHandler("ativar", h.active))
-            app.add_handler(CommandHandler("debug", h.debug)) # Novo comando de teste
+            app.add_handler(CommandHandler("debug", h.debug))
             
-            # Botões
             app.add_handler(MessageHandler(filters.Regex("^📋"), h.games))
             app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi))
-            app.add_handler(MessageHandler(filters.Regex("^🦓"), h.zebra)) # Volta Zebra
-            app.add_handler(MessageHandler(filters.Regex("^🛡️"), h.safe)) # Volta Segura
-            app.add_handler(MessageHandler(filters.Regex("^🏆"), h.leagues)) # Volta Ligas
-            app.add_handler(MessageHandler(filters.Regex("^📚"), h.glossario)) # Volta Glossário
+            app.add_handler(MessageHandler(filters.Regex("^🦓"), h.zebra))
+            app.add_handler(MessageHandler(filters.Regex("^🛡️"), h.safe))
+            app.add_handler(MessageHandler(filters.Regex("^🏆"), h.leagues))
+            app.add_handler(MessageHandler(filters.Regex("^📚"), h.glossario))
             app.add_handler(MessageHandler(filters.Regex("^🤖"), h.guru))
             app.add_handler(MessageHandler(filters.Regex("^🎫"), h.status))
             
@@ -362,6 +329,10 @@ async def main():
 
             await app.initialize()
             await app.start()
+            
+            # Limpa webhook velho para evitar conflito de update
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
             while True: 
