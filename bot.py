@@ -45,7 +45,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V52 ONLINE - FULL ADMIN DASHBOARD")
+        self.wfile.write(b"BOT V52.1 ONLINE - FIXED")
 
 def start_fake_server():
     try:
@@ -273,6 +273,25 @@ async def send_channel_report(app, db, api):
         return True, "Sucesso"
     except Exception as e: return False, str(e)
 
+# ================= AGENDADOR AUTOMÁTICO (RECOLOCADO!) =================
+async def daily_scheduler(app, db, api):
+    logger.info("⏰ Agendador iniciado...")
+    while True:
+        try:
+            # Fuso Horário de Brasília (UTC-3)
+            now_br = datetime.now(timezone.utc) - timedelta(hours=3)
+
+            # Se for 08:00 da manhã
+            if now_br.hour == 8 and now_br.minute == 0:
+                logger.info("⏰ Hora do envio automático!")
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61) # Espera 1 minuto para não repetir
+            
+            await asyncio.sleep(30) # Verifica a cada 30 segundos
+        except Exception as e:
+            logger.error(f"Erro no Scheduler: {e}")
+            await asyncio.sleep(60)
+
 # ================= HANDLERS =================
 class Handlers:
     def __init__(self, db, api): self.db, self.api = db, api
@@ -317,113 +336,4 @@ class Handlers:
         if len(risk)<4: risk = m
         sel = random.sample(risk, min(4, len(risk)))
         total = 1.0
-        txt = "*💣 PREVIEW TROCO DO PÃO:*\n\n"
-        for g in sel:
-            total *= g['odd']
-            txt += f"🔥 {g['match']} ({g['tip']})\n"
-        txt += f"\n💰 ODD: {total:.2f}"
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def nba_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        m, _ = await self.api.get_matches()
-        nba = [g for g in m if g['sport'] == '🏀']
-        if not nba: return await u.message.reply_text("Sem NBA.")
-        txt = "*🏀 PREVIEW NBA:*\n\n"
-        for g in nba: txt += f"{g['match']} ({g['tip']})\n"
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def multi_safe_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        m, _ = await self.api.get_matches()
-        safe = [g for g in m if g['odd'] < 1.7]
-        if len(safe)<3: safe = m[:3]
-        sel = random.sample(safe, min(3, len(safe)))
-        total = 1.0
-        txt = "*🚀 PREVIEW SEGURA:*\n\n"
-        for g in sel:
-            total *= g['odd']
-            txt += f"✅ {g['match']} ({g['tip']})\n"
-        txt += f"\n💰 ODD: {total:.2f}"
-        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
-
-    async def publish(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        msg = await u.message.reply_text("⏳ Postando...")
-        ok, info = await send_channel_report(c.application, self.db, self.api)
-        await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
-
-    async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
-        await u.message.reply_text(f"🔑 **NOVA CHAVE:**\n`{k}`", parse_mode=ParseMode.MARKDOWN)
-
-    async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        try: 
-            key_input = c.args[0]
-            success = await asyncio.to_thread(self.db.use_key, key_input, u.effective_user.id)
-            if success:
-                try:
-                    if CHANNEL_ID:
-                        link = await c.bot.create_chat_invite_link(chat_id=CHANNEL_ID, member_limit=1, expire_date=datetime.now() + timedelta(hours=24))
-                        invite_link = link.invite_link
-                    else: invite_link = "(Sem ID Canal)"
-                except: invite_link = "(Erro Link)"
-                await u.message.reply_text(f"✅ **VIP ATIVADO!**\n\nEntre no canal:\n👉 {invite_link}")
-            else:
-                await u.message.reply_text("❌ Chave inválida.")
-        except: await u.message.reply_text("❌ Use: `/ativar CHAVE`")
-
-# ================= MAIN =================
-async def main():
-    if not BOT_TOKEN: 
-        print("❌ Faltam Variáveis!")
-        return
-
-    threading.Thread(target=start_fake_server, daemon=True).start()
-
-    db = Database(DB_PATH)
-    api = SportsAPI(db)
-    h = Handlers(db, api)
-
-    while True:
-        try:
-            logger.info("🔥 Iniciando Bot V52.0 (Admin Full)...")
-            app = ApplicationBuilder().token(BOT_TOKEN).build()
-            
-            app.add_handler(CommandHandler("start", h.start))
-            app.add_handler(CommandHandler("publicar", h.publish))
-            app.add_handler(CommandHandler("ativar", h.active))
-            
-            # Botões ADMIN
-            app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games))
-            app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview)) # Troco do Pão
-            app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi_safe_preview))
-            app.add_handler(MessageHandler(filters.Regex("^🏀"), h.nba_preview))
-            app.add_handler(MessageHandler(filters.Regex("^📢"), h.publish))
-            app.add_handler(MessageHandler(filters.Regex("^🎫"), h.gen_key_btn))
-            
-            await app.initialize()
-            await app.start()
-            asyncio.create_task(daily_scheduler(app, db, api))
-            await app.bot.delete_webhook(drop_pending_updates=True)
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-            
-            while True: 
-                await asyncio.sleep(60)
-                if not app.updater.running: raise RuntimeError("Bot parou!")
-
-        except Conflict:
-            logger.error("🚨 CONFLITO! 30s...")
-            try: await app.shutdown()
-            except: pass
-            await asyncio.sleep(30)
-        except Exception as e:
-            logger.error(f"❌ Erro: {e}")
-            try: await app.shutdown()
-            except: pass
-            await asyncio.sleep(10)
-
-if __name__ == "__main__":
-    try: asyncio.run(main())
-    except KeyboardInterrupt: pass
+        txt = "*💣 PREVIEW TROCO DO PÃO
