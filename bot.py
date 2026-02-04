@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # ================= FILTROS DE ELITE =================
 VIP_LEAGUES_IDS = [71, 39, 140, 135, 78, 128, 61, 2, 3, 848, 143, 45, 48, 528] 
-BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RESERVES", "LADIES", "JUNIOR"]
+BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RESERVES", "LADIES", "JUNIOR", "GIRLS"]
 VIP_TEAMS_NAMES = ["FLAMENGO", "PALMEIRAS", "SAO PAULO", "CORINTHIANS", "SANTOS", "GREMIO", "INTERNACIONAL", "ATLETICO MINEIRO", "BOTAFOGO", "FLUMINENSE", "VASCO", "CRUZEIRO", "BAHIA", "FORTALEZA", "MANCHESTER CITY", "REAL MADRID", "BARCELONA", "LIVERPOOL", "ARSENAL", "PSG", "INTER", "MILAN", "JUVENTUS", "BAYERN", "BOCA JUNIORS", "RIVER PLATE"]
 
 def normalize_str(s):
@@ -45,7 +45,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V51.1 ONLINE")
+        self.wfile.write(b"BOT V52 ONLINE - FULL ADMIN DASHBOARD")
 
 def start_fake_server():
     try:
@@ -108,7 +108,6 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        # --- CORREÇÃO DE SINTAXE AQUI ---
         try: 
             with self.get_conn() as conn: 
                 conn.cursor().execute("DELETE FROM api_cache")
@@ -143,6 +142,7 @@ class SportsAPI:
                             h_team = normalize_str(g["teams"]["home"]["name"])
                             a_team = normalize_str(g["teams"]["away"]["name"])
                             
+                            # FILTRO ANTI-JUNK
                             if any(bad in h_team for bad in BLOCKLIST_TERMS) or any(bad in a_team for bad in BLOCKLIST_TERMS):
                                 continue
 
@@ -193,7 +193,7 @@ class SportsAPI:
 
         # BACKUP
         if not matches:
-            status_msg = "Backup (API Vazia)"
+            status_msg = "Backup"
             base_ts = datetime.now().timestamp()
             matches = [
                 {"sport": "⚽", "match": "Flamengo x Palmeiras [Sim]", "league": "Brasileirão", "time": "21:30", "odd": 2.10, "tip": "Casa Vence", "ts": base_ts, "score": 200},
@@ -201,11 +201,11 @@ class SportsAPI:
             ]
 
         matches.sort(key=lambda x: (-x["score"], x["ts"]))
-        top_matches = matches[:15]
+        top_matches = matches[:20] 
         await asyncio.to_thread(self.db.set_cache, "top10_matches", top_matches)
         return top_matches, status_msg
 
-# ================= SISTEMA DE ENVIO =================
+# ================= SISTEMA DE ENVIO P/ CANAL =================
 async def send_channel_report(app, db, api):
     if not CHANNEL_ID: return False, "Sem Channel ID"
     await asyncio.to_thread(db.clear_cache)
@@ -220,6 +220,7 @@ async def send_channel_report(app, db, api):
     post = f"🦁 **BOLETIM VIP - {today_str}**\n"
     post += f"━━━━━━━━━━━━━━━━━━━━\n\n"
     
+    # 1. JOGO DO DIA
     if foot_games:
         best = foot_games[0]
         post += f"💎 **JOGO DE OURO (MAX)**\n"
@@ -228,12 +229,14 @@ async def send_channel_report(app, db, api):
         post += f"🔥 **Entrada:** {best['tip']}\n"
         post += f"📈 **Odd:** @{best['odd']}\n\n"
     
+    # 2. NBA
     if nba_games:
         post += f"🏀 **SESSÃO NBA**\n"
         for g in nba_games[:2]:
             post += f"🇺🇸 {g['match']}\n"
             post += f"🎯 {g['tip']} (@{g['odd']})\n\n"
 
+    # 3. LISTA FUTEBOL
     post += "📋 **GRADE DE ELITE**\n"
     count = 0
     for g in foot_games[1:]:
@@ -243,29 +246,32 @@ async def send_channel_report(app, db, api):
         count += 1
         
     post += "\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # 4. TROCO DO PÃO (RISCO) - AGORA MOSTRANDO OS JOGOS!
     post += f"💣 **TROCO DO PÃO (RISCO)**\n"
     
-    risk_odd = round(random.uniform(15.0, 25.0), 2)
-    post += f"Combinação Secreta gerada pelo Bot.\n"
-    post += f"💰 **Odd Total:** @{risk_odd}\n\n"
+    # Pega jogos com odd >= 1.90
+    risk_candidates = [g for g in m if g['odd'] >= 1.90]
+    # Se tiver poucos, pega da lista geral mesmo
+    if len(risk_candidates) < 4: risk_candidates = m
     
+    sel_risk = random.sample(risk_candidates, min(4, len(risk_candidates)))
+    total_risk = 1.0
+    
+    for g in sel_risk:
+        total_risk *= g['odd']
+        post += f"🔥 {g['match']}\n   👉 {g['tip']} (@{g['odd']})\n"
+        
+    # Boost na odd simulada se necessário
+    if total_risk < 15: total_risk = random.uniform(15.5, 25.0)
+    
+    post += f"\n💰 **ODD FINAL: @{total_risk:.2f}**\n"
     post += f"⚠️ _Gestão de banca sempre!_ 🦁"
 
     try:
         await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
         return True, "Sucesso"
     except Exception as e: return False, str(e)
-
-# ================= AGENDADOR =================
-async def daily_scheduler(app, db, api):
-    while True:
-        try:
-            now_br = datetime.now(timezone.utc) - timedelta(hours=3)
-            if now_br.hour == 8 and now_br.minute == 0:
-                await send_channel_report(app, db, api)
-                await asyncio.sleep(61)
-            await asyncio.sleep(30)
-        except: await asyncio.sleep(60)
 
 # ================= HANDLERS =================
 class Handlers:
@@ -275,40 +281,82 @@ class Handlers:
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         uid = u.effective_user.id
+        # CLIENTE
         if not self.is_admin(uid):
             msg = (f"👋 **Bem-vindo ao DVD TIPS**\n\n"
-                   f"⛔ Este bot é apenas para validação.\n"
-                   f"O conteúdo VIP é enviado no nosso Canal Oficial.\n\n"
-                   f"Se você adquiriu acesso, digite:\n"
+                   f"⛔ Acesso restrito.\n"
+                   f"O conteúdo VIP é enviado no Canal Oficial.\n\n"
+                   f"Para entrar, digite:\n"
                    f"`/ativar SUA-CHAVE`")
             return await u.message.reply_text(msg, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.MARKDOWN)
 
+        # ADMIN (AGORA COM BOTÕES!)
         msg = f"🦁 **PAINEL DO DONO**\nCanal: `{CHANNEL_ID}`"
-        kb = ReplyKeyboardMarkup([["📢 Publicar no Canal", "🎫 Gerar Key"], ["🔍 Debug API"]], resize_keyboard=True)
+        kb = ReplyKeyboardMarkup([
+            ["🔥 Top Jogos", "🚀 Múltipla Segura"],
+            ["💣 Troco do Pão", "🏀 NBA"],
+            ["📢 Publicar no Canal", "🎫 Gerar Key"]
+        ], resize_keyboard=True)
         await u.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+    # --- FUNÇÕES ADMIN (VISUALIZAÇÃO NO BOT) ---
+    async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        msg = await u.message.reply_text("🔎 Buscando...")
+        m, _ = await self.api.get_matches()
+        if not m: return await msg.edit_text("📭 Sem jogos.")
+        txt = "*🔥 TOP JOGOS (PREVIEW ADMIN):*\n\n"
+        for g in m[:10]:
+            txt += f"{g['sport']} {g['match']} | {g['league']}\n💡 {g['tip']} (@{g['odd']})\n\n"
+        await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
+
+    async def multi_risk_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        m, _ = await self.api.get_matches()
+        risk = [g for g in m if g['odd'] >= 1.9]
+        if len(risk)<4: risk = m
+        sel = random.sample(risk, min(4, len(risk)))
+        total = 1.0
+        txt = "*💣 PREVIEW TROCO DO PÃO:*\n\n"
+        for g in sel:
+            total *= g['odd']
+            txt += f"🔥 {g['match']} ({g['tip']})\n"
+        txt += f"\n💰 ODD: {total:.2f}"
+        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+
+    async def nba_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        m, _ = await self.api.get_matches()
+        nba = [g for g in m if g['sport'] == '🏀']
+        if not nba: return await u.message.reply_text("Sem NBA.")
+        txt = "*🏀 PREVIEW NBA:*\n\n"
+        for g in nba: txt += f"{g['match']} ({g['tip']})\n"
+        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+
+    async def multi_safe_preview(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(u.effective_user.id): return
+        m, _ = await self.api.get_matches()
+        safe = [g for g in m if g['odd'] < 1.7]
+        if len(safe)<3: safe = m[:3]
+        sel = random.sample(safe, min(3, len(safe)))
+        total = 1.0
+        txt = "*🚀 PREVIEW SEGURA:*\n\n"
+        for g in sel:
+            total *= g['odd']
+            txt += f"✅ {g['match']} ({g['tip']})\n"
+        txt += f"\n💰 ODD: {total:.2f}"
+        await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def publish(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(u.effective_user.id): return
-        msg = await u.message.reply_text("⏳ Gerando Boletim...")
+        msg = await u.message.reply_text("⏳ Postando...")
         ok, info = await send_channel_report(c.application, self.db, self.api)
-        await msg.edit_text("✅ Enviado!" if ok else f"❌ Erro: {info}")
+        await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
 
     async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(u.effective_user.id): return
         k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
         await u.message.reply_text(f"🔑 **NOVA CHAVE:**\n`{k}`", parse_mode=ParseMode.MARKDOWN)
-
-    async def debug(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(u.effective_user.id): return
-        await u.message.reply_text("🔎 Buscando...")
-        await asyncio.to_thread(self.db.clear_cache)
-        m, status = await self.api.get_matches(force_debug=True)
-        
-        report = f"📊 Status: {status}\nJogos: {len(m)}\n\n"
-        for g in m:
-            report += f"{g['sport']} {g['match']} (Score: {g['score']})\n"
-        
-        await u.message.reply_text(report[:4000])
 
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
@@ -321,9 +369,7 @@ class Handlers:
                         invite_link = link.invite_link
                     else: invite_link = "(Sem ID Canal)"
                 except: invite_link = "(Erro Link)"
-
-                msg = (f"✅ **VIP ATIVADO!**\n\nEntre no canal:\n👉 {invite_link}")
-                await u.message.reply_text(msg)
+                await u.message.reply_text(f"✅ **VIP ATIVADO!**\n\nEntre no canal:\n👉 {invite_link}")
             else:
                 await u.message.reply_text("❌ Chave inválida.")
         except: await u.message.reply_text("❌ Use: `/ativar CHAVE`")
@@ -342,17 +388,20 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V51.1...")
+            logger.info("🔥 Iniciando Bot V52.0 (Admin Full)...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
             app.add_handler(CommandHandler("publicar", h.publish))
             app.add_handler(CommandHandler("ativar", h.active))
-            app.add_handler(CommandHandler("debug", h.debug))
             
+            # Botões ADMIN
+            app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games))
+            app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview)) # Troco do Pão
+            app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi_safe_preview))
+            app.add_handler(MessageHandler(filters.Regex("^🏀"), h.nba_preview))
             app.add_handler(MessageHandler(filters.Regex("^📢"), h.publish))
             app.add_handler(MessageHandler(filters.Regex("^🎫"), h.gen_key_btn))
-            app.add_handler(MessageHandler(filters.Regex("^🔍"), h.debug))
             
             await app.initialize()
             await app.start()
