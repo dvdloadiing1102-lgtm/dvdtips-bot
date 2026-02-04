@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 # ================= FILTROS E LISTAS =================
 VIP_LEAGUES_IDS = [71, 39, 140, 135, 78, 128, 61, 2, 3, 848, 143, 45, 48, 528] 
 BLOCKLIST_TERMS = ["U19", "U20", "U21", "U23", "WOMEN", "FEMININO", "YOUTH", "RESERVES", "LADIES", "JUNIOR", "GIRLS"]
-# Times Gigantes para o Radar de Zebra
 VIP_TEAMS_NAMES = ["FLAMENGO", "PALMEIRAS", "SAO PAULO", "CORINTHIANS", "SANTOS", "GREMIO", "INTERNACIONAL", "ATLETICO MINEIRO", "BOTAFOGO", "FLUMINENSE", "VASCO", "CRUZEIRO", "BAHIA", "FORTALEZA", "MANCHESTER CITY", "REAL MADRID", "BARCELONA", "LIVERPOOL", "ARSENAL", "PSG", "INTER", "MILAN", "JUVENTUS", "BAYERN", "BOCA JUNIORS", "RIVER PLATE", "CHELSEA", "MANCHESTER UNITED"]
 
 BETTING_KEYWORDS = [
@@ -61,9 +60,14 @@ def normalize_str(s):
 # ================= SERVIDOR WEB FAKE =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V62.0 ONLINE - ZEBRA HUNTER")
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"BOT V62.1 ONLINE - SYNTAX FIXED")
+
 def start_fake_server():
-    try: server = HTTPServer(('0.0.0.0', PORT), FakeHandler); server.serve_forever()
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
+        server.serve_forever()
     except: pass
 
 # ================= BANCO DE DADOS =================
@@ -76,9 +80,14 @@ class Database:
     def get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        try: yield conn; conn.commit()
-        except: conn.rollback(); raise
-        finally: conn.close()
+        try: 
+            yield conn
+            conn.commit()
+        except: 
+            conn.rollback()
+            raise
+        finally: 
+            conn.close()
     
     def init_db(self):
         with self.get_conn() as conn:
@@ -87,14 +96,14 @@ class Database:
             c.execute("CREATE TABLE IF NOT EXISTS vip_keys (key_code TEXT UNIQUE, expiry_date TEXT, used_by INTEGER)")
             c.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_key TEXT UNIQUE, cache_data TEXT, expires_at TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS sent_news (news_url TEXT PRIMARY KEY, sent_at TIMESTAMP)")
-            # Tabela de Zebras para não mandar o mesmo alerta 2x no mesmo jogo
             c.execute("CREATE TABLE IF NOT EXISTS zebra_alerts (match_id TEXT PRIMARY KEY, alert_time TIMESTAMP)")
             c.execute("""CREATE TABLE IF NOT EXISTS tips_history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, match_id TEXT, match_name TEXT, league TEXT, tip_type TEXT, odd REAL, date_sent DATE, status TEXT DEFAULT 'PENDING')""")
 
     def create_key(self, expiry):
         k = "VIP-" + secrets.token_hex(4).upper()
-        with self.get_conn() as conn: conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
+        with self.get_conn() as conn:
+            conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
         return k
 
     def use_key(self, key, uid):
@@ -108,7 +117,8 @@ class Database:
     def set_cache(self, key, data):
         exp = (datetime.now() + timedelta(minutes=30)).isoformat()
         try:
-            with self.get_conn() as conn: conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
         except: pass
 
     def get_cache(self, key):
@@ -119,26 +129,34 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
     def is_news_sent(self, url):
         try:
-            with self.get_conn() as conn: return conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone() is not None
+            with self.get_conn() as conn:
+                return conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone() is not None
         except: return False
 
     def mark_news_sent(self, url):
-        try: with self.get_conn() as conn: conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
         except: pass
 
     # --- Zebra DB Utils ---
     def is_zebra_sent(self, match_id):
         try:
-            with self.get_conn() as conn: return conn.cursor().execute("SELECT 1 FROM zebra_alerts WHERE match_id = ?", (str(match_id),)).fetchone() is not None
+            with self.get_conn() as conn:
+                return conn.cursor().execute("SELECT 1 FROM zebra_alerts WHERE match_id = ?", (str(match_id),)).fetchone() is not None
         except: return False
 
     def mark_zebra_sent(self, match_id):
-        try: with self.get_conn() as conn: conn.cursor().execute("INSERT OR IGNORE INTO zebra_alerts (match_id, alert_time) VALUES (?, ?)", (str(match_id), datetime.now()))
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR IGNORE INTO zebra_alerts (match_id, alert_time) VALUES (?, ?)", (str(match_id), datetime.now()))
         except: pass
 
     def save_tip(self, match_id, match_name, league, tip, odd):
@@ -150,12 +168,14 @@ class Database:
 
     def get_pending_tips(self):
         try:
-            with self.get_conn() as conn: return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
+            with self.get_conn() as conn:
+                return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
         except: return []
 
     def update_tip_status(self, tip_id, status):
         try:
-            with self.get_conn() as conn: conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
+            with self.get_conn() as conn:
+                conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
         except: pass
 
 # ================= API INTELLIGENCE =================
@@ -174,7 +194,6 @@ class SportsAPI:
     async def check_live_zebras(self):
         zebras = []
         try:
-            # Scoreboard Mundial da ESPN (Cobre principais ligas)
             url = "https://site.api.espn.com/apis/site/v2/sports/soccer/scorepanel"
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get(url)
@@ -182,17 +201,13 @@ class SportsAPI:
                     data = r.json()
                     for league in data.get('leagues', []):
                         for event in league.get('events', []):
-                            # Só jogos AO VIVO
                             status = event['status']['type']['state']
                             if status != 'in': continue 
 
-                            # Tempo de Jogo
                             clock = event['status'].get('displayClock', '0')
-                            try:
-                                minutes = int(clock.replace("'", "").split('+')[0])
+                            try: minutes = int(clock.replace("'", "").split('+')[0])
                             except: minutes = 0
                             
-                            # Regra: Só analisa após 70 minutos
                             if minutes < 70: continue
 
                             match_id = event['id']
@@ -205,20 +220,17 @@ class SportsAPI:
                             score_a = int(team_a['score'])
                             score_b = int(team_b['score'])
 
-                            # Analisa se tem VIP perdendo/empatando
                             vip_trouble = False
                             zebra_msg = ""
 
-                            # Cenário 1: Casa é VIP e está perdendo ou empatando
                             if any(v in name_a for v in VIP_TEAMS_NAMES):
-                                if score_a < score_b: # Perdendo
+                                if score_a < score_b:
                                     vip_trouble = True
                                     zebra_msg = f"😱 **ZEBRA ALERT:** O Gigante {name_a} está PERDENDO em casa!"
-                                elif score_a == score_b: # Empatando
+                                elif score_a == score_b:
                                     vip_trouble = True
                                     zebra_msg = f"⚠️ **OPORTUNIDADE:** O {name_a} está empatando em casa aos {minutes}'!"
 
-                            # Cenário 2: Visitante é VIP e está perdendo
                             elif any(v in name_b for v in VIP_TEAMS_NAMES):
                                 if score_b < score_a:
                                     vip_trouble = True
@@ -429,7 +441,9 @@ async def send_channel_report(app, db, api):
     if total < 15: total = random.uniform(15.5, 25.0)
     post += f"\n💰 **ODD FINAL: @{total:.2f}**\n⚠️ _Gestão de banca sempre!_ 🦁"
 
-    try: await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True); return True, "Sucesso"
+    try:
+        await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        return True, "Sucesso"
     except Exception as e: return False, str(e)
 
 async def check_and_send_news(app, db, api):
@@ -445,7 +459,6 @@ async def check_and_send_news(app, db, api):
             break 
         except: pass
 
-# --- FUNÇÃO NOVA: ALERTAR ZEBRA ---
 async def check_and_alert_zebras(app, db, api):
     if not CHANNEL_ID: return
     zebras = await api.check_live_zebras()
@@ -480,19 +493,23 @@ async def daily_scheduler(app, db, api):
         try:
             now = datetime.now(timezone.utc) - timedelta(hours=3)
             
-            # Tarefas Agendadas
-            if now.hour == 8 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
-            if now.hour == 11 and now.minute == 0: await send_green_red_report(app, db, api); await asyncio.sleep(61)
-            if now.hour == 19 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
+            if now.hour == 8 and now.minute == 0:
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61)
+            if now.hour == 11 and now.minute == 0:
+                await send_green_red_report(app, db, api)
+                await asyncio.sleep(61)
+            if now.hour == 19 and now.minute == 0:
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61)
             
-            # Tarefas Recorrentes (A cada X tempo)
-            if now.minute == 30: # News a cada hora
+            if now.minute == 30:
                 await check_and_send_news(app, db, api)
             
-            if now.minute % 20 == 0: # Zebras a cada 20 min
+            if now.minute % 20 == 0:
                 await check_and_alert_zebras(app, db, api)
                 
-            await asyncio.sleep(60) # Checa o relógio a cada minuto
+            await asyncio.sleep(60) 
         except: await asyncio.sleep(60)
 
 class Handlers:
@@ -501,7 +518,7 @@ class Handlers:
     async def start(self, u, c):
         if not self.is_admin(u.effective_user.id): return await u.message.reply_text("⛔ `/ativar SUA-CHAVE`")
         kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Escrever Notícia", "📢 Publicar no Canal"], ["🎫 Gerar Key"]], resize_keyboard=True)
-        await u.message.reply_text(f"🦁 **PAINEL V62.0**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text(f"🦁 **PAINEL V62.1**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     
     async def ask_news(self, u, c):
         c.user_data['waiting_news'] = True
@@ -568,7 +585,7 @@ async def main():
     db = Database(DB_PATH); api = SportsAPI(db); h = Handlers(db, api)
     while True:
         try:
-            logger.info("🔥 Bot V62.0 Iniciado...")
+            logger.info("🔥 Bot V62.1 Iniciado...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", h.start)); app.add_handler(CommandHandler("publicar", h.publish)); app.add_handler(CommandHandler("ativar", h.active))
             app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games)); app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview))
