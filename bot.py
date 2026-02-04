@@ -15,11 +15,11 @@ from contextlib import contextmanager
 from typing import Optional, Dict, List, Any
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Telegram Imports
+# Telegram Imports (AGORA COM ApplicationBuilder)
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+from telegram.ext import Application, ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 from telegram.constants import ParseMode
-from telegram.error import Conflict # <--- ESSA LINHA FALTAVA NA V37
+from telegram.error import Conflict
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -43,7 +43,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V38 ONLINE - FIX IMPORT")
+        self.wfile.write(b"BOT V38.1 ONLINE")
 
 def start_fake_server():
     try:
@@ -98,7 +98,6 @@ class Database:
             return True
 
     def set_cache(self, key, data):
-        # Cache de 30 minutos
         exp = (datetime.now() + timedelta(minutes=30)).isoformat()
         with self.get_conn() as conn:
             conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
@@ -131,21 +130,17 @@ class SportsAPI:
                     return_exceptions=True
                 )
                 
-                # Futebol
                 if not isinstance(r_ft, Exception) and r_ft.status_code == 200:
                     data = r_ft.json().get("response", [])
-                    # IDs principais + Lógica de Serie A
                     VIP_IDS = [39, 40, 140, 141, 78, 79, 135, 136, 61, 71, 72, 2, 3, 13, 11, 4, 9, 10, 203, 88, 94, 128, 144, 253, 307]
                     
                     for g in data:
                         lid = g["league"]["id"]
                         if lid not in VIP_IDS and "Serie A" not in g["league"]["name"]: continue
-                            
                         ts = g["fixture"]["timestamp"]
                         if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=6): continue
                         
                         odd_val = round(random.uniform(1.45, 2.65), 2)
-                        
                         matches.append({
                             "sport": "⚽", 
                             "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
@@ -156,7 +151,6 @@ class SportsAPI:
                             "ts": ts
                         })
 
-                # NBA
                 if not isinstance(r_bk, Exception) and r_bk.status_code == 200:
                     for g in r_bk.json().get("response", []):
                         if g["league"]["id"] != 12: continue
@@ -193,12 +187,12 @@ class Handlers:
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         self.db.get_or_create_user(u.effective_user.id)
-        await u.message.reply_text("👋 **DVD TIPS V38 - FIX**\nBot Corrigido e Operante!", reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text("👋 **DVD TIPS V38.1**\nCorrigido e Online!", reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
 
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg = await u.message.reply_text("🔄 Buscando grade...")
         m = await self.api.get_matches()
-        if not m: return await msg.edit_text("📭 Nenhum jogo encontrado. Verifique com /debug")
+        if not m: return await msg.edit_text("📭 Nenhum jogo encontrado. Use /debug")
         
         txt = "*📋 JOGOS DE HOJE:*\n\n"
         for g in m[:20]: 
@@ -307,7 +301,8 @@ async def main():
     # 3. Loop Anti-Crash
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V38...")
+            logger.info("🔥 Iniciando Bot V38.1...")
+            # AQUI ESTAVA O ERRO: ApplicationBuilder AGORA ESTÁ IMPORTADO
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
@@ -330,7 +325,7 @@ async def main():
             await app.initialize()
             await app.start()
             
-            # Limpa webhook velho para evitar conflito de update
+            # Limpa webhook velho
             await app.bot.delete_webhook(drop_pending_updates=True)
             
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
