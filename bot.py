@@ -9,6 +9,8 @@ import random
 import threading
 import httpx
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from contextlib import contextmanager # <--- A LINHA QUE FALTAVA
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import unicodedata
 
@@ -42,7 +44,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V49.1 - SYNTAX FIXED")
+        self.wfile.write(b"BOT V49.2 ONLINE")
 
 def start_fake_server():
     try:
@@ -105,12 +107,10 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        # CORREÇÃO AQUI: Try/Except indentado corretamente
         try: 
             with self.get_conn() as conn: 
                 conn.cursor().execute("DELETE FROM api_cache")
-        except: 
-            pass
+        except: pass
 
 # ================= API DE ESPORTES =================
 class SportsAPI:
@@ -238,7 +238,6 @@ class Handlers:
                    f"🔐 Este bot é exclusivo para membros VIP.\n"
                    f"Para acessar o canal de palpites, compre uma chave e digite:\n\n"
                    f"`/ativar SUA-CHAVE-AQUI`")
-            # Remove teclado para ele não clicar em nada
             return await u.message.reply_text(msg, reply_markup=ReplyKeyboardRemove(), parse_mode=ParseMode.MARKDOWN)
 
         # SE FOR ADMIN (DONO)
@@ -251,7 +250,6 @@ class Handlers:
         
         await u.message.reply_text(msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-    # === FUNÇÕES BLINDADAS (SÓ ADMIN ACESSA) ===
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(u.effective_user.id): return
         msg = await u.message.reply_text("🔎 Analisando grade...")
@@ -308,18 +306,15 @@ class Handlers:
         ok, info = await send_channel_report(c.application, self.db, self.api)
         await msg.edit_text("✅ Postado!" if ok else f"❌ Erro: {info}")
 
-    # === GERADOR DE KEY (ADMIN ONLY) ===
     async def gen_key_btn(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(u.effective_user.id): return
         k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
         await u.message.reply_text(f"🔑 **NOVA CHAVE GERADA:**\n`{k}`\n\nEnvie para o cliente.", parse_mode=ParseMode.MARKDOWN)
 
-    # === ATIVAÇÃO (PÚBLICO) ===
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
             key_input = c.args[0]
             success = await asyncio.to_thread(self.db.use_key, key_input, u.effective_user.id)
-            
             if success:
                 invite_link = "Erro ao gerar link"
                 try:
@@ -334,7 +329,6 @@ class Handlers:
                        f"Aqui está seu acesso exclusivo ao canal:\n"
                        f"👉 {invite_link}\n\n"
                        f"⚠️ _Este link só funciona 1 vez e expira amanhã._")
-                
                 await u.message.reply_text(msg)
             else:
                 await u.message.reply_text("❌ Chave inválida ou já usada.")
@@ -354,7 +348,7 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V49.1...")
+            logger.info("🔥 Iniciando Bot V49.2...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             # Comandos
@@ -362,7 +356,7 @@ async def main():
             app.add_handler(CommandHandler("publicar", h.publish))
             app.add_handler(CommandHandler("ativar", h.active))
             
-            # Botões do Painel Admin
+            # Botões Admin
             app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games))
             app.add_handler(MessageHandler(filters.Regex("^🚀"), h.multi_safe))
             app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk))
@@ -372,7 +366,6 @@ async def main():
             
             await app.initialize()
             await app.start()
-            
             await app.bot.delete_webhook(drop_pending_updates=True)
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             
