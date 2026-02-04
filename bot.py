@@ -30,19 +30,10 @@ API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 RENDER_URL = os.getenv("RENDER_URL")
 PORT = int(os.environ.get("PORT", 10000))
-DB_FILE = "dvd_tips_v22.json"
+DB_FILE = "dvd_tips_v23.json"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# IA
-USE_GEMINI = False
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        USE_GEMINI = True
-        logger.info("✅ IA Gemini ON")
-    except: logger.warning("⚠️ IA Gemini OFF")
 
 # ================= BANCO DE DADOS =================
 db_data = {}
@@ -65,31 +56,49 @@ async def save_db():
                 json.dump(db_data, f, indent=2)
         except: pass
 
-# ================= SERVIDOR WEB (ANTI-CRASH) =================
-async def health_check(request): return web.Response(text="OK")
+# ================= SERVIDOR WEB (KEEP-ALIVE) =================
+async def health_check(request): 
+    return web.Response(text="BOT V23 ONLINE")
 
 async def start_web_server():
+    # Inicia o servidor web em background
     app = web.Application()
     app.router.add_get("/", health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"🌍 Web Server na porta {PORT}")
+    logger.info(f"🌍 Web Server rodando na porta {PORT}")
 
 async def run_pinger():
+    # Pinga o próprio bot para não dormir
     if not RENDER_URL: return
     async with httpx.AsyncClient() as client:
         while True:
-            await asyncio.sleep(600)
-            try: await client.get(RENDER_URL)
+            await asyncio.sleep(600) # 10 min
+            try: 
+                await client.get(RENDER_URL)
+                logger.info("📡 Ping enviado")
             except: pass
+
+# ================= TAREFAS DE INICIALIZAÇÃO =================
+async def on_startup(app: Application):
+    """Roda quando o bot liga"""
+    logger.info("🚀 Iniciando serviços paralelos...")
+    await load_db()
+    
+    # Inicia Web Server e Pinger como tarefas de fundo
+    asyncio.create_task(start_web_server())
+    asyncio.create_task(run_pinger())
+    
+    # Mensagem de Log
+    logger.info("✅ BOT V23 INICIADO COM SUCESSO!")
 
 # ================= UTILITÁRIOS =================
 last_action = {}
 async def check_flood(uid):
     now = time.time()
-    if now - last_action.get(uid, 0) < 1.5: return True
+    if now - last_action.get(uid, 0) < 1.0: return True
     last_action[uid] = now
     return False
 
@@ -97,8 +106,8 @@ def generate_key():
     return "VIP-" + secrets.token_hex(4).upper(), (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
 
 # ================= MOTOR DE ODDS (FUTEBOL + NBA) =================
-# Cache de 15 min para não estourar a API
 async def get_real_matches():
+    # Verifica Cache
     cache = db_data.get("api_cache", {})
     if cache.get("ts"):
         last = datetime.fromisoformat(cache["ts"])
@@ -113,22 +122,19 @@ async def get_real_matches():
     matches = []
     async with httpx.AsyncClient(timeout=30) as client:
         try:
-            # Puxa Futebol e Basquete ao mesmo tempo
             r_foot, r_nba = await asyncio.gather(
                 client.get(f"https://v3.football.api-sports.io/fixtures?date={today}", headers=headers),
                 client.get(f"https://v1.basketball.api-sports.io/games?date={today}", headers=headers_nba),
                 return_exceptions=True
             )
 
-            # --- FUTEBOL ---
+            # FUTEBOL
             if not isinstance(r_foot, Exception) and r_foot.status_code == 200:
-                # IDs: ING, ESP, ALE, ITA, FRA, BRA, POR, HOL, ARG, TUR, COPAS, LIBERTA, SULA
                 VIP_IDS = [39,40,41,42,45,48, 140,141,143, 78,79,529, 135,136,137, 61,62,66, 71,72,73, 475,476,477,478,479,480, 2,3,13,11,848,15, 94,88,203,128]
                 for g in r_foot.json().get("response", []):
                     if g["league"]["id"] not in VIP_IDS: continue
                     ts = g["fixture"]["timestamp"]
-                    # Filtra jogos muito velhos (mais de 4h atrás)
-                    if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=4): continue
+                    if datetime.fromtimestamp(ts) < datetime.now() - timedelta(hours=5): continue # Filtro tempo
                     
                     matches.append({
                         "sport": "⚽",
@@ -140,10 +146,10 @@ async def get_real_matches():
                         "ts": ts
                     })
 
-            # --- NBA ---
+            # NBA
             if not isinstance(r_nba, Exception) and r_nba.status_code == 200:
                 for g in r_nba.json().get("response", []):
-                    if g["league"]["id"] != 12: continue # Só NBA
+                    if g["league"]["id"] != 12: continue
                     ts = g["timestamp"]
                     matches.append({
                         "sport": "🏀",
@@ -165,13 +171,13 @@ async def get_real_matches():
     return matches
 
 def get_multiple(matches):
-    if len(matches) < 4: return None
+    if not matches or len(matches) < 4: return None
     sel = random.sample(matches, 4)
     total = 1.0
     for m in sel: total *= m["odd"]
     return {"games": sel, "total": round(total, 2)}
 
-# ================= COMANDOS =================
+# ================= HANDLERS =================
 def main_kb():
     return ReplyKeyboardMarkup([
         ["📋 Jogos de Hoje", "🚀 Múltipla 20x"],
@@ -186,27 +192,26 @@ async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         if uid not in db_data["users"]:
             db_data["users"][uid] = {"vip": None}
             await save_db()
-    await u.message.reply_text("👋 **DVD TIPS V22.0**\nEstabilidade Máxima!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
+    await u.message.reply_text("👋 **DVD TIPS V23.0**\nBot Blindado e Online!", reply_markup=main_kb(), parse_mode=ParseMode.MARKDOWN)
 
 async def show_games(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if await check_flood(str(u.effective_user.id)): return
-    await u.message.reply_text("🔄 Buscando grade...")
+    msg_wait = await u.message.reply_text("🔄 Buscando...")
     m = await get_real_matches()
-    if not m: return await u.message.reply_text("📭 Sem jogos agora.")
     
-    txt = "*📋 GRADE HOJE (Futebol + NBA):*\n\n"
+    if not m: return await msg_wait.edit_text("📭 Sem jogos (Verifique a API Key).")
+    
+    txt = "*📋 GRADE DE HOJE (Futebol + NBA):*\n\n"
     for g in m[:20]:
         txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
-    await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+    await msg_wait.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 async def show_multi(u: Update, c: ContextTypes.DEFAULT_TYPE):
     m = await get_real_matches()
     multi = get_multiple(m)
     if not multi: return await u.message.reply_text("⚠️ Jogos insuficientes.")
-    
     txt = "*🚀 MÚLTIPLA SUGERIDA:*\n\n"
-    for g in multi["games"]:
-        txt += f"• {g['sport']} {g['match']} ({g['tip']})\n"
+    for g in multi["games"]: txt += f"• {g['sport']} {g['match']} ({g['tip']})\n"
     txt += f"\n💰 *ODD TOTAL: {multi['total']}*"
     await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
@@ -224,8 +229,8 @@ async def guru(u: Update, c: ContextTypes.DEFAULT_TYPE):
 async def text_handle(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if c.user_data.get("guru"):
         c.user_data["guru"] = False
-        if not USE_GEMINI: return await u.message.reply_text("❌ IA Indisponível.")
-        msg = await u.message.reply_text("🤔 Pensando...")
+        if not GEMINI_API_KEY: return await u.message.reply_text("❌ IA Off.")
+        msg = await u.message.reply_text("🤔 ...")
         try:
             model = genai.GenerativeModel('gemini-1.5-flash')
             res = await asyncio.to_thread(model.generate_content, u.message.text)
@@ -244,10 +249,7 @@ async def text_handle(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def admin_cmds(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if str(u.effective_user.id) != str(ADMIN_ID): return
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Criar Chave", callback_data="add")],
-        [InlineKeyboardButton("🗑️ Deletar Chave", callback_data="del")]
-    ])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Criar Chave", callback_data="add")],[InlineKeyboardButton("🗑️ Deletar", callback_data="del")]])
     await u.message.reply_text("🔑 **Admin**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def admin_cb(u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -260,7 +262,7 @@ async def admin_cb(u: Update, c: ContextTypes.DEFAULT_TYPE):
             await save_db()
         await q.edit_message_text(f"🔑 Chave: `{k}`\nValidade: {exp}", parse_mode=ParseMode.MARKDOWN)
     elif q.data == "del":
-        await q.edit_message_text("Mande a chave para deletar:")
+        await q.edit_message_text("Mande a chave:")
         c.user_data["del_key"] = True
 
 async def activate(u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -275,18 +277,15 @@ async def activate(u: Update, c: ContextTypes.DEFAULT_TYPE):
             db_data["users"][uid]["vip"] = exp
             await save_db()
             await u.message.reply_text("✅ VIP Ativado!")
-        else: await u.message.reply_text("❌ Chave inválida.")
+        else: await u.message.reply_text("❌ Inválida/Usada.")
 
-# ================= MAIN =================
-async def main():
+# ================= MAIN (MODO SEGURO) =================
+if __name__ == "__main__":
     if not TOKEN: sys.exit("Falta TOKEN")
-    await load_db()
     
-    # RESFRIAMENTO (AQUI ESTÁ O SEGREDO DO CONFLITO)
-    print("⏳ Resfriando conexão por 15s...")
-    await asyncio.sleep(15) 
-    
-    app = Application.builder().token(TOKEN).build()
+    # Configuração BLINDADA usando run_polling
+    app = Application.builder().token(TOKEN).post_init(on_startup).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_cmds))
     app.add_handler(CommandHandler("ativar", activate))
@@ -297,16 +296,8 @@ async def main():
     app.add_handler(CallbackQueryHandler(admin_cb))
     app.add_handler(MessageHandler(filters.TEXT, text_handle))
 
-    await app.initialize()
-    await app.start()
+    print("🔥 BOT INICIANDO (Aguarde 5s para evitar conflito)...")
+    time.sleep(5) # Pequena pausa segura antes de conectar
     
-    # Inicia Web Server e Pinger junto com o Bot
-    await asyncio.gather(
-        app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True),
-        start_web_server(),
-        run_pinger()
-    )
-
-if __name__ == "__main__":
-    try: asyncio.run(main())
-    except KeyboardInterrupt: pass
+    # run_polling lida com reconexões e sinais de parada automaticamente
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
