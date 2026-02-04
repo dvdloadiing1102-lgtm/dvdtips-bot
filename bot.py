@@ -23,14 +23,14 @@ from telegram.error import Conflict
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID", "") # Padrão vazio para não quebrar
+ADMIN_ID = os.getenv("ADMIN_ID", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 PORT = int(os.getenv("PORT", 10000))
 DB_PATH = "betting_bot.db"
 LOG_LEVEL = "INFO"
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
+logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO, handlers=[logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
 # ================= SERVIDOR WEB FAKE =================
@@ -38,7 +38,7 @@ class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V40 ONLINE")
+        self.wfile.write(b"BOT V41 ONLINE")
 
 def start_fake_server():
     try:
@@ -46,7 +46,7 @@ def start_fake_server():
         server.serve_forever()
     except: pass
 
-# ================= BANCO DE DADOS =================
+# ================= BANCO DE DADOS (COM PROTEÇÃO DE THREAD) =================
 class Database:
     def __init__(self, db_path):
         self.db_path = db_path
@@ -54,7 +54,8 @@ class Database:
     
     @contextmanager
     def get_conn(self):
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        # Timeout aumentado para evitar travamento "Database is locked"
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         try: yield conn; conn.commit()
         except: conn.rollback(); raise
@@ -68,13 +69,17 @@ class Database:
             c.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_key TEXT UNIQUE, cache_data TEXT, expires_at TIMESTAMP)")
 
     def get_or_create_user(self, uid):
-        with self.get_conn() as conn:
-            conn.cursor().execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (uid,))
+        except Exception as e: logger.error(f"Erro DB User: {e}")
 
     def get_user(self, uid):
-        with self.get_conn() as conn:
-            res = conn.cursor().execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
-            return dict(res) if res else None
+        try:
+            with self.get_conn() as conn:
+                res = conn.cursor().execute("SELECT * FROM users WHERE user_id = ?", (uid,)).fetchone()
+                return dict(res) if res else None
+        except: return None
 
     def create_key(self, expiry):
         k = "VIP-" + secrets.token_hex(4).upper()
@@ -91,37 +96,64 @@ class Database:
             return True
 
     def set_cache(self, key, data):
-        exp = (datetime.now() + timedelta(minutes=15)).isoformat()
-        with self.get_conn() as conn:
-            conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
+        exp = (datetime.now() + timedelta(minutes=30)).isoformat()
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
+        except Exception as e: logger.error(f"Erro DB Cache Write: {e}")
 
     def get_cache(self, key):
-        with self.get_conn() as conn:
-            res = conn.cursor().execute("SELECT cache_data FROM api_cache WHERE cache_key = ? AND expires_at > ?", (key, datetime.now().isoformat())).fetchone()
-            return json.loads(res[0]) if res else None
+        try:
+            with self.get_conn() as conn:
+                res = conn.cursor().execute("SELECT cache_data FROM api_cache WHERE cache_key = ? AND expires_at > ?", (key, datetime.now().isoformat())).fetchone()
+                return json.loads(res[0]) if res else None
+        except: return None
+    
+    def clear_cache(self):
+        try:
+            with self.get_conn() as conn:
+                conn.cursor().execute("DELETE FROM api_cache")
+        except: pass
 
-# ================= API DE ESPORTES =================
+# ================= API DE ESPORTES (COM DETECTOR DE ERRO) =================
 class SportsAPI:
     def __init__(self, db): self.db = db
     
-    async def get_matches(self):
-        cached = self.db.get_cache("all_matches")
-        if cached: return cached
+    async def get_matches(self, force_debug=False):
+        # Se for debug, ignora o cache
+        if not force_debug:
+            # Roda DB em thread separada para não travar
+            cached = await asyncio.to_thread(self.db.get_cache, "all_matches")
+            if cached: return cached, "Cache"
         
         matches = []
+        status_msg = "API"
         today = datetime.now().strftime("%Y-%m-%d")
         
         if API_FOOTBALL_KEY:
             try:
                 headers = {"x-rapidapi-host": "v3.football.api-sports.io", "x-rapidapi-key": API_FOOTBALL_KEY}
-                async with httpx.AsyncClient(timeout=15) as client:
+                async with httpx.AsyncClient(timeout=10) as client:
                     url = f"https://v3.football.api-sports.io/fixtures?date={today}"
                     r = await client.get(url, headers=headers)
+                    
                     if r.status_code == 200:
-                        data = r.json().get("response", [])
+                        resp_json = r.json()
+                        
+                        # VERIFICA ERROS DA API (KEY INVALIDA, QUOTA, ETC)
+                        if "errors" in resp_json and resp_json["errors"]:
+                            err_details = str(resp_json["errors"])
+                            logger.error(f"API SPORTS ERRO: {err_details}")
+                            return [], f"Erro API: {err_details}"
+
+                        data = resp_json.get("response", [])
+                        
                         for g in data:
                             if g["fixture"]["status"]["short"] in ["CANC", "ABD", "PST"]: continue
+                            
+                            # Simulação de Odds (Já que o plano Free não tem odds na lista)
                             odd_val = round(random.uniform(1.3, 3.5), 2)
+                            
                             matches.append({
                                 "sport": "⚽", 
                                 "match": f"{g['teams']['home']['name']} x {g['teams']['away']['name']}",
@@ -131,20 +163,25 @@ class SportsAPI:
                                 "tip": "Over 1.5" if odd_val < 1.8 else "Casa Vence",
                                 "ts": g["fixture"]["timestamp"]
                             })
+                    else:
+                        logger.error(f"HTTP Erro: {r.status_code}")
+                        return [], f"HTTP Erro: {r.status_code}"
             except Exception as e:
-                logger.error(f"Erro Conexão API: {e}")
+                logger.error(f"Exceção Conexão API: {e}")
+                return [], f"Exceção: {str(e)}"
 
-        # BACKUP
+        # BACKUP DE EMERGÊNCIA
         if not matches:
+            status_msg = "Backup (API Falhou)"
             base_ts = datetime.now().timestamp()
             matches = [
-                {"sport": "⚽", "match": "Teste A x Teste B (Backup)", "league": "Liga Backup", "time": "20:00", "odd": 2.10, "tip": "Casa", "ts": base_ts},
-                {"sport": "🏀", "match": "Lakers x Bulls (Backup)", "league": "NBA Teste", "time": "22:00", "odd": 1.90, "tip": "Over", "ts": base_ts+3600},
+                {"sport": "⚽", "match": "Flamengo x Vasco (Simulado)", "league": "Backup League", "time": "16:00", "odd": 2.10, "tip": "Casa", "ts": base_ts},
+                {"sport": "🏀", "match": "Lakers x Celtics (Simulado)", "league": "NBA Teste", "time": "22:00", "odd": 1.90, "tip": "Over", "ts": base_ts+3600},
             ]
 
         matches.sort(key=lambda x: x["ts"])
-        self.db.set_cache("all_matches", matches)
-        return matches
+        await asyncio.to_thread(self.db.set_cache, "all_matches", matches)
+        return matches, status_msg
 
 # ================= HANDLERS =================
 class Handlers:
@@ -159,24 +196,29 @@ class Handlers:
         ], resize_keyboard=True)
 
     async def start(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        self.db.get_or_create_user(u.effective_user.id)
-        # MOSTRA O ID DO USUÁRIO PARA CONFERÊNCIA
-        await u.message.reply_text(
-            f"👋 **DVD TIPS V40**\nSeu ID: `{u.effective_user.id}`\n(Copie este ID para colocar no ADMIN_ID do Render se precisar)", 
-            reply_markup=self.get_kb(), 
-            parse_mode=ParseMode.MARKDOWN
+        await asyncio.to_thread(self.db.get_or_create_user, u.effective_user.id)
+        msg = (
+            f"👋 **DVD TIPS V41**\n"
+            f"ID: `{u.effective_user.id}`\n"
+            f"Bot desbloqueado e pronto!"
         )
+        await u.message.reply_text(msg, reply_markup=self.get_kb(), parse_mode=ParseMode.MARKDOWN)
 
     async def games(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        msg = await u.message.reply_text("🔄 Buscando...")
-        m = await self.api.get_matches()
-        txt = "*📋 JOGOS ENCONTRADOS:*\n\n"
-        for g in m[:20]: 
+        msg = await u.message.reply_text("🔄 Buscando grade...")
+        # Chama API com timeout protegido
+        try:
+            m, source = await asyncio.wait_for(self.api.get_matches(), timeout=15)
+        except asyncio.TimeoutError:
+            return await msg.edit_text("⚠️ Demorou muito. Tente de novo.")
+            
+        txt = f"*📋 JOGOS ({source}):*\n\n"
+        for g in m[:15]: 
             txt += f"{g['sport']} {g['time']} | {g['league']}\n⚔️ {g['match']}\n👉 *{g['tip']}* (@{g['odd']})\n\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def multi(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m = await self.api.get_matches()
+        m, _ = await self.api.get_matches()
         if len(m)<4: return await u.message.reply_text("⚠️ Poucos jogos.")
         sel = random.sample(m, 4)
         total = 1.0
@@ -188,42 +230,55 @@ class Handlers:
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def zebra(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m = await self.api.get_matches()
+        m, _ = await self.api.get_matches()
         zebra = max(m, key=lambda x: x['odd'])
         txt = f"🦓 **ZEBRA:**\n🏆 {zebra['league']}\n⚔️ {zebra['match']}\n🔥 **{zebra['tip']}** (@{zebra['odd']})"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def safe(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m = await self.api.get_matches()
+        m, _ = await self.api.get_matches()
         safe = min(m, key=lambda x: x['odd'])
         txt = f"🛡️ **SEGURA:**\n🏆 {safe['league']}\n⚔️ {safe['match']}\n✅ **{safe['tip']}** (@{safe['odd']})"
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def leagues(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        m = await self.api.get_matches()
+        m, _ = await self.api.get_matches()
         ls = sorted(list(set([g['league'] for g in m])))
-        txt = "*🏆 Ligas:*\n" + "\n".join([f"• {l}" for l in ls[:50]])
+        txt = "*🏆 Ligas:*\n" + "\n".join([f"• {l}" for l in ls[:40]])
         await u.message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
     async def glossario(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text("📚 *Glossário*\nOver=Mais\nUnder=Menos\nML=Vencedor", parse_mode=ParseMode.MARKDOWN)
 
-    # === DIAGNÓSTICO DO ID ===
+    # === DEBUG DETALHADO (PARA DESCOBRIR O TRAVAMENTO) ===
     async def debug(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         user_id = str(u.effective_user.id)
         admin_id_env = str(ADMIN_ID).strip()
         
-        # Se o ID não bater, ele avisa (antes ele ficava mudo)
         if user_id != admin_id_env:
-            msg = f"⛔ **ACESSO NEGADO**\n\nSeu ID: `{user_id}`\nAdmin ID no Render: `{admin_id_env}`\n\n⚠️ Copie o 'Seu ID' e coloque no Render!"
-            return await u.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            return await u.message.reply_text(f"⛔ ACESSO NEGADO.\nSeu ID: `{user_id}`", parse_mode=ParseMode.MARKDOWN)
 
-        # Se bater, roda o teste
-        await u.message.reply_text("🔎 ID Confirmado! Testando API...")
-        self.db.get_conn().cursor().execute("DELETE FROM api_cache")
-        m = await self.api.get_matches()
-        status = "✅ API OK" if "Backup" not in m[0]['match'] else "⚠️ API Falhou (Usando Backup)"
-        await u.message.reply_text(f"{status}\nJogos: {len(m)}")
+        # Passo 1
+        msg = await u.message.reply_text("🔍 1. Iniciando teste...")
+        await asyncio.sleep(1)
+        
+        # Passo 2
+        try:
+            await msg.edit_text("🔍 2. Limpando cache do DB...")
+            await asyncio.to_thread(self.db.clear_cache)
+        except Exception as e:
+            return await msg.edit_text(f"❌ Erro DB: {e}")
+
+        # Passo 3
+        try:
+            await msg.edit_text("🔍 3. Chamando API Sports (Aguarde)...")
+            # Força debug=True para ignorar cache e ver o erro real
+            m, status = await self.api.get_matches(force_debug=True)
+        except Exception as e:
+            return await msg.edit_text(f"❌ Erro FATAL na chamada API: {e}")
+
+        # Passo 4
+        await msg.edit_text(f"✅ FIM DO TESTE.\n\nStatus: {status}\nJogos retornados: {len(m)}\n\n(Se Status for 'Erro API', verifique sua Key no Render)")
 
     async def guru(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text("🤖 Mande sua dúvida:")
@@ -233,15 +288,15 @@ class Handlers:
         if c.user_data.get("guru"):
             c.user_data["guru"] = False
             if not self.ai: return await u.message.reply_text("❌ IA Off.")
-            msg = await u.message.reply_text("🤔 ...")
+            msg = await u.message.reply_text("🤔 Analisando...")
             try:
                 res = await asyncio.to_thread(self.ai.generate_content, u.message.text)
-                await msg.edit_text(f"🎓 *Guru:*\n{res.text}", parse_mode=ParseMode.MARKDOWN)
+                await msg.edit_text(f"🎓 *Guru Responde:*\n\n{res.text}", parse_mode=ParseMode.MARKDOWN)
             except: await msg.edit_text("❌ Erro IA.")
-        else: await u.message.reply_text("❓ Menu")
+        else: await u.message.reply_text("❓ Use o menu.")
 
     async def status(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
-        usr = self.db.get_user(u.effective_user.id)
+        usr = await asyncio.to_thread(self.db.get_user, u.effective_user.id)
         st = f"✅ VIP até {usr['vip_expiry']}" if usr and usr['is_vip'] else "❌ Grátis"
         await u.message.reply_text(f"*🎫 STATUS:* {st}", parse_mode=ParseMode.MARKDOWN)
 
@@ -253,13 +308,14 @@ class Handlers:
 
     async def cb(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         if u.callback_query.data == "gen":
-            k = self.db.create_key((datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
+            k = await asyncio.to_thread(self.db.create_key, (datetime.now()+timedelta(days=30)).strftime("%Y-%m-%d"))
             await u.callback_query.message.edit_text(f"🔑 `{k}`", parse_mode=ParseMode.MARKDOWN)
 
     async def active(self, u: Update, c: ContextTypes.DEFAULT_TYPE):
         try: 
             k = c.args[0]
-            if self.db.use_key(k, u.effective_user.id): await u.message.reply_text("✅ OK!")
+            success = await asyncio.to_thread(self.db.use_key, k, u.effective_user.id)
+            if success: await u.message.reply_text("✅ OK!")
             else: await u.message.reply_text("❌ Inválido")
         except: await u.message.reply_text("Use: `/ativar CHAVE`")
 
@@ -282,7 +338,7 @@ async def main():
 
     while True:
         try:
-            logger.info("🔥 Iniciando Bot V40...")
+            logger.info("🔥 Iniciando Bot V41...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             
             app.add_handler(CommandHandler("start", h.start))
