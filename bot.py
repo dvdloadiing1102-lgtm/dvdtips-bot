@@ -60,9 +60,14 @@ def normalize_str(s):
 # ================= SERVIDOR WEB FAKE =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V60 ONLINE - TRANSLATOR ACTIVE")
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"BOT V60.1 ONLINE - SYNTAX FIXED")
+
 def start_fake_server():
-    try: server = HTTPServer(('0.0.0.0', PORT), FakeHandler); server.serve_forever()
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
+        server.serve_forever()
     except: pass
 
 # ================= BANCO DE DADOS =================
@@ -75,9 +80,14 @@ class Database:
     def get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        try: yield conn; conn.commit()
-        except: conn.rollback(); raise
-        finally: conn.close()
+        try: 
+            yield conn
+            conn.commit()
+        except: 
+            conn.rollback()
+            raise
+        finally: 
+            conn.close()
     
     def init_db(self):
         with self.get_conn() as conn:
@@ -92,7 +102,8 @@ class Database:
 
     def create_key(self, expiry):
         k = "VIP-" + secrets.token_hex(4).upper()
-        with self.get_conn() as conn: conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
+        with self.get_conn() as conn:
+            conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
         return k
 
     def use_key(self, key, uid):
@@ -106,7 +117,8 @@ class Database:
     def set_cache(self, key, data):
         exp = (datetime.now() + timedelta(minutes=30)).isoformat()
         try:
-            with self.get_conn() as conn: conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR REPLACE INTO api_cache (cache_key, cache_data, expires_at) VALUES (?, ?, ?)", (key, json.dumps(data), exp))
         except: pass
 
     def get_cache(self, key):
@@ -117,16 +129,21 @@ class Database:
         except: return None
     
     def clear_cache(self):
-        try: with self.get_conn() as conn: conn.cursor().execute("DELETE FROM api_cache")
+        try: 
+            with self.get_conn() as conn:
+                conn.cursor().execute("DELETE FROM api_cache")
         except: pass
 
     def is_news_sent(self, url):
         try:
-            with self.get_conn() as conn: return conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone() is not None
+            with self.get_conn() as conn:
+                return conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (url,)).fetchone() is not None
         except: return False
 
     def mark_news_sent(self, url):
-        try: with self.get_conn() as conn: conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
+        try: 
+            with self.get_conn() as conn:
+                conn.cursor().execute("INSERT OR IGNORE INTO sent_news (news_url, sent_at) VALUES (?, ?)", (url, datetime.now()))
         except: pass
 
     def save_tip(self, match_id, match_name, league, tip, odd):
@@ -138,12 +155,14 @@ class Database:
 
     def get_pending_tips(self):
         try:
-            with self.get_conn() as conn: return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
+            with self.get_conn() as conn:
+                return conn.cursor().execute("SELECT * FROM tips_history WHERE status = 'PENDING'").fetchall()
         except: return []
 
     def update_tip_status(self, tip_id, status):
         try:
-            with self.get_conn() as conn: conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
+            with self.get_conn() as conn:
+                conn.cursor().execute("UPDATE tips_history SET status = ? WHERE id = ?", (status, tip_id))
         except: pass
 
 # ================= API INTELLIGENCE =================
@@ -320,7 +339,7 @@ class SportsAPI:
                     for a in r2.json().get('articles', []):
                         full = (a.get('headline','')+" "+a.get('description','')).lower()
                         if any(k in full for k in BETTING_KEYWORDS):
-                            # Traduz (mesmo sendo BR as vezes ajuda limpar)
+                            # Traduz
                             pt_title = self.translate_text(a.get('headline',''))
                             pt_desc = self.translate_text(a.get('description',''))
                             news_list.append({"title": pt_title, "desc": pt_desc, "url": a['links']['web']['href'], "img": a['images'][0]['url'] if a.get('images') else None, "tag": "⚽ FUT NEWS"})
@@ -333,7 +352,9 @@ async def send_channel_report(app, db, api):
     await asyncio.to_thread(db.clear_cache)
     m, source = await api.get_matches(force_debug=True)
     if not m: return False, "Sem jogos"
-    for g in m: await asyncio.to_thread(db.save_tip, g['id'], g['match'], g['league'], g['tip'], g['odd'])
+    
+    for g in m:
+        await asyncio.to_thread(db.save_tip, g['id'], g['match'], g['league'], g['tip'], g['odd'])
 
     today_str = datetime.now().strftime("%d/%m")
     nba, fut = [g for g in m if g['sport'] == '🏀'], [g for g in m if g['sport'] == '⚽']
@@ -356,7 +377,9 @@ async def send_channel_report(app, db, api):
     if total < 15: total = random.uniform(15.5, 25.0)
     post += f"\n💰 **ODD FINAL: @{total:.2f}**\n⚠️ _Gestão de banca sempre!_ 🦁"
 
-    try: await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True); return True, "Sucesso"
+    try:
+        await app.bot.send_message(chat_id=CHANNEL_ID, text=post, parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True)
+        return True, "Sucesso"
     except Exception as e: return False, str(e)
 
 async def check_and_send_news(app, db, api):
@@ -383,7 +406,8 @@ async def send_green_red_report(app, db, api):
     if res and (res['greens'] > 0 or res['reds'] > 0):
         t = res['greens'] + res['reds']
         msg = f"📊 **RELATÓRIO DA VERDADE**\n\nOntem fechamos assim:\n✅ **{res['greens']} Greens**\n❌ **{res['reds']} Reds**\n\n📈 Aproveitamento: **{(res['greens']/t)*100:.1f}%**\nTransparência total! 🦁"
-        try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
+        try:
+            await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
         except: pass
 
 # ================= HANDLERS E MAIN =================
@@ -392,10 +416,18 @@ async def daily_scheduler(app, db, api):
     while True:
         try:
             now = datetime.now(timezone.utc) - timedelta(hours=3)
-            if now.hour == 8 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
-            if now.hour == 11 and now.minute == 0: await send_green_red_report(app, db, api); await asyncio.sleep(61)
-            if now.hour == 19 and now.minute == 0: await send_channel_report(app, db, api); await asyncio.sleep(61)
-            if now.minute == 30: await check_and_send_news(app, db, api); await asyncio.sleep(61)
+            if now.hour == 8 and now.minute == 0:
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61)
+            if now.hour == 11 and now.minute == 0:
+                await send_green_red_report(app, db, api)
+                await asyncio.sleep(61)
+            if now.hour == 19 and now.minute == 0:
+                await send_channel_report(app, db, api)
+                await asyncio.sleep(61)
+            if now.minute == 30:
+                await check_and_send_news(app, db, api)
+                await asyncio.sleep(61)
             await asyncio.sleep(30)
         except: await asyncio.sleep(60)
 
@@ -405,19 +437,26 @@ class Handlers:
     async def start(self, u, c):
         if not self.is_admin(u.effective_user.id): return await u.message.reply_text("⛔ `/ativar SUA-CHAVE`")
         kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Escrever Notícia", "📢 Publicar no Canal"], ["🎫 Gerar Key"]], resize_keyboard=True)
-        await u.message.reply_text(f"🦁 **PAINEL V60**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await u.message.reply_text(f"🦁 **PAINEL V60.1**\nCanal: `{CHANNEL_ID}`", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     
-    async def ask_news(self, u, c): c.user_data['waiting_news'] = True; await u.message.reply_text("📝 **Editor Manual:**\nEscreva sua notícia.")
+    async def ask_news(self, u, c):
+        c.user_data['waiting_news'] = True
+        await u.message.reply_text("📝 **Editor Manual:**\nEscreva sua notícia.")
+    
     async def process_news_input(self, u, c):
         if not c.user_data.get('waiting_news'): return False
-        if u.message.text and u.message.text.lower() == 'cancelar': c.user_data['waiting_news'] = False; await u.message.reply_text("❌ Cancelado."); return True
+        if u.message.text and u.message.text.lower() == 'cancelar':
+            c.user_data['waiting_news'] = False
+            await u.message.reply_text("❌ Cancelado.")
+            return True
         txt = "🚨 **PLANTÃO URGENTE**\n\n" + (u.message.caption or u.message.text or "")
         try:
             if u.message.photo: await c.bot.send_photo(chat_id=CHANNEL_ID, photo=u.message.photo[-1].file_id, caption=txt, parse_mode=ParseMode.MARKDOWN)
             elif u.message.text: await c.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.MARKDOWN)
             await u.message.reply_text("✅ Enviada!")
         except: await u.message.reply_text("❌ Erro.")
-        c.user_data['waiting_news'] = False; return True
+        c.user_data['waiting_news'] = False
+        return True
 
     async def games(self, u, c):
         msg = await u.message.reply_text("🔎 Buscando...")
@@ -468,7 +507,7 @@ async def main():
     db = Database(DB_PATH); api = SportsAPI(db); h = Handlers(db, api)
     while True:
         try:
-            logger.info("🔥 Bot V60 Iniciado...")
+            logger.info("🔥 Bot V60.1 Iniciado...")
             app = ApplicationBuilder().token(BOT_TOKEN).build()
             app.add_handler(CommandHandler("start", h.start)); app.add_handler(CommandHandler("publicar", h.publish)); app.add_handler(CommandHandler("ativar", h.active))
             app.add_handler(MessageHandler(filters.Regex("^🔥"), h.games)); app.add_handler(MessageHandler(filters.Regex("^💣"), h.multi_risk_preview))
