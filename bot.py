@@ -11,12 +11,15 @@ from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import unicodedata
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 
-# Telegram & Gemini
+# Telegram
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from telegram.constants import ParseMode
-import google.generativeai as genai
+
+# NOVO PACOTE GOOGLE GENAI
+from google import genai
 
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -27,19 +30,19 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 DB_PATH = "betting_bot.db"
 
-# Inicializa Gemini
+# Inicializa o Novo Cliente Gemini
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    ai_model = genai.GenerativeModel('gemini-1.5-flash')
+    client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+    MODEL_ID = "gemini-1.5-flash"
 else:
-    ai_model = None
+    client_gemini = None
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ================= FILTROS =================
 VIP_LEAGUES_IDS = [71, 39, 140, 135, 78, 128, 61, 2, 3, 13, 848] 
-BETTING_KEYWORDS = ["lesão", "desfalque", "fora", "dúvida", "suspenso", "titular", "reforço", "escalação", "relacionados"]
+BETTING_KEYWORDS = ["lesao", "desfalque", "fora", "duvida", "suspenso", "titular", "reforço", "escalação", "relacionados"]
 
 def normalize_str(s):
     if not s: return ""
@@ -69,7 +72,6 @@ class Database:
             c = conn.cursor()
             c.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, is_vip BOOLEAN DEFAULT 0)")
             c.execute("CREATE TABLE IF NOT EXISTS vip_keys (key_code TEXT UNIQUE, expiry_date TEXT, used_by INTEGER)")
-            c.execute("CREATE TABLE IF NOT EXISTS api_cache (cache_key TEXT UNIQUE, cache_data TEXT, expires_at TIMESTAMP)")
             c.execute("CREATE TABLE IF NOT EXISTS sent_news (news_url TEXT PRIMARY KEY, sent_at TIMESTAMP)")
 
     def create_key(self, expiry):
@@ -78,25 +80,20 @@ class Database:
             conn.cursor().execute("INSERT INTO vip_keys (key_code, expiry_date) VALUES (?, ?)", (k, expiry))
         return k
 
-    def use_key(self, key, uid):
-        with self.get_conn() as conn:
-            k = conn.cursor().execute("SELECT * FROM vip_keys WHERE key_code = ? AND used_by IS NULL", (key,)).fetchone()
-            if not k: return False
-            conn.cursor().execute("UPDATE vip_keys SET used_by = ? WHERE key_code = ?", (uid, key))
-            conn.cursor().execute("INSERT OR IGNORE INTO users (user_id, is_vip) VALUES (?, 1)", (uid,))
-            return True
-
-# ================= SPORTS API (MOTOR DE ODDS REAIS) =================
+# ================= SPORTS API (ODDS REAIS & IA) =================
 class SportsAPI:
     def __init__(self, db): self.db = db
 
     async def analyze_with_gemini(self, text):
-        if not ai_model: return text[:150]
+        if not client_gemini: return text[:150]
         try:
-            prompt = f"Como analista esportivo, resuma em uma frase curta e impactante para apostadores: {text}. Se for irrelevante, diga 'PULAR'."
-            response = await asyncio.to_thread(ai_model.generate_content, prompt)
+            # Nova sintaxe do pacote google-genai
+            prompt = f"Como analista esportivo, resuma em uma frase curta para apostadores: {text}. Se for irrelevante para apostas, responda apenas 'PULAR'."
+            response = client_gemini.models.generate_content(model=MODEL_ID, contents=prompt)
             return response.text.strip()
-        except: return text[:150]
+        except Exception as e:
+            logger.error(f"Erro Gemini: {e}")
+            return text[:150]
 
     async def get_matches(self):
         matches = []
@@ -111,10 +108,8 @@ class SportsAPI:
                     for item in r_fut.json().get("response", []):
                         h_team = normalize_str(item["teams"]["home"]["name"])
                         a_team = normalize_str(item["teams"]["away"]["name"])
-                        
-                        p_score = 0
-                        if "FLAMENGO" in h_team or "FLAMENGO" in a_team: p_score += 5000
-                        elif item["league"]["id"] in VIP_LEAGUES_IDS: p_score += 1000
+                        p_score = 5000 if "FLAMENGO" in h_team or "FLAMENGO" in a_team else 0
+                        if item["league"]["id"] in VIP_LEAGUES_IDS: p_score += 1000
                         
                         if p_score > 0:
                             odds = item['bookmakers'][0]['bets'][0]['values']
@@ -143,7 +138,7 @@ class SportsAPI:
 
     async def get_hot_news(self):
         news = []
-        # PRIORIDADE 1: FUTEBOL GE (MUITO MAIS RÁPIDO)
+        # FUTEBOL GE - PRIORIDADE
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 r = await client.get("https://ge.globo.com/servico/semantica/editorias/plantao/futebol/feed.rss")
@@ -153,11 +148,11 @@ class SportsAPI:
                     url = item.find('link').text
                     if "flamengo" in title.lower():
                         news.append({"title": f"🔴⚫ {title}", "url": url, "tag": "MENGO INFO"})
-                    elif any(k in title.lower() for k in BETTING_KEYWORDS):
+                    elif any(k in normalize_str(title.lower()) for k in BETTING_KEYWORDS):
                         news.append({"title": title, "url": url, "tag": "⚽ FUTEBOL"})
         except: pass
 
-        # PRIORIDADE 2: NBA (LIMITADO PARA NÃO SUFOCAR)
+        # NBA LIMITADO
         if len(news) < 4:
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -167,36 +162,24 @@ class SportsAPI:
             except: pass
         return news
 
-# ================= HANDLERS (ADMIN PANEL) =================
+# ================= HANDLERS (ADMIN) =================
 class Handlers:
     def __init__(self, db, api): self.db, self.api = db, api
     def is_admin(self, uid): return str(uid) == str(ADMIN_ID)
 
     async def start(self, u, c):
-        if not self.is_admin(u.effective_user.id):
-            return await u.message.reply_text("⛔ Acesso Restrito ao VIP.")
-        kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Escrever Notícia", "🎫 Gerar Key"]], resize_keyboard=True)
-        await u.message.reply_text("🦁 **PAINEL ADMIN V62.1**", reply_markup=kb)
+        if not self.is_admin(u.effective_user.id): return
+        kb = ReplyKeyboardMarkup([["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["📰 Notícia", "🎫 Key"]], resize_keyboard=True)
+        await u.message.reply_text("🦁 **BOT V62.1 ATUALIZADO (GENAI)**", reply_markup=kb)
 
     async def get_top_games(self, u, c):
-        msg = await u.message.reply_text("🔎 Consultando odds reais...")
+        msg = await u.message.reply_text("🔎 Buscando odds reais...")
         m = await self.api.get_matches()
         txt = "🔥 **GRADE DE ELITE**\n\n"
         for g in m[:8]: txt += f"{g['sport']} {g['match']}\n🎯 {g['tip']} | @{g['odd']}\n\n"
         await msg.edit_text(txt, parse_mode=ParseMode.MARKDOWN)
 
-    async def get_multi_risk(self, u, c):
-        m = await self.api.get_matches()
-        sel = random.sample(m, min(5, len(m)))
-        odd_t = 1.0
-        res = "💣 **TROCO DO PÃO (ODD ALTA)**\n\n"
-        for g in sel:
-            odd_t *= g['odd']
-            res += f"🔥 {g['match']} (@{g['odd']})\n"
-        res += f"\n💰 **ODD FINAL: @{odd_t:.2f}**"
-        await u.message.reply_text(res)
-
-# ================= SERVER & MAIN =================
+# ================= MAIN =================
 async def main_scheduler(app, db, api):
     while True:
         try:
@@ -206,7 +189,7 @@ async def main_scheduler(app, db, api):
                     if not conn.cursor().execute("SELECT 1 FROM sent_news WHERE news_url = ?", (n['url'],)).fetchone():
                         analise = await api.analyze_with_gemini(n['title'])
                         if "PULAR" not in analise:
-                            msg = f"{n['tag']}\n🚨 **{n['title']}**\n\n💡 {analise}\n\n[🔗 Ver na íntegra]({n['url']})"
+                            msg = f"{n['tag']}\n🚨 **{n['title']}**\n\n💡 {analise}\n\n[🔗 Ler mais]({n['url']})"
                             await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.MARKDOWN)
                             conn.cursor().execute("INSERT INTO sent_news VALUES (?, ?)", (n['url'], datetime.now()))
                             await asyncio.sleep(5)
@@ -220,7 +203,6 @@ async def main():
     
     app.add_handler(CommandHandler("start", h.start))
     app.add_handler(MessageHandler(filters.Regex("^🔥"), h.get_top_games))
-    app.add_handler(MessageHandler(filters.Regex("^💣"), h.get_multi_risk))
     app.add_handler(MessageHandler(filters.Regex("^🏀"), h.get_top_games))
     
     await app.initialize(); await app.start()
