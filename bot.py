@@ -16,7 +16,7 @@ from telegram.constants import ParseMode
 # ================= CONFIGURAÇÕES =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID") 
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY") # Sua Key da API-Sports
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
@@ -50,10 +50,11 @@ def normalize_name(name):
     if not name: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn').upper()
 
-# ================= SERVER WEB =================
+# ================= SERVER WEB (CORRIGIDO) =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V75 - CAÇADOR DE JOGOS ONLINE")
+        # AQUI ESTAVA O ERRO: Removi os acentos
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V75.1 - ONLINE")
 
 # ================= MOTOR INTELIGENTE (FIXTURES FIRST) =================
 class SportsEngine:
@@ -62,11 +63,9 @@ class SportsEngine:
         self.odds_base_url = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 
     def get_today_date(self):
-        # Data de HOJE no Brasil
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def get_matches(self, mode="soccer"):
-        # 1. Tenta The Odds API primeiro (Scanner de Valor)
         if THE_ODDS_API_KEY:
             try:
                 sport_key = "soccer_uefa_champs_league" if mode == "soccer" else "basketball_nba"
@@ -74,16 +73,13 @@ class SportsEngine:
                 if data: return {"type": "premium", "data": data}
             except: pass 
 
-        # 2. Backup Robusto: Busca na API-Sports pelo MÉTODO FIXTURES (Agenda)
         data = await self._fetch_from_fixtures(mode)
         return {"type": "standard", "data": data}
 
     async def _fetch_from_fixtures(self, mode):
-        """Busca primeiro a agenda, depois as odds. Garante que o jogo apareça."""
         host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
         date_str = self.get_today_date()
         
-        # Passo 1: Buscar TODOS os jogos do dia
         url_fixtures = f"https://{host}/fixtures?date={date_str}"
         if mode == "nba": url_fixtures += "&league=12&season=2025"
         
@@ -93,7 +89,6 @@ class SportsEngine:
             
             relevant_games = []
             
-            # Passo 2: Filtrar apenas os VIPs na memória
             for item in all_games:
                 h_name = item['teams']['home']['name']
                 a_name = item['teams']['away']['name']
@@ -104,10 +99,8 @@ class SportsEngine:
                 a_norm = normalize_name(a_name)
                 full_name = f"{h_norm} {a_norm} {normalize_name(league_name)}"
 
-                # Filtro Anti-Lixo
                 if any(bad in full_name for bad in BLACKLIST_KEYWORDS): continue
                 
-                # Verifica se é time VIP
                 score = 0
                 if any(vip in h_norm for vip in VIP_TEAMS_LIST) or any(vip in a_norm for vip in VIP_TEAMS_LIST):
                     score += 5000
@@ -123,12 +116,9 @@ class SportsEngine:
                         "away": a_name
                     })
 
-            # Ordena e pega os top 8 para buscar odds
             relevant_games.sort(key=lambda x: x['score'], reverse=True)
             final_list = []
             
-            # Passo 3: Buscar Odds APENAS para esses jogos escolhidos
-            # Isso economiza requisições e garante que pegamos a odd certa
             for game in relevant_games[:8]:
                 odd_val, odd_tip = await self._get_odds_for_fixture(client, host, game['id'])
                 final_list.append({
@@ -141,9 +131,8 @@ class SportsEngine:
             return final_list
 
     async def _get_odds_for_fixture(self, client, host, fixture_id):
-        """Busca odd específica de um jogo."""
         try:
-            url = f"https://{host}/odds?fixture={fixture_id}&bookmaker=6" # Bet365
+            url = f"https://{host}/odds?fixture={fixture_id}&bookmaker=6"
             r = await client.get(url, headers=self.headers)
             data = r.json().get("response", [])
             
@@ -156,7 +145,6 @@ class SportsEngine:
             return 0.0, "Indisponível"
 
     async def _fetch_the_odds(self, sport_key):
-        # (Código The Odds API mantido igual para scanner de lucro)
         params = {"apiKey": THE_ODDS_API_KEY, "regions": "br,uk,eu", "markets": "h2h", "oddsFormat": "decimal"}
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(self.odds_base_url.format(sport=sport_key), params=params)
@@ -185,21 +173,20 @@ engine = SportsEngine()
 async def start(u: Update, c):
     if str(u.effective_user.id) != str(ADMIN_ID): return
     kb = [["🔥 Top Jogos", "🏀 NBA"], ["💣 Troco do Pão", "✍️ Mensagem Livre"]]
-    await u.message.reply_text("🦁 **PAINEL V75 - CAÇADOR DE JOGOS**\nAgora buscando pela agenda oficial do dia.", 
+    await u.message.reply_text("🦁 **PAINEL V75.1 - CAÇADOR ONLINE**", 
                                reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
 async def handle_request(u: Update, c, mode="soccer", is_multi=False):
-    msg = await u.message.reply_text(f"🔎 Varrendo a agenda de jogos...")
+    msg = await u.message.reply_text(f"🔎 Varrendo a agenda de hoje...")
     
     api_mode = "nba" if mode == "nba" else "soccer"
     result = await engine.get_matches(api_mode)
     data = result["data"]
     
     if not data:
-        return await msg.edit_text("❌ Não encontrei jogos dos seus times VIP na agenda de hoje.")
+        return await msg.edit_text("❌ Nenhum jogo dos seus times VIP na agenda de hoje.")
 
     if is_multi:
-        # Filtra jogos que têm odds válidas
         valid_games = [g for g in data if g['odd'] > 1.0]
         if len(valid_games) < 2: return await msg.edit_text("❌ Poucos jogos com odds para múltipla.")
         
@@ -217,7 +204,7 @@ async def handle_request(u: Update, c, mode="soccer", is_multi=False):
             txt += f"⚔️ {g['match']}\n⭐ Odd: @{g['odd']} ({g['book']})\n💰 Lucro: +R$ {g['profit']}\n\n"
             
     else:
-        txt = f"{'🏀' if mode=='nba' else '🔥'} **GRADE DE ELITE (V75)**\n\n"
+        txt = f"{'🏀' if mode=='nba' else '🔥'} **GRADE DE ELITE**\n\n"
         for g in data:
             icon = "🔴⚫" if "FLAMENGO" in normalize_name(g['match']) else "⭐"
             odd_txt = f"@{g['odd']}" if g['odd'] > 0 else "⏳ Aguardando"
