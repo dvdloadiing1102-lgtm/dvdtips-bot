@@ -2,7 +2,7 @@ import os
 import httpx
 import feedparser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
@@ -71,7 +71,6 @@ async def games_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
-# ---------------- POSTAR JOGOS ---------------- #
 
 async def post_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -154,7 +153,7 @@ async def post_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- MAIN ---------------- #
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+app = Application.builder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(games_button, pattern="games"))
