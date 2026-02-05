@@ -5,7 +5,7 @@ import random
 import httpx
 import threading
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Telegram Imports
@@ -24,8 +24,7 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= LISTA NEGRA (FILTRO ANTI-LIXO) =================
-# Se tiver qualquer uma dessas palavras no nome do time ou da liga, o bot DESCARTA.
+# ================= LISTA NEGRA (FILTRO) =================
 BLACKLIST_KEYWORDS = [
     "WOMEN", "FEMININO", "FEM", "(W)", "LADIES", "GIRLS", "MULLER",
     "U19", "U20", "U21", "U23", "U18", "U17", "SUB-20", "SUB 19", "SUB-19",
@@ -43,11 +42,11 @@ VIP_TEAMS_LIST = [
     "BORUSSIA DORTMUND", "BENFICA", "JUVENTUS", "PORTO", "ARSENAL", "BARCELONA", 
     "LIVERPOOL", "MILAN", "NAPOLI", "ROMA", "BOCA JUNIORS", "RIVER PLATE", 
     "AL HILAL", "AL AHLY", "MONTERREY", "LAFC", "LEVERKUSEN", "SPORTING",
-    "SEVILLA", "WEST HAM", "FEYENOORD", "RB LEIPZIG", "PSV"
+    "SEVILLA", "WEST HAM", "FEYENOORD", "RB LEIPZIG", "PSV", "CHAPECOENSE", "CORITIBA"
 ]
 
-# IDs: 71(BR), 475(Carioca), 2(Champions), 39(Premier), 140(LaLiga), 13(Liberta)
-VIP_LEAGUES_IDS = [71, 475, 2, 39, 140, 13, 135, 78, 61, 3, 848, 15, 11, 4]
+# IDs: 71(BR), 475(Carioca), 476(Paulista), 143(Copa Rei), 2(Champions), 39(Premier)
+VIP_LEAGUES_IDS = [71, 475, 476, 143, 2, 39, 140, 13, 135, 78, 61, 3, 848, 15, 11, 4]
 
 def normalize_name(name):
     if not name: return ""
@@ -56,7 +55,7 @@ def normalize_name(name):
 # ================= SERVER WEB =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V73 - FILTRO LIMPO")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V74 ONLINE")
 
 # ================= MOTOR DE ODDS =================
 class SportsEngine:
@@ -64,8 +63,12 @@ class SportsEngine:
         self.apisports_headers = {"x-apisports-key": API_FOOTBALL_KEY}
         self.odds_base_url = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 
+    def get_today_date(self):
+        # Garante a data correta no fuso Brasil (UTC-3)
+        return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
+
     async def get_matches(self, mode="soccer"):
-        # 1. The Odds API
+        # TENTATIVA 1: The Odds API
         if THE_ODDS_API_KEY:
             try:
                 sport_key = "soccer_uefa_champs_league" if mode == "soccer" else "basketball_nba"
@@ -73,7 +76,7 @@ class SportsEngine:
                 if data: return {"type": "premium", "data": data}
             except: pass 
         
-        # 2. API-Sports
+        # TENTATIVA 2: API-Sports (Backup)
         data = await self._fetch_api_sports(mode)
         return {"type": "standard", "data": data}
 
@@ -87,8 +90,6 @@ class SportsEngine:
             results = []
             for event in data[:8]:
                 home, away = event['home_team'], event['away_team']
-                
-                # APLICA FILTRO NEGRO AQUI TAMBÉM
                 full_str = normalize_name(f"{home} {away}")
                 if any(bad in full_str for bad in BLACKLIST_KEYWORDS): continue
 
@@ -106,7 +107,11 @@ class SportsEngine:
 
     async def _fetch_api_sports(self, mode):
         host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
-        url = f"https://{host}/odds?bookmaker=6" # Bet365
+        
+        # === A CORREÇÃO ESTÁ AQUI: ADICIONEI A DATA ===
+        today_str = self.get_today_date()
+        url = f"https://{host}/odds?bookmaker=6&date={today_str}"
+        
         if mode == "nba": url += "&league=12&season=2025"
         
         async with httpx.AsyncClient(timeout=25) as client:
@@ -126,30 +131,27 @@ class SportsEngine:
                     a_norm = normalize_name(a_name)
                     l_norm = normalize_name(l_name)
                     
-                    # === 🚫 FILTRO ANTI-LIXO (AQUI A MÁGICA ACONTECE) ===
-                    # Se tiver "Women", "U19", "Reserve" no nome do time ou da liga, PULA.
+                    # FILTRO ANTI-LIXO
                     check_str = f"{h_norm} {a_norm} {l_norm}"
-                    if any(bad in check_str for bad in BLACKLIST_KEYWORDS):
-                        continue
+                    if any(bad in check_str for bad in BLACKLIST_KEYWORDS): continue
 
-                    # === RANKING ===
+                    # RANKING
                     score = 0
                     
-                    # 1. Prioridade: Seus Times da Lista
+                    # 1. Times da Lista (Corinthians, Atletico Madrid, etc)
                     if any(vip in h_norm for vip in VIP_TEAMS_LIST) or any(vip in a_norm for vip in VIP_TEAMS_LIST):
                         score += 5000
                     
                     # 2. Mengão
-                    if "FLAMENGO" in h_norm or "FLAMENGO" in a_norm:
-                        score += 2000 
+                    if "FLAMENGO" in h_norm or "FLAMENGO" in a_norm: score += 2000 
 
-                    # 3. Ligas VIP
-                    if league_id in VIP_LEAGUES_IDS:
-                        score += 1000
+                    # 3. Ligas VIP (Paulista, Copa do Rei, Brasileirão)
+                    if league_id in VIP_LEAGUES_IDS: score += 1000
                     
                     if mode == "nba": score += 500
 
-                    if score > 0 or len(ranked_matches) < 5:
+                    # Filtro frouxo: se não tiver score alto, aceita qualquer um se a lista estiver vazia
+                    if score > 0 or len(ranked_matches) < 3:
                         odds = item['bookmakers'][0]['bets'][0]['values']
                         fav = sorted(odds, key=lambda x: float(x['odd']))[0]
                         
@@ -171,18 +173,18 @@ engine = SportsEngine()
 async def start(u: Update, c):
     if str(u.effective_user.id) != str(ADMIN_ID): return
     kb = [["🔥 Top Jogos", "🏀 NBA"], ["💣 Troco do Pão", "✍️ Mensagem Livre"]]
-    await u.message.reply_text("🦁 **PAINEL V73 - FILTRO PRO**\n(Apenas Futebol Masculino Profissional)", 
+    await u.message.reply_text("🦁 **PAINEL V74 - CORREÇÃO DE DATA**\nAgora buscando jogos do dia corretamente.", 
                                reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
 async def handle_request(u: Update, c, mode="soccer", is_multi=False):
-    msg = await u.message.reply_text(f"🔎 Buscando jogos da Elite (Sem Lixo)...")
+    msg = await u.message.reply_text(f"🔎 Buscando jogos de HOJE...")
     
     api_mode = "nba" if mode == "nba" else "soccer"
     result = await engine.get_matches(api_mode)
     data = result["data"]
     
     if not data:
-        return await msg.edit_text("❌ Nenhum jogo relevante encontrado hoje (Filtro Ativo).")
+        return await msg.edit_text("❌ Nenhum jogo encontrado. A API pode estar sem odds para hoje.")
 
     if is_multi:
         sel = random.sample(data, min(5, len(data)))
@@ -194,12 +196,12 @@ async def handle_request(u: Update, c, mode="soccer", is_multi=False):
         txt += f"\n💰 **ODD TOTAL: @{odd_t:.2f}**"
     
     elif result["type"] == "premium":
-        txt = f"🏆 **OPORTUNIDADE DE VALOR**\n\n"
+        txt = f"🏆 **SCANNER DE VALOR**\n\n"
         for g in data:
             txt += f"⚔️ {g['match']}\n⭐ Odd: @{g['odd']} ({g['book']})\n💰 Lucro: +R$ {g['profit']}\n\n"
             
     else:
-        txt = f"{'🏀' if mode=='nba' else '🔥'} **GRADE PROFISSIONAL**\n\n"
+        txt = f"{'🏀' if mode=='nba' else '🔥'} **GRADE DE ELITE**\n\n"
         for g in data:
             icon = "🔴⚫" if "FLAMENGO" in normalize_name(g['match']) else "⚽"
             if any(vip in normalize_name(g['match']) for vip in VIP_TEAMS_LIST) and icon != "🔴⚫":
