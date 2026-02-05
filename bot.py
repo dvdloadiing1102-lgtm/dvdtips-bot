@@ -27,12 +27,12 @@ API_FOOTBALL_URL = "https://v3.football.api-sports.io/fixtures"
 VIP_TEAMS = [
     "flamengo", "corinthians", "real madrid", "barcelona",
     "arsenal", "manchester city", "psg", "chelsea", "liverpool",
-    "bayern", "juventus", "milan", "inter"
+    "bayern", "juventus", "milan", "inter", "man united"
 ]
 
-# ================= START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+# ================= KEYBOARD =================
+def main_keyboard():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔥 Top Jogos", callback_data="top"),
             InlineKeyboardButton("🏀 NBA", callback_data="nba")
@@ -42,17 +42,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📊 ROI", callback_data="roi")
         ],
         [
+            InlineKeyboardButton("🦁 ALL IN SUPREMO", callback_data="allin"),
             InlineKeyboardButton("💬 Mensagem Livre", callback_data="msg")
         ]
-    ]
+    ])
 
+# ================= START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🦁 **PAINEL ALL IN SUPREMO ONLINE**\n\n"
-        "🔥 Clique abaixo ou digite comandos\n"
-        "/hoje — Jogos hoje\n"
-        "/allin — Pick Suprema\n",
+        "🔥 Escolha abaixo:\n"
+        "📅 /hoje — Jogos hoje\n"
+        "🦁 /allin — Pick Suprema\n",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=main_keyboard()
     )
 
 # ================= FETCH GAMES =================
@@ -69,12 +72,12 @@ async def fetch_today_games():
     }
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.get(API_FOOTBALL_URL, headers=headers, params=params)
             data = r.json()
             fixtures = data.get("response", [])
 
-            logging.info(f"⚽ Jogos encontrados: {len(fixtures)}")
+            logging.info(f"⚽ Jogos encontrados API: {len(fixtures)}")
 
             for f in fixtures:
                 try:
@@ -88,8 +91,13 @@ async def fetch_today_games():
                     full = f"{home} x {away}".lower()
                     score = 1000
 
+                    # VIP boost
                     if any(v in full for v in VIP_TEAMS):
                         score += 5000
+
+                    # League boost
+                    if any(l in league.lower() for l in ["champions", "libertadores", "premier", "la liga"]):
+                        score += 3000
 
                     games.append({
                         "match": f"{home} x {away}",
@@ -106,7 +114,7 @@ async def fetch_today_games():
 
     # ================= FALLBACK =================
     if not games:
-        logging.warning("⚠️ API vazia — ativando fallback")
+        logging.warning("⚠️ API vazia — ativando fallback local")
 
         games = [
             {"match": "Flamengo x Corinthians", "league": "Brasileirão", "time": "Hoje", "score": 9999},
@@ -129,21 +137,26 @@ async def hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏰ {g['time']}\n\n"
         )
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.effective_message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
+    )
 
 # ================= ALL IN =================
 async def allin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     games = await fetch_today_games()
     g = games[0]
 
-    await update.message.reply_text(
+    await update.effective_message.reply_text(
         f"🦁 **ALL IN SUPREMO**\n\n"
         f"🔥 **{g['match']}**\n"
         f"🏆 {g['league']}\n"
         f"⏰ {g['time']}\n\n"
         f"💰 Confiança: **ALTÍSSIMA**\n"
-        f"🚀 Hoje é dia de green",
-        parse_mode="Markdown"
+        f"🚀 HOJE É GREEN",
+        parse_mode="Markdown",
+        reply_markup=main_keyboard()
     )
 
 # ================= BOTÕES =================
@@ -154,21 +167,24 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "top":
         await hoje(update, context)
 
+    elif query.data == "allin":
+        await allin(update, context)
+
     elif query.data == "nba":
-        await query.message.reply_text("🏀 NBA hoje: Em breve picks")
+        await query.message.reply_text("🏀 NBA hoje: Picks em breve", reply_markup=main_keyboard())
 
     elif query.data == "troco":
-        await query.message.reply_text("💣 Troco do pão carregando...")
+        await query.message.reply_text("💣 Troco do pão carregando...", reply_markup=main_keyboard())
 
     elif query.data == "roi":
-        await query.message.reply_text("📊 ROI Tracker ativo — histórico em breve")
+        await query.message.reply_text("📊 ROI Tracker ativo", reply_markup=main_keyboard())
 
     elif query.data == "msg":
-        await query.message.reply_text("💬 Modo mensagem livre ativado")
+        await query.message.reply_text("💬 Modo mensagem livre ativado", reply_markup=main_keyboard())
 
 # ================= MAIN =================
 def main():
-    logging.info("🦁 BOT ALL IN SUPREMO ONLINE")
+    logging.info("🦁 BOT ALL IN SUPREMO ONLINE — INICIANDO")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -177,7 +193,7 @@ def main():
     app.add_handler(CommandHandler("allin", allin))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    # Render Safe — sem asyncio.run
+    # Render safe — sem asyncio.run
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
