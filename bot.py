@@ -13,261 +13,176 @@ from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
 
-# ================= CONFIG EXTRA =================
-DEBUG_MODE = os.getenv("DEBUG_MODE", "0") == "1"
-ZOEIRA_MODE = os.getenv("ZOEIRA_MODE", "1") == "1"
-
 # ================= LOGGING =================
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler('/tmp/bot_v76.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("V75")
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# A URL externa fornecida pelo Render.
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
-
-if ADMIN_ID:
-    try:
-        ADMIN_ID = int(ADMIN_ID)
-    except ValueError:
-        raise ValueError("❌ ADMIN_ID deve ser um número inteiro.")
-
-REQUIRED_VARS = {
-    "BOT_TOKEN": BOT_TOKEN,
-    "ADMIN_ID": ADMIN_ID,
-    "CHANNEL_ID": CHANNEL_ID
-}
-
-for k, v in REQUIRED_VARS.items():
-    if not v:
-        raise ValueError(f"❌ ENV obrigatória ausente: {k}")
+if not BOT_TOKEN or not ADMIN_ID or not CHANNEL_ID:
+    raise ValueError("❌ ENV obrigatória faltando")
 
 logger.info("✅ ENV OK")
 
 # ================= RATE LIMIT =================
 class RateLimiter:
     def __init__(self, cps=2):
-        self.min_interval = 1.0 / cps
-        self.last_call = 0
-    
+        self.min_interval = 1 / cps
+        self.last = 0
+
     async def wait(self):
-        elapsed = time.time() - self.last_call
+        elapsed = time.time() - self.last
         if elapsed < self.min_interval:
             await asyncio.sleep(self.min_interval - elapsed)
-        self.last_call = time.time()
+        self.last = time.time()
 
-rate_limiter = RateLimiter(2)
+rate = RateLimiter(2)
 
-# ================= FILTERS =================
-BLACKLIST_KEYWORDS = [
-    "WOMEN","FEM","U19","U20","U21","SUB","YOUTH","RESERVE","VIRTUAL","ESOCCER"
-]
+# ================= FILTER =================
+BLACKLIST = ["WOMEN","U19","U20","U21","SUB","YOUTH","VIRTUAL","RESERVE","ESOCCER"]
+VIP_TEAMS = ["FLAMENGO","PALMEIRAS","BOTAFOGO","FLUMINENSE","VASCO","CORINTHIANS",
+             "REAL MADRID","BARCELONA","PSG","LIVERPOOL","MANCHESTER CITY"]
 
-VIP_TEAMS_LIST = [
-    "FLAMENGO","PALMEIRAS","BOTAFOGO","FLUMINENSE","SAO PAULO","CORINTHIANS",
-    "VASCO","REAL MADRID","MANCHESTER CITY","BARCELONA","LIVERPOOL","PSG",
-    "BAYERN","JUVENTUS","MILAN","CHELSEA","ARSENAL"
-]
+def norm(txt):
+    return ''.join(c for c in unicodedata.normalize('NFD', txt or "")
+                   if unicodedata.category(c) != 'Mn').upper()
 
-ZOEIRA_PHRASES = [
-    "🔥 Hoje é dia de caçar odd igual leão faminto",
-    "💀 Se perder hoje, foi culpa do Mercúrio retrógrado",
-    "😈 A banca treme quando esse bot acorda",
-    "🍞 Troco do pão nível HARD",
-    "⚡ Odd selecionada na base da maldade"
-]
-
-def normalize_name(name):
-    if not name:
-        return ""
-    try:
-        return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn').upper()
-    except:
-        return ""
-
-# ================= HTTP SERVER (PARA HEALTH CHECK DO RENDER) =================
-class FakeHandler(BaseHTTPRequestHandler):
+# ================= KEEP ALIVE =================
+class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"BOT V76 ULTRA ONLINE")
+        self.wfile.write(b"V75.4 ONLINE")
+
     def log_message(self, format, *args):
         pass
+
+def keep_alive():
+    HTTPServer(("0.0.0.0", PORT), PingHandler).serve_forever()
 
 # ================= ENGINE =================
 class SportsEngine:
     def __init__(self):
         self.headers = {"x-apisports-key": API_FOOTBALL_KEY}
-        self.odds_base_url = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-        logger.info("✅ Engine pronta")
+        self.odds_api = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 
-    def get_today_date(self):
+    def today(self):
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def get_matches(self, mode="soccer"):
-        if THE_ODDS_API_KEY:
-            data = await self._fetch_the_odds("soccer_uefa_champs_league")
-            if data:
-                return {"type": "premium", "data": data}
+        premium = await self._fetch_odds(mode)
+        if premium:
+            return {"type":"premium","data":premium}
 
-        data = await self._fetch_from_fixtures(mode)
+        return {"type":"standard","data": await self._fetch_fixtures(mode)}
 
-        if not data:
-            logger.warning("⚠️ VIP vazio → fallback geral")
-            data = await self._fetch_from_fixtures(mode, force_all=True)
-
-        return {"type": "standard", "data": data}
-
-    async def _fetch_from_fixtures(self, mode, force_all=False):
+    async def _fetch_fixtures(self, mode):
         try:
-            host = "v3.football.api-sports.io"
-            date_str = self.get_today_date()
-            url = f"https://{host}/fixtures?date={date_str}"
+            host = "v3.football.api-sports.io" if mode=="soccer" else "v1.basketball.api-sports.io"
+            url = f"https://{host}/fixtures?date={self.today()}"
 
             async with httpx.AsyncClient(timeout=20) as client:
-                await rate_limiter.wait()
+                await rate.wait()
                 r = await client.get(url, headers=self.headers)
-                raw = r.json().get("response", [])
+                fixtures = r.json().get("response", [])
 
-                relevant_games = []
+                games = []
+                for f in fixtures:
+                    h = f.get("teams",{}).get("home",{}).get("name","")
+                    a = f.get("teams",{}).get("away",{}).get("name","")
+                    league = f.get("league",{}).get("name","")
+                    fid = f.get("fixture",{}).get("id")
 
-                for item in raw:
-                    h = item.get('teams', {}).get('home', {}).get('name', '')
-                    a = item.get('teams', {}).get('away', {}).get('name', '')
-                    league = item.get('league', {}).get('name', '')
-                    fixture_id = item.get('fixture', {}).get('id')
-
-                    full = normalize_name(f"{h} {a} {league}")
-
-                    if any(b in full for b in BLACKLIST_KEYWORDS):
+                    full = norm(f"{h} {a} {league}")
+                    if any(b in full for b in BLACKLIST):
                         continue
 
-                    score = 1
-                    if any(v in full for v in VIP_TEAMS_LIST):
-                        score += 5000
+                    score = 5000 if any(v in full for v in VIP_TEAMS) else 0
+                    if score:
+                        games.append({"id":fid,"match":f"{h} x {a}","league":league,"score":score})
 
-                    if force_all or score > 1:
-                        relevant_games.append({
-                            "id": fixture_id,
-                            "match": f"{h} x {a}",
-                            "league": league,
-                            "score": score
-                        })
+                games.sort(key=lambda x:x["score"], reverse=True)
+                final = []
 
-                relevant_games.sort(key=lambda x: x['score'], reverse=True)
+                for g in games[:8]:
+                    odd, tip = await self._get_odds(client, host, g["id"])
+                    final.append({**g,"odd":odd,"tip":tip})
 
-                final_list = []
-
-                for game in relevant_games[:10]:
-                    odd, tip = await self._get_odds_for_fixture(client, host, game["id"])
-                    if odd > 0: # Adicionado para não incluir jogos sem odds
-                        final_list.append({
-                            "match": game["match"],
-                            "league": game["league"],
-                            "odd": odd,
-                            "tip": tip
-                        })
-
-                if DEBUG_MODE:
-                    logger.info(f"📊 API: {len(raw)} | Filtrados: {len(final_list)}")
-
-                return final_list
-        
-        except Exception as e:
-            logger.error(f"Fixtures error: {e}")
+                return final
+        except:
             return []
 
-    async def _get_odds_for_fixture(self, client, host, fixture_id):
+    async def _get_odds(self, client, host, fid):
         try:
-            if not fixture_id:
-                return 0.0, "Indisponível"
-
-            url = f"https://{host}/odds?fixture={fixture_id}&bookmaker=6"
-            await rate_limiter.wait()
+            url = f"https://{host}/odds?fixture={fid}&bookmaker=6"
+            await rate.wait()
             r = await client.get(url, headers=self.headers)
-
             data = r.json().get("response", [])
 
             if data:
-                odds_data = data[0].get('bookmakers', [{}])[0].get('bets', [{}])[0].get('values', [])
-                if odds_data:
-                    # Filtra para garantir que a odd seja um número válido antes de ordenar
-                    valid_odds = [o for o in odds_data if isinstance(o.get('odd'), (int, float)) or str(o.get('odd')).replace('.', '', 1).isdigit()]
-                    if not valid_odds: return 0.0, "Aguardando Odd"
-                    
-                    fav = sorted(valid_odds, key=lambda x: float(x.get('odd', 999)))[0]
-                    return float(fav.get('odd', 0)), fav.get('value', 'Aguardando Odd')
+                values = data[0].get("bookmakers",[{}])[0].get("bets",[{}])[0].get("values",[])
+                if values:
+                    fav = sorted(values, key=lambda x: float(x.get("odd",0)))[0]
+                    return float(fav.get("odd",0)), fav.get("value","Odd pendente")
 
-            return 0.0, "Aguardando Odd"
-        except Exception as e:
-            logger.error(f"Erro ao buscar odds para fixture {fixture_id}: {e}")
-            return 0.0, "Indisponível"
+            return 0.0, "Odd pendente"
+        except:
+            return 0.0, "Erro"
 
-    async def _fetch_the_odds(self, sport_key):
+    async def _fetch_odds(self, mode):
+        if not THE_ODDS_API_KEY:
+            return None
+
         try:
-            params = {
-                "apiKey": THE_ODDS_API_KEY,
-                "regions": "br,uk,eu",
-                "markets": "h2h",
-                "oddsFormat": "decimal"
-            }
+            sport = "soccer_uefa_champs_league" if mode=="soccer" else "basketball_nba"
 
             async with httpx.AsyncClient(timeout=10) as client:
-                await rate_limiter.wait()
-                r = await client.get(self.odds_base_url.format(sport=sport_key), params=params)
-                data = r.json()
+                await rate.wait()
+                r = await client.get(
+                    self.odds_api.format(sport=sport),
+                    params={"apiKey":THE_ODDS_API_KEY,"regions":"br,uk,eu","markets":"h2h"}
+                )
+                events = r.json()
+                res = []
 
-                results = []
-
-                for event in data[:6]:
-                    home = event.get('home_team')
-                    away = event.get('away_team')
-
-                    if not home or not away:
+                for e in events[:6]:
+                    h = e.get("home_team")
+                    a = e.get("away_team")
+                    if not h or not a:
                         continue
 
-                    best_price = 0
-                    book = "Unknown"
+                    prices = []
+                    for b in e.get("bookmakers",[]):
+                        for m in b.get("markets",[]):
+                            for o in m.get("outcomes",[]):
+                                if o.get("name")==h:
+                                    prices.append({"p":float(o.get("price",0)), "b":b.get("title")})
 
-                    for b in event.get('bookmakers', []):
-                        for m in b.get('markets', []):
-                            for o in m.get('outcomes', []):
-                                if o.get('name') == home:
-                                    try:
-                                        price = float(o.get('price', 0))
-                                        if price > best_price:
-                                            best_price = price
-                                            book = b.get('title')
-                                    except (ValueError, TypeError):
-                                        pass
+                    if prices:
+                        best = max(prices, key=lambda x:x["p"])
+                        worst = min(prices, key=lambda x:x["p"])
+                        profit = round((best["p"]-worst["p"])*100,2)
 
-                    if best_price > 0:
-                        results.append({
-                            "match": f"{home} x {away}",
-                            "odd": best_price,
-                            "book": book,
-                            "profit": round(best_price * 10, 2),
-                            "league": "🏆 Valor"
+                        res.append({
+                            "match":f"{h} x {a}",
+                            "odd":best["p"],
+                            "book":best["b"],
+                            "profit":profit,
+                            "league":"VALUE BET"
                         })
 
-                return results
-        
-        except Exception as e:
-            logger.error(f"Erro ao buscar odds premium: {e}")
+                return res
+        except:
             return None
 
 engine = SportsEngine()
@@ -277,142 +192,89 @@ async def start(u: Update, c):
     if u.effective_user.id != ADMIN_ID:
         return
 
-    kb = [["🔥 Top Jogos", "🏀 NBA"], ["💣 Troco do Pão", "✍️ Mensagem Livre"]]
-
+    kb = [["🔥 Top Jogos","🏀 NBA"],["💣 Troco do Pão","📊 ROI"],["✍️ Mensagem Livre"]]
     await u.message.reply_text(
-        "🦁 **PAINEL V76 ULTRA ONLINE**",
-        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True)
+        "🦁 **PAINEL V75.4 ALL IN**",
+        reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True),
+        parse_mode="Markdown"
     )
 
-async def handle_request(u: Update, c, mode="soccer", is_multi=False):
-    if u.effective_user.id != ADMIN_ID: return
-    msg = await u.message.reply_text("🔎 Escaneando jogos...")
+async def games(u, c, mode="soccer", multi=False):
+    msg = await u.message.reply_text("🔎 Escaneando mercado...")
 
     result = await engine.get_matches(mode)
-    data = result.get("data")
+    data = result["data"]
 
     if not data:
-        return await msg.edit_text("❌ Hoje até o universo conspirou. Nenhum jogo encontrado.")
+        return await msg.edit_text("❌ Nada VIP hoje.")
 
-    zoeira_line = f"\n\n{random.choice(ZOEIRA_PHRASES)}" if ZOEIRA_MODE else ""
+    if multi:
+        valid = [x for x in data if x["odd"] > 1]
+        sel = random.sample(valid, min(len(valid),5))
+        odd_total = 1
 
-    if is_multi:
-        valid = [g for g in data if g.get('odd', 0) > 1.0]
-        if len(valid) < 2:
-            return await msg.edit_text("❌ Poucos jogos com odds válidas para múltipla hoje.")
-
-        sel = random.sample(valid, min(5, len(valid)))
-        odd_total = 1.0
-        txt = "💣 **TROCO DO PÃO (INSANO)**\n\n"
-
+        txt = "💣 **MÚLTIPLA AGRESSIVA**\n\n"
         for g in sel:
-            odd_total *= g['odd']
-            txt += f"📍 {g['match']} (@{g['odd']:.2f})\n"
+            odd_total *= g["odd"]
+            txt += f"📍 {g['match']} @{g['odd']}\n"
 
-        txt += f"\n💰 **ODD TOTAL: @{odd_total:.2f}**{zoeira_line}"
+        txt += f"\n🔥 **ODD TOTAL @{odd_total:.2f}**"
 
-    elif result.get("type") == "premium":
-        txt = "🏆 **SCANNER DE VALOR**\n\n"
+    elif result["type"]=="premium":
+        txt = "🏆 **VALUE BET SCANNER**\n\n"
         for g in data:
-            txt += f"⚔️ {g['match']}\n⭐ @{g['odd']:.2f} ({g['book']})\n💰 +R$ {g['profit']:.2f}\n\n"
-        txt += zoeira_line
+            txt += f"⚔️ {g['match']}\n⭐ @{g['odd']} ({g['book']})\n💰 ROI +{g['profit']}%\n\n"
 
     else:
         txt = "🔥 **GRADE ELITE**\n\n"
         for g in data:
-            odd_txt = f"@{g['odd']:.2f}" if g.get('odd', 0) > 0 else "⏳ Aguardando"
-            txt += f"⭐ {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | {odd_txt}\n\n"
-        txt += zoeira_line
+            odd = f"@{g['odd']}" if g["odd"] else "⏳"
+            txt += f"⭐ {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | {odd}\n\n"
 
     kb = [[InlineKeyboardButton("📤 Postar no Canal", callback_data="send")]]
-    await u.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await u.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     await msg.delete()
 
-async def handle_free_text(u: Update, c):
+async def roi_panel(u, c):
+    await u.message.reply_text("📊 ROI Tracker ativo — histórico em breve 💰")
+
+async def free_text(u, c):
     if u.effective_user.id != ADMIN_ID:
         return
 
-    # Ignora cliques nos botões do teclado principal
-    if any(keyword in u.message.text for keyword in ["Top Jogos", "NBA", "Troco do Pão"]):
+    if any(k in u.message.text.lower() for k in ["top","nba","troco"]):
         return
 
     kb = [[InlineKeyboardButton("📤 Enviar Canal", callback_data="send")]]
-    await u.message.reply_text(f"📝 **PRÉVIA:**\n\n{u.message.text}", reply_markup=InlineKeyboardMarkup(kb))
+    await u.message.reply_text(f"📝 **PRÉVIA:**\n\n{u.message.text}",
+                               reply_markup=InlineKeyboardMarkup(kb),
+                               parse_mode="Markdown")
 
-async def callback_handler(u: Update, c):
+async def callback(u: Update, c):
     q = u.callback_query
     await q.answer()
 
     if q.data == "send":
-        txt = q.message.text.replace("📝 **PRÉVIA:**\n\n", "")
-        try:
-            await c.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.MARKDOWN)
-            await q.edit_message_text(txt + "\n\n✅ **POSTADO NO CANAL**", parse_mode=ParseMode.MARKDOWN)
-        except Exception as e:
-            await q.edit_message_text(f"❌ Erro ao postar: {e}")
+        txt = q.message.text.replace("📝 **PRÉVIA:**\n\n","")
+        await c.bot.send_message(CHANNEL_ID, txt, parse_mode="Markdown")
+        await q.edit_message_text(txt + "\n\n✅ POSTADO")
 
-# ================= MAIN (MODO HÍBRIDO: WEBHOOK/POLLING) =================
-async def main():
-    # Inicia o servidor HTTP para health checks do Render
-    threading.Thread(
-        target=lambda: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever(),
-        daemon=True
-    ).start()
-    logger.info(f"Servidor de Health Check rodando na porta {PORT}")
+# ================= MAIN =================
+def main():
+    threading.Thread(target=keep_alive, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Adiciona os handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)top jogos"), lambda u,c: handle_request(u,c,"soccer")))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)nba"), lambda u,c: handle_request(u,c,"nba")))
-    app.add_handler(MessageHandler(filters.Regex(r"(?i)troco"), lambda u,c: handle_request(u,c,"soccer", True)))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_free_text))
-    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)top jogos"), lambda u,c: games(u,c,"soccer")))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)nba"), lambda u,c: games(u,c,"nba")))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)troco"), lambda u,c: games(u,c,"soccer",True)))
+    app.add_handler(MessageHandler(filters.Regex(r"(?i)roi"), roi_panel))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, free_text))
+    app.add_handler(CallbackQueryHandler(callback))
 
-    # Lógica para decidir entre Webhook (Render) e Polling (Local)
-    if RENDER_EXTERNAL_URL:
-        # --- MODO WEBHOOK (PARA O RENDER) ---
-        logger.info("Detectado ambiente do Render. Configurando webhook...")
-        await app.bot.set_webhook(
-            url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}",
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
-        
-        # Inicia a aplicação para escutar na porta definida
-        async with app:
-            await app.start()
-            await app.updater.start_webhook(
-                listen='0.0.0.0',
-                port=PORT,
-                url_path=BOT_TOKEN,
-                webhook_url=f"{RENDER_EXTERNAL_URL}/{BOT_TOKEN}"
-            )
-            logger.info(f"🚀 BOT V76 ULTRA ONLINE (MODO WEBHOOK ATIVO EM {RENDER_EXTERNAL_URL})")
-            await asyncio.Event().wait() # Mantém o processo vivo
-    else:
-        # --- MODO POLLING (PARA TESTE LOCAL) ---
-        logger.info("Nenhuma RENDER_EXTERNAL_URL encontrada. Iniciando com polling para desenvolvimento local...")
-        await app.initialize()
-        await app.bot.delete_webhook(drop_pending_updates=True)
-        await app.start()
-        logger.info("🚀 BOT V76 ULTRA ONLINE (MODO POLLING LOCAL)")
-        await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-        await asyncio.Event().wait() # Mantém o processo vivo
+    logger.info("🚀 V75.4 ALL IN ONLINE")
+    app.run_polling(drop_pending_updates=True)
 
-# ================= BOOT =================
 if __name__ == "__main__":
-    try:
-        import nest_asyncio
-        nest_asyncio.apply()
-    except ImportError:
-        pass
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    loop.run_until_complete(main())
+    main()
