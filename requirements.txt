@@ -1,4 +1,4 @@
 python-telegram-bot
 httpx
-google-generativeai
+google-genai
 aiohttp
