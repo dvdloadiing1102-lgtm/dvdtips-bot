@@ -4,7 +4,11 @@ import logging
 import sqlite3
 import random
 import httpx
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+# Telegram Imports
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
@@ -13,17 +17,27 @@ from telegram.constants import ParseMode
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID") 
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-CHANNEL_ID = os.getenv("CHANNEL_ID") # O ID do seu canal (ex: -100...)
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= SPORTS API =================
+# ================= SERVIDOR WEB (PRO RENDER NÃO CAIR) =================
+class FakeHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V62 ONLINE")
+
+def start_server():
+    server = HTTPServer(('0.0.0.0', PORT), FakeHandler)
+    server.serve_forever()
+
+# ================= SPORTS API (ODDS REAIS) =================
 class SportsAPI:
-    async def get_odds(self, sport="soccer"):
+    async def get_market_data(self, sport="soccer"):
         host = "v3.football.api-sports.io" if sport == "soccer" else "v1.basketball.api-sports.io"
         url = f"https://{host}/odds?date={datetime.now().strftime('%Y-%m-%d')}&bookmaker=6"
-        if sport == "basketball": url += "&league=12"
+        if sport == "basketball": url += "&league=12" # NBA
         
         headers = {"x-rapidapi-host": host, "x-rapidapi-key": API_FOOTBALL_KEY}
         try:
@@ -36,78 +50,88 @@ class SportsAPI:
                     fav = sorted(odds, key=lambda x: float(x['odd']))[0]
                     matches.append({
                         "name": f"{item['teams']['home']['name']} x {item['teams']['away']['name']}",
-                        "odd": float(fav['odd']),
-                        "tip": fav['value']
+                        "odd": float(fav['odd']), "tip": fav['value'],
+                        "sport": "⚽" if sport == "soccer" else "🏀"
                     })
                 return matches
         except: return []
 
 api = SportsAPI()
 
-# ================= HANDLERS =================
+# ================= HANDLERS (ADMIN & TIPS) =================
 async def start(u: Update, c):
     if str(u.effective_user.id) != str(ADMIN_ID): return
     kb = [["🔥 Top Jogos", "🚀 Múltipla Segura"], ["💣 Troco do Pão", "🏀 NBA"], ["🎫 Gerar Key"]]
     await u.message.reply_text("🦁 **SISTEMA DE GESTÃO DE TIPS**", 
                                reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True))
 
-async def handle_top_games(u: Update, c):
-    msg_status = await u.message.reply_text("🔎 Buscando melhores odds...")
-    games = await api.get_odds("soccer")
-    if not games: return await msg_status.edit_text("❌ Sem dados no momento.")
+async def process_tips(u: Update, c, sport="soccer", type="top"):
+    msg_status = await u.message.reply_text("🔎 Buscando mercado real...")
+    games = await api.get_market_data(sport)
     
-    res = "🔥 **TIPS DO DIA**\n\n"
-    for g in games[:5]:
-        res += f"⚽ {g['name']}\n🎯 {g['tip']} | @{g['odd']}\n\n"
+    if not games: return await msg_status.edit_text("❌ Sem dados da API no momento.")
     
+    if type == "risk": # Múltipla @20
+        sel = random.sample(games, min(5, len(games)))
+        odd_f = 1.0
+        res = "💣 **TROCO DO PÃO (ODD ALTA)**\n\n"
+        for g in sel:
+            odd_f *= g['odd']
+            res += f"📍 {g['name']} (@{g['odd']})\n"
+        res += f"\n💰 **ODD FINAL: @{odd_f:.2f}**"
+    else:
+        res = f"{'🔥' if sport=='soccer' else '🏀'} **TIPS DE HOJE**\n\n"
+        for g in games[:6]:
+            res += f"{g['sport']} {g['name']}\n🎯 {g['tip']} | @{g['odd']}\n\n"
+
     # BOTÃO PARA ENVIAR AO CANAL
-    kb = [[InlineKeyboardButton("📤 Postar no Canal", callback_data="post_to_channel")]]
+    kb = [[InlineKeyboardButton("📤 Postar no Canal", callback_data="post")]]
     await u.message.reply_text(res, reply_markup=InlineKeyboardMarkup(kb))
     await msg_status.delete()
 
-async def handle_multi_risk(u: Update, c):
-    games = await api.get_odds("soccer")
-    if len(games) < 5: return await u.message.reply_text("❌ Jogos insuficientes.")
-    
-    sel = random.sample(games, 5)
-    odd_f = 1.0
-    res = "💣 **MÚLTIPLA @20 (TROCO DO PÃO)**\n\n"
-    for g in sel:
-        odd_f *= g['odd']
-        res += f"✅ {g['name']} (@{g['odd']})\n"
-    res += f"\n💰 **ODD FINAL: @{odd_f:.2f}**"
-    
-    kb = [[InlineKeyboardButton("🚀 Enviar Bilhete", callback_data="post_to_channel")]]
-    await u.message.reply_text(res, reply_markup=InlineKeyboardMarkup(kb))
-
-# ================= CALLBACK (O BOTÃO DE ENVIAR) =================
-async def button_callback(u: Update, c):
+# ================= CALLBACK PARA POSTAR =================
+async def callback_post(u: Update, c):
     query = u.callback_query
-    await query.answer()
-    
-    if query.data == "post_to_channel":
-        try:
-            # Pega o texto da mensagem onde o botão foi clicado e envia pro canal
-            await c.bot.send_message(chat_id=CHANNEL_ID, text=query.message.text, parse_mode=None)
-            await query.edit_message_caption(caption=query.message.text + "\n\n✅ **ENVIADO AO CANAL!**") # Se for foto
-        except:
-            # Se for apenas texto
-            await query.edit_message_text(text=query.message.text + "\n\n✅ **ENVIADO AO CANAL!**")
+    await query.answer("Enviando ao canal...")
+    try:
+        await c.bot.send_message(chat_id=CHANNEL_ID, text=query.message.text)
+        await query.edit_message_text(text=query.message.text + "\n\n✅ **POSTADO NO CANAL!**")
+    except Exception as e:
+        await query.edit_message_text(text=f"❌ Erro ao postar: {e}")
 
-# ================= MAIN =================
-def main():
+# ================= MOTOR PRINCIPAL (COM TRAVA DE CONFLITO) =================
+async def main():
+    # 1. Inicia o servidor web em paralelo
+    threading.Thread(target=start_server, daemon=True).start()
+
+    # 2. Configura o Aplicativo
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("Top Jogos"), handle_top_games))
-    app.add_handler(MessageHandler(filters.Regex("Troco do Pão"), handle_multi_risk))
-    app.add_handler(MessageHandler(filters.Regex("NBA"), handle_top_games)) # Reutiliza lógica
-    
-    # ESSA LINHA ATIVA OS BOTÕES DE ENVIAR
-    app.add_handler(CallbackQueryHandler(button_callback))
 
-    print("🚀 Bot completo com botões de envio online!")
-    app.run_polling()
+    # 3. Adiciona os Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Regex("Top Jogos"), lambda u, c: process_tips(u, c, "soccer", "top")))
+    app.add_handler(MessageHandler(filters.Regex("NBA"), lambda u, c: process_tips(u, c, "basketball", "top")))
+    app.add_handler(MessageHandler(filters.Regex("Troco do Pão"), lambda u, c: process_tips(u, c, "soccer", "risk")))
+    app.add_handler(CallbackQueryHandler(callback_post, pattern="post"))
+
+    # 4. A SOLUÇÃO PARA O ERRO DE CONFLITO:
+    # Remove qualquer conexão aberta antes de começar
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    
+    print("🚀 Bot V62 online e protegido contra conflitos!")
+    
+    # 5. Inicia o Polling
+    await app.updater.initialize()
+    await app.updater.start_polling()
+    await app.initialize()
+    await app.start()
+
+    # Mantém rodando
+    while True:
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
