@@ -2,150 +2,184 @@ import os
 import asyncio
 import logging
 import httpx
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ================= CONFIG =================
+# =========================
+# CONFIG
+# =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
-PORT = int(os.getenv("PORT", 10000))
-
-TIMEZONE = timedelta(hours=-3)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-log = logging.getLogger("ALLIN")
 
-log.info("🦁 BOT ALL IN SUPREMO ONLINE")
+logging.info("🦁 BOT ALL IN SUPREMO INICIANDO")
 
-# ================= HTTP KEEP ALIVE =================
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ALL IN SUPREMO ONLINE")
+# =========================
+# UTILS
+# =========================
+def now_br():
+    return datetime.now(timezone.utc) - timedelta(hours=3)
 
-    def log_message(self, *args):
-        pass
-
-def start_http():
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    server.serve_forever()
-
-# ================= UTIL =================
-def hoje_str():
-    return (datetime.now(timezone.utc) + TIMEZONE).strftime("%Y-%m-%d")
-
-# ================= API FOOTBALL =================
-async def buscar_jogos_api_football():
-    if not API_FOOTBALL_KEY:
-        return []
-
+# =========================
+# API FOOTBALL — JOGOS HOJE
+# =========================
+async def fetch_api_football():
     url = "https://v3.football.api-sports.io/fixtures"
-    headers = {"x-apisports-key": API_FOOTBALL_KEY}
-    params = {"date": hoje_str()}
+    today = now_br().date()
+
+    headers = {
+        "x-apisports-key": API_FOOTBALL_KEY
+    }
+
+    params = {
+        "date": today.isoformat()
+    }
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(url, headers=headers, params=params)
             data = r.json()
-    except:
-        return []
 
-    jogos = []
-    for item in data.get("response", []):
-        jogos.append({
-            "home": item["teams"]["home"]["name"],
-            "away": item["teams"]["away"]["name"],
-            "time": item["fixture"]["date"]
-        })
-    return jogos
+        fixtures = data.get("response", [])
+        games = []
 
-# ================= ODDS API =================
-async def buscar_jogos_odds():
-    if not THE_ODDS_API_KEY:
-        return []
+        for f in fixtures:
+            home = f["teams"]["home"]["name"]
+            away = f["teams"]["away"]["name"]
+            league = f["league"]["name"]
+            kickoff = f["fixture"]["date"]
 
-    url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
-    params = {"apiKey": THE_ODDS_API_KEY, "regions": "eu", "markets": "h2h"}
-
-    try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            r = await client.get(url, params=params)
-            data = r.json()
-    except:
-        return []
-
-    jogos = []
-    hoje = hoje_str()
-
-    for ev in data:
-        if "commence_time" in ev and ev["commence_time"][:10] == hoje:
-            jogos.append({
-                "home": ev.get("home_team"),
-                "away": ev.get("away_team"),
-                "time": ev["commence_time"]
+            games.append({
+                "home": home,
+                "away": away,
+                "league": league,
+                "kickoff": kickoff
             })
 
-    return jogos
+        logging.info(f"API FOOTBALL retornou {len(games)} jogos")
+        return games
 
-# ================= CONSOLIDA =================
-async def buscar_jogos_hoje():
-    jogos = []
-    jogos += await buscar_jogos_api_football()
-    jogos += await buscar_jogos_odds()
+    except Exception as e:
+        logging.error(f"Erro API Football: {e}")
+        return []
 
-    vistos = set()
-    final = []
+# =========================
+# THE ODDS API — ODDS
+# =========================
+async def fetch_odds():
+    url = "https://api.the-odds-api.com/v4/sports/soccer/odds"
 
-    for j in jogos:
-        key = (j["home"], j["away"])
-        if key not in vistos:
-            vistos.add(key)
-            final.append(j)
+    params = {
+        "apiKey": THE_ODDS_API_KEY,
+        "regions": "eu",
+        "markets": "h2h"
+    }
 
-    return final
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, params=params)
+            data = r.json()
 
-# ================= TELEGRAM =================
+        logging.info(f"THE ODDS retornou {len(data)} eventos")
+        return data
+
+    except Exception as e:
+        logging.error(f"Erro The Odds API: {e}")
+        return []
+
+# =========================
+# COMANDO START
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 ALL IN SUPREMO ONLINE\n\n/jogos")
+    await update.message.reply_text(
+        "🦁 BOT ALL IN SUPREMO ONLINE\n\n"
+        "Comandos:\n"
+        "/hoje → Jogos de hoje\n"
+        "/allin → Picks SUPREMAS"
+    )
 
-async def jogos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Buscando jogos de hoje...")
+# =========================
+# /HOJE — LISTA JOGOS
+# =========================
+async def hoje(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔎 Buscando jogos de hoje...")
 
-    jogos = await buscar_jogos_hoje()
+    games = await fetch_api_football()
 
-    if not jogos:
-        await update.message.reply_text("❌ Nenhum jogo hoje.")
+    if not games:
+        await update.message.reply_text("❌ Nenhum jogo encontrado hoje")
         return
 
-    msg = "⚽ JOGOS DE HOJE\n\n"
-    for j in jogos[:30]:
-        hora = j["time"][11:16]
-        msg += f"• {j['home']} x {j['away']} — {hora}\n"
+    msg = "📅 JOGOS DE HOJE:\n\n"
+    for g in games[:12]:
+        msg += f"⚽ {g['home']} x {g['away']}\n🏆 {g['league']}\n\n"
 
     await update.message.reply_text(msg)
 
-# ================= MAIN =================
-async def main():
-    # Start HTTP server thread
-    threading.Thread(target=start_http, daemon=True).start()
+# =========================
+# /ALLIN — PICKS SUPREMAS
+# =========================
+async def allin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 MODO ALL IN SUPREMO ATIVO")
 
+    games = await fetch_api_football()
+    odds_data = await fetch_odds()
+
+    picks = []
+
+    for g in games:
+        score = 1000
+
+        big_teams = ["Real Madrid", "Barcelona", "Manchester City", "Bayern", "PSG"]
+        if any(t in g["home"] or t in g["away"] for t in big_teams):
+            score += 5000
+
+        picks.append({
+            "match": f"{g['home']} x {g['away']}",
+            "league": g["league"],
+            "score": score
+        })
+
+    picks = sorted(picks, key=lambda x: x["score"], reverse=True)
+
+    if not picks:
+        await update.message.reply_text("❌ Nada bom hoje — mercado fraco")
+        return
+
+    msg = "🔥 PICKS ALL IN SUPREMO:\n\n"
+    for p in picks[:5]:
+        msg += f"💎 {p['match']}\n🏆 {p['league']}\n⭐ Score: {p['score']}\n\n"
+
+    await update.message.reply_text(msg)
+
+# =========================
+# MAIN — SAFE LOOP RENDER
+# =========================
+async def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("jogos", jogos))
+    app.add_handler(CommandHandler("hoje", hoje))
+    app.add_handler(CommandHandler("allin", allin))
 
-    log.info("🤖 BOT RODANDO")
+    logging.info("🤖 Bot iniciado — polling ativo")
 
-    await app.run_polling()
+    await app.run_polling(close_loop=False)
 
-# ================= RUN =================
+# =========================
+# RUN SAFE (SEM LOOP CRASH)
+# =========================
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
