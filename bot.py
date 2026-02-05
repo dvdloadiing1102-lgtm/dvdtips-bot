@@ -1,217 +1,210 @@
 import os
-import httpx
-import random
 import logging
+import httpx
 import feedparser
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from datetime import datetime, timedelta, timezone
 
-# ================= CONFIG =================
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-NBA_API_KEY = os.getenv("NBA_API_KEY")
-
+# ================= LOG =================
 logging.basicConfig(level=logging.INFO)
 
-# ================= POSTAR NO CANAL =================
+# ================= ENV =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-async def postar_canal(texto):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHANNEL_ID,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
-    async with httpx.AsyncClient() as client:
-        await client.post(url, json=payload)
+API_FOOTBALL_URL = "https://v3.football.api-sports.io/fixtures"
+ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer/odds"
 
-# ================= FUTEBOL REAL =================
+VIP_TEAMS = [
+    "flamengo", "corinthians", "real madrid", "barcelona",
+    "arsenal", "manchester city", "psg", "chelsea", "liverpool",
+    "bayern", "juventus", "milan", "inter"
+]
 
-async def futebol_hoje():
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://v3.football.api-sports.io/fixtures?date={hoje}"
+# ================= FETCH FOOTBALL =================
+async def fetch_today_games():
     headers = {"x-apisports-key": API_FOOTBALL_KEY}
-    
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, headers=headers)
+    games = []
+
+    now_br = datetime.now(timezone.utc) - timedelta(hours=3)
+    today = now_br.date().isoformat()
+
+    params = {"date": today}
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(API_FOOTBALL_URL, headers=headers, params=params)
         data = r.json()
+        fixtures = data.get("response", [])
 
-    jogos = []
-    for j in data.get("response", []):
-        jogos.append({
-            "home": j["teams"]["home"]["name"],
-            "away": j["teams"]["away"]["name"]
-        })
-    return jogos
+        for f in fixtures:
+            home = f["teams"]["home"]["name"]
+            away = f["teams"]["away"]["name"]
+            league = f["league"]["name"]
+            date_str = f["fixture"]["date"]
 
-# ================= NBA REAL =================
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")) - timedelta(hours=3)
 
-async def nba_hoje():
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    url = f"https://api-nba-v1.p.rapidapi.com/games?date={hoje}"
-    headers = {
-        "X-RapidAPI-Key": NBA_API_KEY,
-        "X-RapidAPI-Host": "api-nba-v1.p.rapidapi.com"
-    }
+            full = f"{home} x {away}".lower()
+            score = 100
 
-    async with httpx.AsyncClient() as client:
-        r = await client.get(url, headers=headers)
-        data = r.json()
+            if any(v in full for v in VIP_TEAMS):
+                score += 500
 
-    jogos = []
-    for g in data.get("response", []):
-        jogos.append({
-            "home": g["teams"]["home"]["name"],
-            "away": g["teams"]["visitors"]["name"]
-        })
-    return jogos
+            games.append({
+                "match": f"{home} x {away}",
+                "league": league,
+                "time": dt.strftime("%H:%M"),
+                "score": score
+            })
 
-# ================= PICKS DO DIA =================
+    games.sort(key=lambda x: x["score"], reverse=True)
+    return games[:10]
 
-async def gerar_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fut = await futebol_hoje()
-    nba = await nba_hoje()
+# ================= FETCH ODDS =================
+async def fetch_odds():
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            ODDS_URL,
+            params={"apiKey": THE_ODDS_API_KEY, "regions": "eu"}
+        )
+        return r.json()
 
-    fut = fut[:8]
-    nba = nba[:3]
+# ================= FETCH NBA =================
+async def fetch_nba():
+    url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(url, params={"apiKey": THE_ODDS_API_KEY})
+        return r.json()
 
-    if not fut and not nba:
-        await update.callback_query.message.reply_text("⚠️ Nenhum jogo real encontrado hoje.")
-        return
+# ================= FETCH NEWS =================
+def fetch_news():
+    feed = feedparser.parse("https://www.espn.com/espn/rss/news")
+    news = []
+    for n in feed.entries[:5]:
+        news.append({"title": n.title, "link": n.link})
+    return news
 
-    texto = "🔥 *PICKS DO DIA — REAL*\n\n"
-
-    for j in fut:
-        texto += f"⚽ {j['home']} x {j['away']} — *Over 1.5*\n"
-
-    for j in nba:
-        texto += f"🏀 {j['home']} x {j['away']} — *ML*\n"
-
-    texto += "\n📊 Total: 10 jogos\n📈 Stake: Moderada"
-
-    await postar_canal(texto)
-    await update.callback_query.message.reply_text("✅ Picks postadas no canal!")
-
-# ================= MÚLTIPLA ODD 20+ =================
-
-async def multipla_20(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    jogos = await futebol_hoje()
-    jogos = jogos[:7]
-
-    if not jogos:
-        await update.callback_query.message.reply_text("⚠️ Nenhum jogo disponível.")
-        return
-
-    texto = "💣 *MÚLTIPLA INSANA — ODD 20+*\n\n"
-    odd_total = 1
-
-    for j in jogos:
-        odd = round(random.uniform(1.7, 2.3), 2)
-        odd_total *= odd
-        texto += f"⚽ {j['home']} vence — Odd {odd}\n"
-
-    texto += f"\n🎯 *Odd total:* {round(odd_total, 2)}\n💰 Stake: Baixa"
-
-    await postar_canal(texto)
-    await update.callback_query.message.reply_text("💥 Múltipla postada!")
-
-# ================= ALL IN SUPREMO =================
-
-async def all_in(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    jogos = await futebol_hoje()
-
-    if not jogos:
-        await update.callback_query.message.reply_text("⚠️ Sem jogos confiáveis hoje.")
-        return
-
-    j = random.choice(jogos)
-
-    texto = f"""🔥 *ALL IN SUPREMO*
-
-⚽ {j['home']} x {j['away']}
-🎯 Entrada: *Casa vence*
-💰 Stake: ALTA
-⚠️ Gestão ativa"""
-
-    await postar_canal(texto)
-    await update.callback_query.message.reply_text("🔥 ALL IN postado!")
-
-# ================= NOTÍCIAS FUTEBOL =================
-
-async def noticias(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    feed = feedparser.parse("https://ge.globo.com/rss/futebol/")
-    texto = "📰 *NOTÍCIAS DO FUTEBOL*\n\n"
-
-    for n in feed.entries[:4]:
-        texto += f"🔥 {n.title}\n🔗 {n.link}\n\n"
-
-    await postar_canal(texto)
-    await update.callback_query.message.reply_text("📰 Notícias postadas!")
-
-# ================= ROI =================
-
-ROI_DATA = {"wins": 0, "loss": 0}
-
-async def roi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total = ROI_DATA["wins"] + ROI_DATA["loss"]
-    taxa = (ROI_DATA["wins"] / total * 100) if total > 0 else 0
-
-    texto = f"""📊 *ROI DO BOT*
-
-✅ Wins: {ROI_DATA['wins']}
-❌ Loss: {ROI_DATA['loss']}
-📈 Taxa: {round(taxa,1)}%"""
-
-    await update.callback_query.message.reply_text(texto)
-
-# ================= MENU =================
-
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    teclado = [
-        [InlineKeyboardButton("🔥 PICKS DO DIA", callback_data="picks")],
-        [InlineKeyboardButton("💣 MÚLTIPLA ODD 20+", callback_data="multipla")],
-        [InlineKeyboardButton("⚽ ALL IN SUPREMO", callback_data="allin")],
-        [InlineKeyboardButton("📰 NOTÍCIAS FUTEBOL", callback_data="noticias")],
-        [InlineKeyboardButton("📊 ROI", callback_data="roi")]
+    keyboard = [
+        [
+            InlineKeyboardButton("🔥 Top Jogos", callback_data="top"),
+            InlineKeyboardButton("🏀 NBA Hoje", callback_data="nba")
+        ],
+        [
+            InlineKeyboardButton("💣 Troco do Pão", callback_data="troco"),
+            InlineKeyboardButton("🦁 ALL IN SUPREMO", callback_data="allin")
+        ],
+        [
+            InlineKeyboardButton("📊 ROI", callback_data="roi"),
+            InlineKeyboardButton("📰 Notícias", callback_data="news")
+        ]
     ]
 
     await update.message.reply_text(
-        "🤖 *BOT ELITE ATIVO*\nEscolha uma opção:",
-        reply_markup=InlineKeyboardMarkup(teclado),
-        parse_mode="Markdown"
+        "🦁 **PAINEL ALL IN SUPREMO — MODO ELITE**",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ================= CALLBACK =================
+# ================= POST TO CHANNEL =================
+async def post_channel(context, text):
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
 
-async def botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+# ================= BUTTON HANDLER =================
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    if query.data == "picks":
-        await gerar_picks(update, context)
+    # TOP JOGOS
+    if q.data == "top":
+        games = await fetch_today_games()
+        msg = "🔥 **TOP JOGOS HOJE**\n\n"
 
-    elif query.data == "multipla":
-        await multipla_20(update, context)
+        for g in games:
+            msg += f"⚽ {g['match']}\n🏆 {g['league']}\n⏰ {g['time']}\n\n"
 
-    elif query.data == "allin":
-        await all_in(update, context)
+        await q.message.reply_text(msg, parse_mode="Markdown")
+        await post_channel(context, msg)
 
-    elif query.data == "noticias":
-        await noticias(update, context)
+    # NBA
+    elif q.data == "nba":
+        nba = await fetch_nba()
+        msg = "🏀 **NBA HOJE**\n\n"
 
-    elif query.data == "roi":
-        await roi(update, context)
+        for g in nba[:3]:
+            msg += f"🏀 {g['home_team']} x {g['away_team']}\n\n"
+
+        await q.message.reply_text(msg)
+        await post_channel(context, msg)
+
+    # ALL IN
+    elif q.data == "allin":
+        games = await fetch_today_games()
+        g = games[0]
+
+        msg = (
+            "🦁 **ALL IN SUPREMO — PICK DO DIA**\n\n"
+            f"🔥 {g['match']}\n"
+            f"🏆 {g['league']}\n"
+            f"🎯 Pick: Favorito vence\n"
+            f"💰 Confiança: ALTÍSSIMA\n"
+        )
+
+        await q.message.reply_text(msg, parse_mode="Markdown")
+        await post_channel(context, msg)
+
+    # TROCO DO PÃO
+    elif q.data == "troco":
+        games = await fetch_today_games()
+        picks = games[:3]
+
+        msg = "💣 **TROCO DO PÃO — MÚLTIPLA**\n\n"
+        odd = 1
+
+        for g in picks:
+            msg += f"⚽ {g['match']} @1.50\n"
+            odd *= 1.5
+
+        msg += f"\n🔥 Odd Total aprox: @{round(odd, 2)}"
+
+        await q.message.reply_text(msg)
+        await post_channel(context, msg)
+
+    # ROI
+    elif q.data == "roi":
+        msg = "📊 ROI Tracker ativo — relatório em breve"
+        await q.message.reply_text(msg)
+
+    # NEWS
+    elif q.data == "news":
+        news = fetch_news()
+        msg = "📰 **NOTÍCIAS DO FUTEBOL**\n\n"
+
+        for n in news:
+            msg += f"🚨 {n['title']}\n🔗 {n['link']}\n\n"
+
+        await q.message.reply_text(msg)
+        await post_channel(context, msg)
 
 # ================= MAIN =================
-
-if __name__ == "__main__":
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(botoes))
+    app.add_handler(CallbackQueryHandler(buttons))
 
-    print("🔥 BOT ELITE ONLINE")
-    app.run_polling()
+    logging.info("🦁 BOT ALL IN SUPREMO ONLINE — MODO ELITE")
+    app.run_polling(close_loop=False)
+
+if __name__ == "__main__":
+    main()
