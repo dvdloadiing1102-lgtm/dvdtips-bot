@@ -14,7 +14,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 
-TIMEZONE = timedelta(hours=-3)  # Brasil (BRT)
+TIMEZONE = timedelta(hours=-3)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,7 +46,7 @@ async def buscar_jogos_api_football():
     params = {"date": hoje_str()}
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.get(url, headers=headers, params=params)
             data = r.json()
     except Exception as e:
@@ -81,7 +81,7 @@ async def buscar_jogos_odds():
     }
 
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.get(url, params=params)
             data = r.json()
     except Exception as e:
@@ -92,11 +92,14 @@ async def buscar_jogos_odds():
     hoje = hoje_str()
 
     for event in data:
+        if "commence_time" not in event:
+            continue
+
         date_event = event["commence_time"][:10]
         if date_event == hoje:
             jogos.append({
-                "home": event["home_team"],
-                "away": event["away_team"],
+                "home": event.get("home_team", "Casa"),
+                "away": event.get("away_team", "Visitante"),
                 "time": event["commence_time"]
             })
 
@@ -110,10 +113,16 @@ async def buscar_jogos_odds():
 async def buscar_jogos_hoje():
     jogos = []
 
-    jogos += await buscar_jogos_api_football()
-    jogos += await buscar_jogos_odds()
+    try:
+        jogos += await buscar_jogos_api_football()
+    except Exception as e:
+        log.error(f"Erro API Football geral: {e}")
 
-    # Remove duplicados
+    try:
+        jogos += await buscar_jogos_odds()
+    except Exception as e:
+        log.error(f"Erro Odds geral: {e}")
+
     vistos = set()
     unicos = []
 
@@ -133,21 +142,18 @@ async def buscar_jogos_hoje():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🦁 ALL IN SUPREMO ONLINE\n\n"
-        "Comandos:\n"
-        "/jogos — Ver jogos de hoje\n"
-        "/status — Ver status das APIs"
+        "/jogos — Jogos de hoje\n"
+        "/status — Status das APIs"
     )
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📡 STATUS APIs\n\n"
-
     msg += f"API FOOTBALL: {'✅ OK' if API_FOOTBALL_KEY else '❌ SEM KEY'}\n"
     msg += f"THE ODDS API: {'✅ OK' if THE_ODDS_API_KEY else '❌ SEM KEY'}\n"
-
     await update.message.reply_text(msg)
 
 async def jogos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Buscando jogos de HOJE...")
+    await update.message.reply_text("🔍 Buscando jogos de hoje...")
 
     jogos = await buscar_jogos_hoje()
 
@@ -164,7 +170,7 @@ async def jogos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 # =========================
-# MAIN (RENDER SAFE)
+# MAIN — PTB V20 SAFE
 # =========================
 
 async def main():
@@ -174,12 +180,14 @@ async def main():
     app.add_handler(CommandHandler("jogos", jogos))
     app.add_handler(CommandHandler("status", status))
 
+    log.info("🤖 Iniciando bot...")
+
     await app.initialize()
     await app.start()
 
-    log.info("🤖 BOT RODANDO — POLLING SEGURO")
+    log.info("✅ Polling iniciado")
 
-    await app.updater.start_polling()
+    await app.bot.initialize()
 
     await asyncio.Event().wait()
 
