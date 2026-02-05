@@ -28,6 +28,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
+# APIs
+FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN")  # football-data.org
+RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")  # API-Football
+
 SENT_LINKS = set()
 
 # Times VIP para priorizar
@@ -37,36 +41,6 @@ VIP_TEAMS_LIST = [
     "FORTALEZA", "ATHLETICO", "SANTOS", "BRAGANTINO", "REAL MADRID", "MANCHESTER CITY",
     "BAYERN", "PSG", "CHELSEA", "LIVERPOOL", "ARSENAL", "BARCELONA", "BOCA JUNIORS", "RIVER PLATE"
 ]
-
-# IDs de times no TheSportsDB
-TEAM_IDS = {
-    "Flamengo": 133602,
-    "Palmeiras": 133603,
-    "Botafogo": 133604,
-    "Fluminense": 133605,
-    "São Paulo": 133606,
-    "Corinthians": 133607,
-    "Vasco da Gama": 133608,
-    "Cruzeiro": 133609,
-    "Atlético Mineiro": 133610,
-    "Internacional": 133611,
-    "Grêmio": 133612,
-    "Bahia": 133613,
-    "Fortaleza": 133614,
-    "Athletico Paranaense": 133615,
-    "Santos": 133616,
-    "RB Bragantino": 133617,
-    "Real Madrid": 133602,
-    "Manchester City": 133603,
-    "Bayern Munich": 133604,
-    "Paris Saint-Germain": 133605,
-    "Chelsea": 133606,
-    "Liverpool": 133607,
-    "Arsenal": 133608,
-    "Barcelona": 133609,
-    "Boca Juniors": 133610,
-    "River Plate": 133611,
-}
 
 
 def normalize_name(name):
@@ -87,7 +61,7 @@ class FakeHandler(BaseHTTPRequestHandler):
         """Responde com status 200 para health checks."""
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"BOT V90 ONLINE - TheSportsDB")
+        self.wfile.write(b"BOT V90 ONLINE - Dual API")
 
     def log_message(self, format, *args):
         """Suprime logs de requisições HTTP."""
@@ -148,148 +122,270 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro no auto_news_job: {e}")
 
 
-# ================= MOTOR V90 COM TheSportsDB =================
-class SportsEngine:
-    """Engine para buscar e processar jogos usando TheSportsDB (API Gratuita)."""
+# ================= MOTOR V90 COM DUAL API =================
+class DualSportsEngine:
+    """Engine para buscar jogos usando 2 APIs com fallback automático."""
 
     def __init__(self):
-        self.base_url = "https://www.thesportsdb.com/api/v1/json/3"
-        # Usando chave pública (limite: 100 requisições/dia)
-        self.api_key = "50130659531999"
+        self.football_data_url = "https://api.football-data.org/v4"
+        self.football_data_token = FOOTBALL_DATA_TOKEN
+        
+        self.rapidapi_url = "https://api-football-v1.p.rapidapi.com/v3"
+        self.rapidapi_key = RAPIDAPI_KEY
+        self.rapidapi_host = "api-football-v1.p.rapidapi.com"
 
     def get_today_date(self):
         """Retorna a data de hoje em formato YYYY-MM-DD (timezone São Paulo)."""
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def test_api_connection(self):
-        """Testa conexão com a API e retorna informações de debug."""
+        """Testa conexão com ambas as APIs."""
         debug_info = {
-            "api_provider": "TheSportsDB (Gratuita)",
-            "test_date": self.get_today_date(),
-            "status": "❌ Erro",
-            "error": None,
-            "response_code": None,
-            "fixtures_found": 0
+            "football_data": {"status": "❌ Não configurada", "error": None},
+            "rapidapi": {"status": "❌ Não configurada", "error": None},
+            "test_date": self.get_today_date()
         }
 
-        try:
-            # Testa com um endpoint simples
-            url = f"{self.base_url}/eventslast.php?id=133602"
-            logger.info(f"Testando API com URL: {url}")
-
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(url)
-                debug_info["response_code"] = response.status_code
-
-                if response.status_code == 200:
-                    data = response.json()
-                    debug_info["status"] = "✅ Conectado"
-                    debug_info["fixtures_found"] = len(data.get("results", []))
-                    logger.info(f"API respondeu com sucesso. Eventos encontrados: {debug_info['fixtures_found']}")
-                else:
-                    debug_info["error"] = f"HTTP {response.status_code}"
-                    logger.error(f"Erro HTTP: {response.status_code}")
-
-        except Exception as e:
-            debug_info["error"] = str(e)
-            logger.error(f"Erro ao testar API: {e}")
+        # Testa Football-Data.org
+        if self.football_data_token:
+            try:
+                headers = {"X-Auth-Token": self.football_data_token}
+                url = f"{self.football_data_url}/competitions"
+                
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.get(url, headers=headers)
+                    
+                    if response.status_code == 200:
+                        debug_info["football_data"]["status"] = "✅ Conectado"
+                        logger.info("Football-Data.org: Conectado com sucesso")
+                    else:
+                        debug_info["football_data"]["error"] = f"HTTP {response.status_code}"
+                        logger.error(f"Football-Data.org: HTTP {response.status_code}")
+                        
+            except Exception as e:
+                debug_info["football_data"]["error"] = str(e)
+                logger.error(f"Football-Data.org: {e}")
+        
+        # Testa API-Football
+        if self.rapidapi_key:
+            try:
+                headers = {
+                    "x-rapidapi-key": self.rapidapi_key,
+                    "x-rapidapi-host": self.rapidapi_host
+                }
+                url = f"{self.rapidapi_url}/fixtures?date={self.get_today_date()}"
+                
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.get(url, headers=headers)
+                    
+                    if response.status_code == 200:
+                        debug_info["rapidapi"]["status"] = "✅ Conectado"
+                        logger.info("API-Football: Conectado com sucesso")
+                    else:
+                        debug_info["rapidapi"]["error"] = f"HTTP {response.status_code}"
+                        logger.error(f"API-Football: HTTP {response.status_code}")
+                        
+            except Exception as e:
+                debug_info["rapidapi"]["error"] = str(e)
+                logger.error(f"API-Football: {e}")
 
         return debug_info
 
-    async def get_matches(self, mode="soccer"):
-        """Busca jogos com dados simulados e informações reais da API."""
-        logger.info(f"Buscando jogos para modo: {mode}")
+    async def get_matches_football_data(self):
+        """Busca jogos usando Football-Data.org."""
+        if not self.football_data_token:
+            logger.warning("Football-Data token não configurado")
+            return []
 
         try:
+            headers = {"X-Auth-Token": self.football_data_token}
+            
+            # IDs das competições principais no Football-Data.org
+            competition_ids = [
+                "PL",      # Premier League
+                "PD",      # La Liga
+                "BL1",     # Bundesliga
+                "SA",      # Serie A
+                "FL1",     # Ligue 1
+                "BSA",     # Brasileirão
+                "CL",      # Champions League
+            ]
+            
+            all_games = []
+            
             async with httpx.AsyncClient(timeout=30) as client:
-                # Busca eventos recentes dos times VIP
-                all_games = []
-
-                for team_name, team_id in list(TEAM_IDS.items())[:5]:  # Limita a 5 times para não sobrecarregar
+                for comp_id in competition_ids:
                     try:
-                        url = f"{self.base_url}/eventslast.php?id={team_id}"
-                        logger.info(f"Buscando eventos para {team_name}...")
-
-                        response = await client.get(url)
-                        data = response.json()
-
-                        if data.get("results"):
-                            for event in data.get("results", [])[:2]:  # Pega últimos 2 eventos
+                        url = f"{self.football_data_url}/competitions/{comp_id}/matches?status=SCHEDULED"
+                        response = await client.get(url, headers=headers)
+                        
+                        if response.status_code == 200:
+                            data = response.json()
+                            
+                            for match in data.get("matches", [])[:3]:  # Pega até 3 por competição
                                 try:
-                                    home_team = event.get("strHomeTeam", "Time A")
-                                    away_team = event.get("strAwayTeam", "Time B")
-                                    event_time = event.get("strTime", "20:00")
-                                    league = event.get("strLeague", "Campeonato")
-                                    event_id = event.get("idEvent", "0")
-
-                                    # Calcula score de prioridade
+                                    home_team = match.get("homeTeam", {}).get("name", "Time A")
+                                    away_team = match.get("awayTeam", {}).get("name", "Time B")
+                                    utc_date = match.get("utcDate", "")
+                                    
+                                    # Converte para hora local (São Paulo)
+                                    if utc_date:
+                                        dt = datetime.fromisoformat(utc_date.replace("Z", "+00:00"))
+                                        dt_local = dt.astimezone(timezone(timedelta(hours=-3)))
+                                        event_time = dt_local.strftime("%H:%M")
+                                    else:
+                                        event_time = "20:00"
+                                    
+                                    competition = match.get("competition", {}).get("name", "Campeonato")
+                                    
+                                    # Score de prioridade
                                     score = 10
                                     if any(v in normalize_name(home_team) for v in VIP_TEAMS_LIST) or \
                                        any(v in normalize_name(away_team) for v in VIP_TEAMS_LIST):
                                         score += 5000
-
-                                    if "FLAMENGO" in normalize_name(f"{home_team} {away_team}"):
-                                        score += 10000
-
+                                    
                                     all_games.append({
-                                        "id": event_id,
                                         "match": f"{home_team} x {away_team}",
-                                        "league": league,
+                                        "league": competition,
                                         "time": event_time,
                                         "score": score,
-                                        "home": home_team,
-                                        "away": away_team
+                                        "source": "Football-Data.org"
                                     })
-
+                                    
                                 except Exception as e:
-                                    logger.debug(f"Erro ao processar evento: {e}")
+                                    logger.debug(f"Erro ao processar match: {e}")
                                     continue
-
+                        
                     except Exception as e:
-                        logger.error(f"Erro ao buscar eventos para {team_name}: {e}")
+                        logger.error(f"Erro ao buscar {comp_id}: {e}")
                         continue
-
-                if not all_games:
-                    logger.warning("Nenhum jogo encontrado")
-                    return []
-
-                # Ordena por score e pega top 8
-                all_games.sort(key=lambda x: x['score'], reverse=True)
-                top_games = all_games[:8]
-
-                logger.info(f"Top 8 jogos selecionados: {len(top_games)}")
-
-                # Simula odds para os jogos encontrados
-                final_list = []
-                for i, game in enumerate(top_games):
-                    # Gera odds simuladas mas realistas
-                    odds = [1.45, 1.65, 1.85, 2.10, 2.50, 3.20, 4.50]
-                    tips = [
-                        f"✅ {game['home']} Vence",
-                        f"✅ {game['away']} Vence",
-                        f"⚽ Over 1.5 Gols",
-                        f"⚽ Over 2.5 Gols",
-                        f"🛡️ Dupla Chance 1X",
-                        f"⛳ Escanteios Over 8.5",
-                        f"🟨 Cartão Amarelo"
-                    ]
-
-                    final_list.append({
-                        "match": game['match'],
-                        "league": game['league'],
-                        "time": game['time'],
-                        "odd": odds[i % len(odds)],
-                        "tip": tips[i % len(tips)]
-                    })
-
-                return final_list
-
+            
+            logger.info(f"Football-Data.org: {len(all_games)} jogos encontrados")
+            return all_games
+            
         except Exception as e:
-            logger.error(f"Erro ao buscar jogos: {e}")
+            logger.error(f"Erro ao buscar de Football-Data.org: {e}")
             return []
 
+    async def get_matches_rapidapi(self):
+        """Busca jogos usando API-Football (RapidAPI)."""
+        if not self.rapidapi_key:
+            logger.warning("RapidAPI key não configurada")
+            return []
 
-engine = SportsEngine()
+        try:
+            headers = {
+                "x-rapidapi-key": self.rapidapi_key,
+                "x-rapidapi-host": self.rapidapi_host
+            }
+            
+            all_games = []
+            
+            async with httpx.AsyncClient(timeout=30) as client:
+                # Busca jogos de hoje
+                url = f"{self.rapidapi_url}/fixtures?date={self.get_today_date()}"
+                response = await client.get(url, headers=headers)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    for fixture in data.get("response", [])[:10]:  # Pega até 10 jogos
+                        try:
+                            home_team = fixture.get("teams", {}).get("home", {}).get("name", "Time A")
+                            away_team = fixture.get("teams", {}).get("away", {}).get("name", "Time B")
+                            event_time = fixture.get("fixture", {}).get("date", "").split("T")[1][:5] if "T" in fixture.get("fixture", {}).get("date", "") else "20:00"
+                            league = fixture.get("league", {}).get("name", "Campeonato")
+                            
+                            # Score de prioridade
+                            score = 10
+                            if any(v in normalize_name(home_team) for v in VIP_TEAMS_LIST) or \
+                               any(v in normalize_name(away_team) for v in VIP_TEAMS_LIST):
+                                score += 5000
+                            
+                            all_games.append({
+                                "match": f"{home_team} x {away_team}",
+                                "league": league,
+                                "time": event_time,
+                                "score": score,
+                                "source": "API-Football"
+                            })
+                            
+                        except Exception as e:
+                            logger.debug(f"Erro ao processar fixture: {e}")
+                            continue
+                
+            logger.info(f"API-Football: {len(all_games)} jogos encontrados")
+            return all_games
+            
+        except Exception as e:
+            logger.error(f"Erro ao buscar de API-Football: {e}")
+            return []
+
+    async def get_matches(self):
+        """Busca jogos com fallback automático."""
+        logger.info("Iniciando busca de jogos com dual API...")
+        
+        # Tenta Football-Data.org primeiro
+        games = await self.get_matches_football_data()
+        
+        # Se não encontrou, tenta API-Football
+        if not games:
+            logger.info("Football-Data.org retornou vazio, tentando API-Football...")
+            games = await self.get_matches_rapidapi()
+        
+        # Se ainda não tem jogos, combina ambas
+        if not games:
+            logger.info("Nenhuma API retornou jogos, tentando combinar...")
+            games_fd = await self.get_matches_football_data()
+            games_api = await self.get_matches_rapidapi()
+            games = games_fd + games_api
+        
+        if not games:
+            logger.warning("Nenhum jogo encontrado em nenhuma API")
+            return []
+        
+        # Ordena por score e remove duplicatas
+        games.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Remove duplicatas (mesmo match)
+        seen = set()
+        unique_games = []
+        for game in games:
+            key = game['match']
+            if key not in seen:
+                seen.add(key)
+                unique_games.append(game)
+        
+        top_games = unique_games[:8]
+        logger.info(f"Top 8 jogos selecionados: {len(top_games)}")
+        
+        # Adiciona odds simuladas
+        final_list = []
+        for i, game in enumerate(top_games):
+            odds = [1.45, 1.65, 1.85, 2.10, 2.50, 3.20, 4.50]
+            tips = [
+                f"✅ {game['match'].split(' x ')[0]} Vence",
+                f"✅ {game['match'].split(' x ')[1]} Vence",
+                f"⚽ Over 1.5 Gols",
+                f"⚽ Over 2.5 Gols",
+                f"🛡️ Dupla Chance 1X",
+                f"⛳ Escanteios Over 8.5",
+                f"🟨 Cartão Amarelo"
+            ]
+            
+            final_list.append({
+                "match": game['match'],
+                "league": game['league'],
+                "time": game['time'],
+                "odd": odds[i % len(odds)],
+                "tip": tips[i % len(tips)],
+                "source": game['source']
+            })
+        
+        return final_list
+
+
+engine = DualSportsEngine()
 
 
 async def enviar(context, text):
@@ -312,12 +408,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")
         ],
         [
-            InlineKeyboardButton("🔧 Testar API", callback_data="test_api"),
-            InlineKeyboardButton("📊 Últimos Eventos", callback_data="proximos_dias")
+            InlineKeyboardButton("🔧 Testar APIs", callback_data="test_api"),
+            InlineKeyboardButton("📊 Próximos Jogos", callback_data="proximos_dias")
         ]
     ]
     await update.message.reply_text(
-        "🦁 **PAINEL V90 - SCANNER TOTAL**\n\n*Agora usando TheSportsDB (API Gratuita)*\n\nBusca: Vencedor > Gols > Escanteios > Cartões.",
+        "🦁 **PAINEL V90 - SCANNER TOTAL**\n\n*Dual API com Fallback Automático*\n\nBusca: Vencedor > Gols > Escanteios > Cartões.",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode=ParseMode.MARKDOWN
     )
@@ -329,40 +425,42 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
-    # --- TESTE DE API ---
+    # --- TESTE DE APIS ---
     if data == "test_api":
-        await query.message.reply_text("🔧 Testando conexão com a API...")
+        await query.message.reply_text("🔧 Testando conexão com as APIs...")
         debug_info = await engine.test_api_connection()
 
         debug_text = f"""
-🔧 **TESTE DE API**
+🔧 **TESTE DE APIs**
 
-🌐 Provider: {debug_info['api_provider']}
 📅 Data Testada: {debug_info['test_date']}
-🌐 Status: {debug_info['status']}
-📡 Código HTTP: {debug_info['response_code'] or 'N/A'}
-⚽ Eventos Encontrados: {debug_info['fixtures_found']}
 
-{'❌ Erro: ' + debug_info['error'] if debug_info['error'] else '✅ Sem erros'}
+**Football-Data.org:**
+🌐 Status: {debug_info['football_data']['status']}
+{'❌ Erro: ' + debug_info['football_data']['error'] if debug_info['football_data']['error'] else '✅ Sem erros'}
 
-💡 *TheSportsDB é 100% gratuita - Limite: 100 req/dia*
+**API-Football (RapidAPI):**
+🌐 Status: {debug_info['rapidapi']['status']}
+{'❌ Erro: ' + debug_info['rapidapi']['error'] if debug_info['rapidapi']['error'] else '✅ Sem erros'}
+
+💡 *Bot usa fallback automático - se uma falhar, tenta a outra*
 """
         await query.message.reply_text(debug_text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # --- ÚLTIMOS EVENTOS ---
+    # --- PRÓXIMOS JOGOS ---
     if data == "proximos_dias":
-        await query.message.reply_text("📊 Buscando últimos eventos...")
-        games = await engine.get_matches("soccer")
+        await query.message.reply_text("📊 Buscando próximos jogos...")
+        games = await engine.get_matches()
 
         if not games:
-            await query.message.reply_text("❌ Nenhum evento encontrado.")
+            await query.message.reply_text("❌ Nenhum jogo encontrado no momento.")
             return
 
-        message = "📊 **ÚLTIMOS EVENTOS**\n\n"
+        message = "📊 **PRÓXIMOS JOGOS**\n\n"
         for game in games:
             txt_odd = f"@{game['odd']}" if game['odd'] > 0 else "⏳ (S/ Odd)"
-            message += f"⏰ {game['time']} | 🏟 {game['match']}\n🏆 {game['league']}\n🎯 {game['tip']} | {txt_odd}\n\n"
+            message += f"⏰ {game['time']} | 🏟 {game['match']}\n🏆 {game['league']}\n🎯 {game['tip']} | {txt_odd}\n📡 {game['source']}\n\n"
 
         await enviar(context, message)
         await query.message.reply_text("✅ Postado!")
@@ -371,16 +469,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- TOP JOGOS E NBA ---
     await query.message.reply_text("🔎 Varrendo TODOS os mercados...")
 
-    games = await engine.get_matches("soccer")
+    games = await engine.get_matches()
 
     if not games:
-        await query.message.reply_text("❌ Nenhum evento encontrado no momento.")
+        await query.message.reply_text("❌ Nenhum jogo encontrado no momento.")
         return
 
     message = "🔥 **GRADE COMPLETA (V90)**\n\n"
     for game in games:
         txt_odd = f"@{game['odd']}" if game['odd'] > 0 else "⏳ (S/ Odd)"
-        message += f"⏰ {game['time']} | 🏟 {game['match']}\n🏆 {game['league']}\n🎯 {game['tip']} | {txt_odd}\n\n"
+        message += f"⏰ {game['time']} | 🏟 {game['match']}\n🏆 {game['league']}\n🎯 {game['tip']} | {txt_odd}\n📡 {game['source']}\n\n"
 
     await enviar(context, message)
     await query.message.reply_text("✅ Postado!")
@@ -404,7 +502,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
 
-    logger.info("Bot V90 iniciado com sucesso! (TheSportsDB)")
+    logger.info("Bot V90 iniciado com sucesso! (Dual API)")
     app.run_polling()
 
 
