@@ -4,6 +4,7 @@ import asyncio
 import feedparser
 import httpx
 import threading
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -14,194 +15,247 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- LOGS ---
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# --- CONFIGURAÇÕES ---
+# --- VARIÁVEIS ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY") 
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY") # A NOVA CHAVE ESTÁ AQUI
 PORT = int(os.getenv("PORT", 10000))
 
-# --- LISTA DE LIGAS REAIS PARA BUSCAR ---
-# A The Odds API exige que a gente busque liga por liga.
-# Infelizmente ela não cobre Estaduais (Carioca/Paulista) bem, mas cobre o resto do mundo.
-TARGET_LEAGUES = [
-    "basketball_nba",               # NBA
-    "soccer_uefa_champs_league",    # Champions League
-    "soccer_epl",                   # Premier League (Inglaterra)
-    "soccer_spain_la_liga",         # La Liga (Espanha)
-    "soccer_italy_serie_a",         # Serie A (Itália)
-    "soccer_germany_bundesliga",    # Bundesliga (Alemanha)
-    "soccer_france_ligue_one",      # Ligue 1 (França)
-    "soccer_conmebol_libertadores", # Libertadores
-    "soccer_brazil_campeonato_brasileiro_serie_a" # Brasileirão (Se tiver jogos)
+# --- FILTROS ---
+BLACKLIST_KEYWORDS = [
+    "WOMEN", "FEMININO", "FEM", "(W)", "LADIES", "GIRLS", "MULLER",
+    "U19", "U20", "U21", "U23", "U18", "U17", "SUB-20", "SUB 19", "SUB-19",
+    "SUB 20", "YOUTH", "JUNIORES", "JUVENIL", "RESERVE", "RES.", "AMATEUR", 
+    "REGIONAL", "SRL", "VIRTUAL", "SIMULATED", "ESOCCER", "BATTLE"
 ]
 
-# --- SERVER WEB ---
+# Lista VIP (Seus times preferidos ganham prioridade na busca de odds)
+VIP_TEAMS_LIST = [
+    "FLAMENGO", "PALMEIRAS", "BOTAFOGO", "FLUMINENSE", "SAO PAULO", "CORINTHIANS",
+    "VASCO", "CRUZEIRO", "ATLETICO MINEIRO", "INTERNACIONAL", "GREMIO", "BAHIA",
+    "FORTALEZA", "ATHLETICO", "SANTOS", "BRAGANTINO", "JUVENTUDE", "CUIABA", 
+    "GOIAS", "ATLETICO GO", "AMERICA MG", "REAL MADRID", "MANCHESTER CITY", 
+    "BAYERN", "INTER DE MILAO", "PSG", "CHELSEA", "ATLETICO DE MADRID", 
+    "BORUSSIA DORTMUND", "BENFICA", "JUVENTUS", "PORTO", "ARSENAL", "BARCELONA", 
+    "LIVERPOOL", "MILAN", "NAPOLI", "ROMA", "BOCA JUNIORS", "RIVER PLATE", 
+    "AL HILAL", "AL AHLY", "MONTERREY", "LAFC", "LEVERKUSEN", "SPORTING",
+    "SEVILLA", "WEST HAM", "FEYENOORD", "RB LEIPZIG", "PSV", "REAL BETIS", "BILBAO"
+]
+
+def normalize_name(name):
+    if not name: return ""
+    return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn').upper()
+
+# ================= SERVER WEB (KEEP ALIVE) =================
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V81 - REAL DATA ONLINE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V82 ONLINE")
 
 def run_web_server():
     HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
 
-# ================= MOTOR DE DADOS REAIS =================
-class RealDataEngine:
+# ================= MOTOR API-SPORTS (V82) =================
+class SportsEngine:
     def __init__(self):
-        self.base_url = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
+        self.headers = {"x-apisports-key": API_FOOTBALL_KEY}
+
+    def get_today_date(self):
+        # Garante o fuso horário correto do Brasil (UTC-3)
+        return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def get_matches(self, mode="soccer"):
-        """
-        Busca APENAS dados reais. Se falhar, retorna vazio.
-        Nada de simulação.
-        """
-        if not THE_ODDS_API_KEY:
-            return []
-
-        all_matches = []
+        host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
+        date_str = self.get_today_date()
         
-        # Define quais ligas buscar baseado no modo
-        if mode == "nba":
-            leagues_to_check = ["basketball_nba"]
-        else:
-            # Filtra apenas ligas de futebol da lista
-            leagues_to_check = [l for l in TARGET_LEAGUES if "soccer" in l]
-
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Para cada liga, faz uma busca (Limitado a 3 ligas por vez para não ser lento)
-            for league in leagues_to_check:
+        # 1. Busca AGENDA COMPLETA (Gasta 1 requisição)
+        url_fixtures = f"https://{host}/fixtures?date={date_str}"
+        if mode == "nba": url_fixtures += "&league=12&season=2025"
+        
+        async with httpx.AsyncClient(timeout=30) as client:
+            try:
+                r = await client.get(url_fixtures, headers=self.headers)
+                data = r.json()
+                
+                # Verifica erros da API (como chave expirada)
+                if isinstance(data, dict) and data.get("errors"):
+                    logger.error(f"Erro API: {data['errors']}")
+                    return []
+                    
+                all_games = data.get("response", [])
+            except Exception as e:
+                logger.error(f"Erro conexão: {e}")
+                return []
+            
+            relevant_games = []
+            
+            for item in all_games:
                 try:
-                    params = {
-                        "apiKey": THE_ODDS_API_KEY,
-                        "regions": "br,uk,eu",
-                        "markets": "h2h",
-                        "oddsFormat": "decimal"
-                    }
-                    r = await client.get(self.base_url.format(sport=league), params=params)
-                    data = r.json()
+                    h_name = item['teams']['home']['name']
+                    a_name = item['teams']['away']['name']
+                    fixture_id = item['fixture']['id']
+                    league_name = item['league']['name']
+                    
+                    h_norm = normalize_name(h_name)
+                    a_norm = normalize_name(a_name)
+                    full_name = f"{h_norm} {a_norm} {normalize_name(league_name)}"
 
-                    # Verifica se a API retornou erro de cota ou chave
-                    if isinstance(data, dict) and data.get("message"):
-                        logger.error(f"Erro na liga {league}: {data['message']}")
-                        continue
+                    # Filtro Anti-Lixo
+                    if any(bad in full_name for bad in BLACKLIST_KEYWORDS): continue
+                    
+                    # Sistema de Pontos para Priorizar a Busca de Odds
+                    score = 10 # Pontuação base
+                    
+                    # Se for time VIP (Cruzeiro, Flu, Real Madrid...), prioridade ALTA
+                    if any(vip in h_norm for vip in VIP_TEAMS_LIST) or any(vip in a_norm for vip in VIP_TEAMS_LIST):
+                        score += 5000
+                    
+                    # Flamengo sempre no topo
+                    if "FLAMENGO" in h_norm or "FLAMENGO" in a_norm: score += 10000
+                    
+                    if mode == "nba": score += 2000
 
-                    if not data: continue
+                    relevant_games.append({
+                        "id": fixture_id,
+                        "match": f"{h_name} x {a_name}",
+                        "league": league_name,
+                        "score": score
+                    })
+                except: continue
 
-                    # Processa os jogos encontrados
-                    for event in data:
-                        # Filtra jogos que já começaram (The Odds API as vezes manda live)
-                        commence_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                        if commence_time < datetime.now(timezone.utc): continue # Ignora jogos passados
+            # Ordena pelos mais importantes
+            relevant_games.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Se não achou nada
+            if not relevant_games: return []
 
-                        home = event['home_team']
-                        away = event['away_team']
-                        
-                        # Busca Odds
-                        odds = []
-                        bookie_name = "Bet"
-                        for b in event['bookmakers']:
-                            for m in b['markets']:
-                                if m['key'] == 'h2h':
-                                    odds = [o['price'] for o in m['outcomes']]
-                                    bookie_name = b['title']
-                                    break
-                            if odds: break
-                        
-                        if not odds: continue
-                        
-                        # Lógica simples de Tip (Favorito)
-                        best_odd = max(odds)
-                        fav_odd = min(odds)
-                        
-                        tip = "Jogo Equilibrado"
-                        if fav_odd < 1.50: tip = "Super Favorito"
-                        elif fav_odd < 1.90: tip = "Favorito Vence"
+            # 2. Busca ODDS apenas para os TOP 6 (Para economizar a chave)
+            final_list = []
+            top_games = relevant_games[:6] 
+            
+            for game in top_games:
+                odd_val, odd_tip = await self._get_odds_for_fixture(client, host, game['id'])
+                final_list.append({
+                    "match": game['match'],
+                    "league": game['league'],
+                    "odd": odd_val,
+                    "tip": odd_tip
+                })
+            
+            return final_list
 
-                        # Formata o nome da liga para ficar bonito
-                        league_display = league.replace("soccer_", "").replace("basketball_", "").replace("_", " ").title()
+    async def _get_odds_for_fixture(self, client, host, fixture_id):
+        try:
+            # Gasta +1 requisição por jogo
+            url = f"https://{host}/odds?fixture={fixture_id}&bookmaker=6" # Bet365
+            r = await client.get(url, headers=self.headers)
+            data = r.json().get("response", [])
+            
+            if data:
+                odds = data[0]['bookmakers'][0]['bets'][0]['values']
+                fav = sorted(odds, key=lambda x: float(x['odd']))[0]
+                return float(fav['odd']), fav['value']
+            
+            return 0.0, "Aguardando Odd"
+        except:
+            return 0.0, "Indisponível"
 
-                        all_matches.append({
-                            "match": f"{home} x {away}",
-                            "odd": fav_odd, # Mostra a odd do favorito para segurança
-                            "league": league_display,
-                            "tip": tip,
-                            "bookie": bookie_name
-                        })
+engine = SportsEngine()
 
-                except Exception as e:
-                    logger.error(f"Erro ao buscar {league}: {e}")
-
-        # Retorna os jogos encontrados
-        return all_matches[:10] # Top 10 jogos reais
-
-engine = RealDataEngine()
-
-# --- HANDLERS ---
+# --- ENVIO ---
 async def enviar_para_canal(context, text):
     if not CHANNEL_ID: return
     try:
         await context.bot.send_message(chat_id=CHANNEL_ID, text=text)
-    except Exception as e:
-        logger.error(f"Erro envio: {e}")
+    except: pass
 
+# --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("🔥 Top Jogos (Europa)", callback_data="top_jogos"),
+        [InlineKeyboardButton("🔥 Top Jogos", callback_data="top_jogos"),
          InlineKeyboardButton("🏀 NBA Hoje", callback_data="nba_hoje")],
-        [InlineKeyboardButton("💣 Múltipla Real", callback_data="multi_odd"),
-         InlineKeyboardButton("🏥 Notícias GE", callback_data="news")]
+        [InlineKeyboardButton("💣 Troco do Pão", callback_data="troco_pao"),
+         InlineKeyboardButton("🚀 Múltipla", callback_data="multi_odd")],
+        [InlineKeyboardButton("🏥 Notícias (No Fake)", callback_data="news")]
     ]
-    await update.message.reply_text("🦁 **PAINEL V81 - DADOS REAIS**\nConectado à The Odds API (Europa/NBA).", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V82 - CHAVE NOVA**\nBuscando Estaduais e Elite Europeia.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-    
-    # === NOTÍCIAS (GE - Real) ===
+    msg = ""
+
+    # === NOTÍCIAS (V77 - Filtradas) ===
     if data == "news":
-        await query.edit_message_text("⏳ Buscando notícias no GE...")
+        await query.edit_message_text("⏳ Filtrando Notícias...")
         def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
         feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
         
-        whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação", "titular"]
-        relevant = [e for e in feed.entries if any(w in e.title.lower() for w in whitelist)]
+        whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação", "titular", "dúvida", "sentiu"]
+        blacklist = ["bbb", "festa", "namorada", "traição", "polêmica", "cabelo"]
+        
+        relevant = []
+        for e in feed.entries:
+            title_lower = e.title.lower()
+            if any(w in title_lower for w in whitelist) and not any(b in title_lower for b in blacklist):
+                relevant.append(e)
+                
         if not relevant: relevant = feed.entries[:3]
         
-        msg = "🏥 **BOLETIM REAL (GE)**\n\n"
+        msg = "🏥 **BOLETIM DO MERCADO & DM**\n\n"
         for entry in relevant[:5]:
             msg += f"⚠️ {entry.title}\n🔗 {entry.link}\n\n"
         
         await enviar_para_canal(context, msg)
-        await query.message.reply_text("✅ Notícias enviadas!")
+        await query.message.reply_text("✅ Boletim enviado!")
         return
 
-    # === JOGOS (The Odds API - Real) ===
-    await query.message.reply_text("🔎 Varrendo ligas internacionais...")
+    # === JOGOS ===
+    await query.message.reply_text("🔎 Buscando na API (Modo Econômico)...")
     
     mode = "nba" if "nba" in data else "soccer"
     games = await engine.get_matches(mode)
 
     if not games:
-        await query.message.reply_text("❌ Nenhum jogo encontrado nas ligas monitoradas (Europa/NBA) para hoje/amanhã.\n\n⚠️ Obs: Esta API não cobre Estaduais do Brasil.")
+        await query.message.reply_text("❌ Nenhum jogo relevante encontrado (ou a Chave Nova falhou). Tente mais tarde.")
         return
 
     if data == "top_jogos" or data == "nba_hoje":
         emoji = "🏀" if mode == "nba" else "🔥"
-        msg = f"{emoji} **GRADE REAL ({len(games)} Jogos)**\n\n"
+        msg = f"{emoji} **GRADE DE HOJE**\n\n"
         for g in games:
-            msg += f"🏟 {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | @{g['odd']} ({g['bookie']})\n\n"
+            txt_odd = f"@{g['odd']}" if g['odd'] > 0 else "⏳ Aguardando"
+            msg += f"🏟 {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | {txt_odd}\n\n"
+
+    elif data == "troco_pao":
+        valid = [g for g in games if g['odd'] > 1.2]
+        sel = valid[:3]
+        if not sel:
+            msg = "❌ Sem odds suficientes para múltipla."
+        else:
+            total = 1.0
+            msg = "💣 **TROCO DO PÃO (MÚLTIPLA)**\n\n"
+            for g in sel:
+                total *= g['odd']
+                msg += f"📍 {g['match']} (@{g['odd']})\n"
+            msg += f"\n💰 **ODD TOTAL: @{total:.2f}**"
 
     elif data == "multi_odd":
-        if len(games) < 4:
-            msg = "❌ Poucos jogos reais encontrados para montar múltipla."
+        valid = [g for g in games if g['odd'] > 1.2]
+        sel = valid[:5]
+        if len(sel) < 4:
+            msg = "❌ Sem jogos suficientes para All-In."
         else:
-            sel = games[:4]
             total = 1.0
-            msg = "🚀 **MÚLTIPLA REAL (EUROPA/NBA)**\n\n"
+            msg = "🚀 **MÚLTIPLA DE VALOR**\n\n"
             for g in sel:
                 total *= g['odd']
                 msg += f"✅ {g['match']} (@{g['odd']})\n"
@@ -218,7 +272,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
-    print("✅ Bot V81 - Real Data Rodando...")
+    print("✅ Bot V82 - Chave Nova Rodando...")
     app.run_polling()
 
 if __name__ == "__main__":
