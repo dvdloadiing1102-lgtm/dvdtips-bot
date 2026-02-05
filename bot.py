@@ -1,226 +1,169 @@
 import os
-import logging
 import httpx
 import feedparser
-from datetime import datetime, timedelta, timezone
-
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ================= LOG =================
-logging.basicConfig(level=logging.INFO)
-
-# ================= ENV =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+API_NBA_KEY = os.getenv("API_NBA_KEY")
 
-API_FOOTBALL_URL = "https://v3.football.api-sports.io/fixtures"
-ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer/odds"
+FOOTBALL_URL = "https://v3.football.api-sports.io/fixtures?next=8"
+NBA_URL = "https://api-nba-v1.p.rapidapi.com/games?next=3"
 
-VIP_TEAMS = [
-    "flamengo", "corinthians", "real madrid", "barcelona",
-    "arsenal", "manchester city", "psg", "chelsea",
-    "liverpool", "bayern", "juventus", "milan", "inter"
-]
+NEWS_FEED = "https://www.espn.com/espn/rss/soccer/news"
 
-# ================= FOOTBALL =================
-async def fetch_today_games():
-    if not API_FOOTBALL_KEY:
-        return []
+# ---------------- START ---------------- #
 
-    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buttons = [
+        [InlineKeyboardButton("⚽ Jogos Futebol + NBA", callback_data="games")],
+        [InlineKeyboardButton("🔥 Múltipla Odd 20", callback_data="multi")],
+        [InlineKeyboardButton("📰 Notícias Futebol", callback_data="news")]
+    ]
+    await update.message.reply_text("Escolha uma opção:", reply_markup=InlineKeyboardMarkup(buttons))
+
+# ---------------- JOGOS ---------------- #
+
+async def get_games():
     games = []
 
-    now_br = datetime.now(timezone.utc) - timedelta(hours=3)
-    today = now_br.date().isoformat()
-
-    params = {"date": today}
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(API_FOOTBALL_URL, headers=headers, params=params)
-        data = r.json()
-
-        fixtures = data.get("response", [])
-
-        for f in fixtures:
-            home = f["teams"]["home"]["name"]
-            away = f["teams"]["away"]["name"]
-            league = f["league"]["name"]
-            date_str = f["fixture"]["date"]
-
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")) - timedelta(hours=3)
-
-            full = f"{home} x {away}".lower()
-            score = 100
-
-            if any(v in full for v in VIP_TEAMS):
-                score += 500
-
-            games.append({
-                "match": f"{home} x {away}",
-                "league": league,
-                "time": dt.strftime("%H:%M"),
-                "score": score
-            })
-
-    games.sort(key=lambda x: x["score"], reverse=True)
-    return games[:10]
-
-# ================= NBA =================
-async def fetch_nba():
-    if not THE_ODDS_API_KEY:
-        return []
-
-    url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(url, params={"apiKey": THE_ODDS_API_KEY})
-        return r.json()
-
-# ================= NEWS =================
-def fetch_news():
-    feed = feedparser.parse("https://www.espn.com/espn/rss/news")
-    news = []
-
-    for n in feed.entries[:5]:
-        news.append({"title": n.title, "link": n.link})
-
-    return news
-
-# ================= START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [
-            InlineKeyboardButton("🔥 Top Jogos", callback_data="top"),
-            InlineKeyboardButton("🏀 NBA Hoje", callback_data="nba")
-        ],
-        [
-            InlineKeyboardButton("💣 Troco do Pão", callback_data="troco"),
-            InlineKeyboardButton("🦁 ALL IN SUPREMO", callback_data="allin")
-        ],
-        [
-            InlineKeyboardButton("📊 ROI", callback_data="roi"),
-            InlineKeyboardButton("📰 Notícias", callback_data="news")
-        ]
-    ]
-
-    await update.message.reply_text(
-        "🦁 **PAINEL ALL IN SUPREMO — MODO ELITE**",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# ================= POST CHANNEL =================
-async def post_channel(context, text):
-    if CHANNEL_ID:
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
-
-# ================= BUTTONS =================
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    # TOP JOGOS
-    if q.data == "top":
-        games = await fetch_today_games()
-
-        if not games:
-            await q.message.reply_text("⚠️ Nenhum jogo real encontrado hoje.")
-            return
-
-        msg = "🔥 **TOP JOGOS HOJE**\n\n"
-
-        for g in games:
-            msg += f"⚽ {g['match']}\n🏆 {g['league']}\n⏰ {g['time']}\n\n"
-
-        await q.message.reply_text(msg, parse_mode="Markdown")
-        await post_channel(context, msg)
-
-    # NBA
-    elif q.data == "nba":
-        nba = await fetch_nba()
-
-        if not nba:
-            await q.message.reply_text("🏀 Sem jogos NBA hoje.")
-            return
-
-        msg = "🏀 **NBA HOJE**\n\n"
-
-        for g in nba[:3]:
-            msg += f"🏀 {g['home_team']} x {g['away_team']}\n\n"
-
-        await q.message.reply_text(msg)
-        await post_channel(context, msg)
-
-    # ALL IN
-    elif q.data == "allin":
-        games = await fetch_today_games()
-
-        if not games:
-            await q.message.reply_text("⚠️ Nenhum jogo confiável hoje.")
-            return
-
-        g = games[0]
-
-        msg = (
-            "🦁 **ALL IN SUPREMO — PICK DO DIA**\n\n"
-            f"🔥 {g['match']}\n"
-            f"🏆 {g['league']}\n"
-            f"🎯 Pick: Favorito vence\n"
-            f"💰 Confiança: ALTÍSSIMA\n"
+    async with httpx.AsyncClient() as client:
+        foot = await client.get(
+            FOOTBALL_URL,
+            headers={"x-apisports-key": API_FOOTBALL_KEY}
         )
 
-        awaitawait = await q.message.reply_text(msg, parse_mode="Markdown")
-        await post_channel(context, msg)
+        if foot.status_code == 200:
+            for g in foot.json()["response"][:8]:
+                home = g["teams"]["home"]["name"]
+                away = g["teams"]["away"]["name"]
+                games.append(f"⚽ {home} vs {away}")
 
-    # TROCO DO PÃO
-    elif q.data == "troco":
-        games = await fetch_today_games()
+        nba = await client.get(
+            NBA_URL,
+            headers={
+                "X-RapidAPI-Key": API_NBA_KEY,
+                "X-RapidAPI-Host": "api-nba-v1.p.rapidapi.com"
+            }
+        )
 
-        if not games:
-            await q.message.reply_text("⚠️ Nenhum jogo hoje.")
-            return
+        if nba.status_code == 200:
+            for g in nba.json()["response"][:3]:
+                home = g["teams"]["home"]["name"]
+                away = g["teams"]["visitors"]["name"]
+                games.append(f"🏀 {home} vs {away}")
 
-        picks = games[:3]
+    return games
 
-        msg = "💣 **TROCO DO PÃO — MÚLTIPLA**\n\n"
-        odd = 1
 
-        for g in picks:
-            msg += f"⚽ {g['match']} @1.50\n"
-            odd *= 1.5
+async def games_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        msg += f"\n🔥 Odd Total aprox: @{round(odd, 2)}"
+    games = await get_games()
+    text = "🎯 **Jogos Reais Hoje:**\n\n" + "\n".join(games)
 
-        await q.message.reply_text(msg)
-        await post_channel(context, msg)
+    buttons = [[InlineKeyboardButton("📢 POSTAR NO CANAL", callback_data="post_games")]]
 
-    # ROI
-    elif q.data == "roi":
-        await q.message.reply_text("📊 ROI será ativado na próxima versão.")
+    context.user_data["games_text"] = text
 
-    # NEWS
-    elif q.data == "news":
-        news = fetch_news()
-        msg = "📰 **NOTÍCIAS DO FUTEBOL**\n\n"
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
 
-        for n in news:
-            msg += f"🚨 {n['title']}\n🔗 {n['link']}\n\n"
+# ---------------- POSTAR JOGOS ---------------- #
 
-        await q.message.reply_text(msg)
-        await post_channel(context, msg)
+async def post_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-# ================= MAIN =================
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    text = context.user_data.get("games_text", "Erro ao gerar jogos")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(buttons))
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
 
-    logging.info("🦁 BOT ONLINE — ALL IN SUPREMO")
-    app.run_polling(close_loop=False)
+    await query.edit_message_text("✅ Jogos postados no canal!")
 
-if __name__ == "__main__":
-    main()
+# ---------------- MÚLTIPLA ---------------- #
+
+async def multi_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    picks = [
+        "⚽ Time A vence",
+        "⚽ Over 2.5 gols",
+        "⚽ Ambas marcam",
+        "🏀 Vitória mandante",
+        "⚽ Handicap -1",
+        "⚽ Over escanteios",
+        "⚽ Vitória fora",
+        "⚽ Under 3.5",
+        "🏀 Over pontos",
+        "⚽ Ambas NÃO marcam"
+    ]
+
+    text = "🔥 **MÚLTIPLA ODD ~20**\n\n" + "\n".join(picks)
+
+    buttons = [[InlineKeyboardButton("📢 POSTAR NO CANAL", callback_data="post_multi")]]
+
+    context.user_data["multi_text"] = text
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+
+async def post_multi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    text = context.user_data.get("multi_text", "Erro")
+
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
+
+    await query.edit_message_text("✅ Múltipla postada!")
+
+# ---------------- NOTÍCIAS ---------------- #
+
+async def news_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    feed = feedparser.parse(NEWS_FEED)
+
+    news_list = []
+    for entry in feed.entries[:5]:
+        news_list.append(f"📰 {entry.title}")
+
+    text = "📰 **Notícias Futebol:**\n\n" + "\n".join(news_list)
+
+    buttons = [[InlineKeyboardButton("📢 POSTAR NO CANAL", callback_data="post_news")]]
+
+    context.user_data["news_text"] = text
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+
+
+async def post_news(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    text = context.user_data.get("news_text", "Erro")
+
+    await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
+
+    await query.edit_message_text("✅ Notícias postadas!")
+
+# ---------------- MAIN ---------------- #
+
+app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(games_button, pattern="games"))
+app.add_handler(CallbackQueryHandler(post_games, pattern="post_games"))
+
+app.add_handler(CallbackQueryHandler(multi_button, pattern="multi"))
+app.add_handler(CallbackQueryHandler(post_multi, pattern="post_multi"))
+
+app.add_handler(CallbackQueryHandler(news_button, pattern="news"))
+app.add_handler(CallbackQueryHandler(post_news, pattern="post_news"))
+
+app.run_polling()
