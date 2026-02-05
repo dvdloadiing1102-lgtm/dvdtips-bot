@@ -30,7 +30,7 @@ PORT = int(os.getenv("PORT", 10000))
 
 # APIs
 FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN")  # football-data.org
-THEODDS_KEY = os.getenv("THEODDS_KEY")  # The Odds API
+THE_ODDS_API_KEY = os.getenv("THE_ODD_API_KEY")  # The Odds API
 
 SENT_LINKS = set()
 
