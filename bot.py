@@ -125,83 +125,149 @@ class SportsEngine:
     def __init__(self):
         self.headers = {"x-apisports-key": API_FOOTBALL_KEY}
 
+    def get_dates_range(self, days_offset=0):
+        """Retorna um range de datas para buscar (hoje e próximos dias)."""
+        dates = []
+        for i in range(days_offset, days_offset + 3):  # Busca 3 dias
+            date = datetime.now(timezone.utc) - timedelta(hours=3) + timedelta(days=i)
+            dates.append(date.strftime("%Y-%m-%d"))
+        return dates
+
     def get_today_date(self):
         """Retorna a data de hoje em formato YYYY-MM-DD (timezone São Paulo)."""
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
-    async def get_matches(self, mode="soccer"):
-        """Busca jogos de hoje com odds disponíveis."""
-        host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
-        date_str = self.get_today_date()
+    async def test_api_connection(self):
+        """Testa conexão com a API e retorna informações de debug."""
+        debug_info = {
+            "api_key_configured": bool(API_FOOTBALL_KEY),
+            "api_key_length": len(API_FOOTBALL_KEY) if API_FOOTBALL_KEY else 0,
+            "test_date": self.get_today_date(),
+            "status": "❌ Erro",
+            "error": None,
+            "response_code": None,
+            "fixtures_found": 0
+        }
 
-        # 1. Busca AGENDA
-        url = f"https://{host}/fixtures?date={date_str}&timezone=America/Sao_Paulo"
-        if mode == "nba":
-            url += "&league=12&season=2025"
+        if not API_FOOTBALL_KEY:
+            debug_info["error"] = "API_FOOTBALL_KEY não configurada"
+            logger.error("API_FOOTBALL_KEY não configurada!")
+            return debug_info
+
+        try:
+            url = f"https://v3.football.api-sports.io/fixtures?date={debug_info['test_date']}&timezone=America/Sao_Paulo"
+            logger.info(f"Testando API com URL: {url}")
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(url, headers=self.headers)
+                debug_info["response_code"] = response.status_code
+
+                if response.status_code == 200:
+                    data = response.json()
+                    debug_info["status"] = "✅ Conectado"
+                    debug_info["fixtures_found"] = len(data.get("response", []))
+                    logger.info(f"API respondeu com sucesso. Fixtures encontrados: {debug_info['fixtures_found']}")
+                else:
+                    debug_info["error"] = f"HTTP {response.status_code}"
+                    logger.error(f"Erro HTTP: {response.status_code}")
+
+                # Verifica se há erros na resposta
+                if data.get("errors"):
+                    debug_info["error"] = str(data.get("errors"))
+                    logger.error(f"Erros da API: {data.get('errors')}")
+
+        except Exception as e:
+            debug_info["error"] = str(e)
+            logger.error(f"Erro ao testar API: {e}")
+
+        return debug_info
+
+    async def get_matches(self, mode="soccer", days_offset=0):
+        """Busca jogos com odds disponíveis (busca múltiplos dias se necessário)."""
+        host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
+        dates = self.get_dates_range(days_offset)
+
+        logger.info(f"Buscando jogos para as datas: {dates}")
 
         async with httpx.AsyncClient(timeout=30) as client:
-            try:
-                response = await client.get(url, headers=self.headers)
-                data = response.json()
+            all_games = []
 
-                if data.get("errors"):
-                    logger.warning(f"Erro na API: {data.get('errors')}")
-                    return []
-
-                response_list = data.get("response", [])
-
-            except Exception as e:
-                logger.error(f"Erro ao buscar jogos: {e}")
-                return []
-
-            games_list = []
-
-            for item in response_list:
+            # Tenta buscar em múltiplas datas
+            for date_str in dates:
                 try:
-                    home_team = item['teams']['home']['name']
-                    away_team = item['teams']['away']['name']
-                    fixture_id = item['fixture']['id']
-                    league = item['league']['name']
-                    match_time = datetime.fromisoformat(item['fixture']['date']).strftime("%H:%M")
-                    full_name = normalize_name(f"{home_team} {away_team} {league}")
+                    url = f"https://{host}/fixtures?date={date_str}&timezone=America/Sao_Paulo"
+                    if mode == "nba":
+                        url += "&league=12&season=2025"
 
-                    # Filtra categorias indesejadas
-                    if "WOMEN" in full_name or "U20" in full_name:
+                    logger.info(f"Buscando jogos para {date_str}...")
+                    response = await client.get(url, headers=self.headers)
+                    data = response.json()
+
+                    if data.get("errors"):
+                        logger.warning(f"Erro na API para {date_str}: {data.get('errors')}")
                         continue
 
-                    # Calcula score de prioridade
-                    score = 10
-                    if any(v in normalize_name(home_team) for v in VIP_TEAMS_LIST) or \
-                       any(v in normalize_name(away_team) for v in VIP_TEAMS_LIST):
-                        score += 5000
+                    response_list = data.get("response", [])
+                    logger.info(f"Encontrados {len(response_list)} fixtures para {date_str}")
 
-                    if "FLAMENGO" in full_name:
-                        score += 10000
+                    games_list = []
 
-                    if mode == "nba":
-                        score += 2000
+                    for item in response_list:
+                        try:
+                            home_team = item['teams']['home']['name']
+                            away_team = item['teams']['away']['name']
+                            fixture_id = item['fixture']['id']
+                            league = item['league']['name']
+                            match_time = datetime.fromisoformat(item['fixture']['date']).strftime("%H:%M")
+                            full_name = normalize_name(f"{home_team} {away_team} {league}")
 
-                    games_list.append({
-                        "id": fixture_id,
-                        "match": f"{home_team} x {away_team}",
-                        "league": league,
-                        "time": match_time,
-                        "score": score,
-                        "home": home_team,
-                        "away": away_team
-                    })
+                            # Filtra categorias indesejadas
+                            if "WOMEN" in full_name or "U20" in full_name:
+                                logger.debug(f"Filtrando: {full_name}")
+                                continue
+
+                            # Calcula score de prioridade
+                            score = 10
+                            if any(v in normalize_name(home_team) for v in VIP_TEAMS_LIST) or \
+                               any(v in normalize_name(away_team) for v in VIP_TEAMS_LIST):
+                                score += 5000
+
+                            if "FLAMENGO" in full_name:
+                                score += 10000
+
+                            if mode == "nba":
+                                score += 2000
+
+                            games_list.append({
+                                "id": fixture_id,
+                                "match": f"{home_team} x {away_team}",
+                                "league": league,
+                                "time": match_time,
+                                "date": date_str,
+                                "score": score,
+                                "home": home_team,
+                                "away": away_team
+                            })
+
+                        except Exception as e:
+                            logger.debug(f"Erro ao processar jogo: {e}")
+                            continue
+
+                    all_games.extend(games_list)
 
                 except Exception as e:
-                    logger.debug(f"Erro ao processar jogo: {e}")
+                    logger.error(f"Erro ao buscar jogos para {date_str}: {e}")
                     continue
 
-            # Ordena por score e pega top 8
-            games_list.sort(key=lambda x: x['score'], reverse=True)
-            top_games = games_list[:8]
-
-            if not top_games:
-                logger.info("Nenhum jogo encontrado para hoje")
+            if not all_games:
+                logger.warning("Nenhum jogo encontrado em nenhuma data")
                 return []
+
+            # Ordena por score e pega top 8
+            all_games.sort(key=lambda x: x['score'], reverse=True)
+            top_games = all_games[:8]
+
+            logger.info(f"Top 8 jogos selecionados: {len(top_games)}")
 
             final_list = []
 
@@ -213,6 +279,7 @@ class SportsEngine:
                     "match": game['match'],
                     "league": game['league'],
                     "time": game['time'],
+                    "date": game['date'],
                     "odd": odd_val,
                     "tip": tip_str
                 })
@@ -300,6 +367,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("🔥 Top Jogos (Scanner)", callback_data="top_jogos"),
             InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")
+        ],
+        [
+            InlineKeyboardButton("🔧 Testar API", callback_data="test_api"),
+            InlineKeyboardButton("📊 Próximos Dias", callback_data="proximos_dias")
         ]
     ]
     await update.message.reply_text(
@@ -315,6 +386,45 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
+    # --- TESTE DE API ---
+    if data == "test_api":
+        await query.message.reply_text("🔧 Testando conexão com a API...")
+        debug_info = await engine.test_api_connection()
+
+        debug_text = f"""
+🔧 **TESTE DE API**
+
+✅ API Key Configurada: {'Sim' if debug_info['api_key_configured'] else 'Não'}
+📏 Tamanho da Chave: {debug_info['api_key_length']} caracteres
+📅 Data Testada: {debug_info['test_date']}
+🌐 Status: {debug_info['status']}
+📡 Código HTTP: {debug_info['response_code'] or 'N/A'}
+⚽ Fixtures Encontrados: {debug_info['fixtures_found']}
+
+{'❌ Erro: ' + debug_info['error'] if debug_info['error'] else '✅ Sem erros'}
+"""
+        await query.message.reply_text(debug_text, parse_mode=ParseMode.MARKDOWN)
+        return
+
+    # --- PRÓXIMOS DIAS ---
+    if data == "proximos_dias":
+        await query.message.reply_text("📊 Buscando jogos dos próximos 3 dias...")
+        games = await engine.get_matches("soccer", days_offset=0)
+
+        if not games:
+            await query.message.reply_text("❌ Nenhum jogo encontrado nos próximos 3 dias.")
+            return
+
+        message = "📊 **JOGOS PRÓXIMOS 3 DIAS**\n\n"
+        for game in games:
+            txt_odd = f"@{game['odd']}" if game['odd'] > 0 else "⏳ (S/ Odd)"
+            message += f"📅 {game['date']} | ⏰ {game['time']} | 🏟 {game['match']}\n🏆 {game['league']}\n🎯 {game['tip']} | {txt_odd}\n\n"
+
+        await enviar(context, message)
+        await query.message.reply_text("✅ Postado!")
+        return
+
+    # --- TOP JOGOS E NBA ---
     await query.message.reply_text("🔎 Varrendo TODOS os mercados...")
 
     mode = "nba" if "nba" in data else "soccer"
