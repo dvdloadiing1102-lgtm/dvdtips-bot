@@ -5,12 +5,7 @@ import feedparser
 from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ================= LOG =================
 logging.basicConfig(level=logging.INFO)
@@ -26,12 +21,15 @@ ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer/odds"
 
 VIP_TEAMS = [
     "flamengo", "corinthians", "real madrid", "barcelona",
-    "arsenal", "manchester city", "psg", "chelsea", "liverpool",
-    "bayern", "juventus", "milan", "inter"
+    "arsenal", "manchester city", "psg", "chelsea",
+    "liverpool", "bayern", "juventus", "milan", "inter"
 ]
 
-# ================= FETCH FOOTBALL =================
+# ================= FOOTBALL =================
 async def fetch_today_games():
+    if not API_FOOTBALL_KEY:
+        return []
+
     headers = {"x-apisports-key": API_FOOTBALL_KEY}
     games = []
 
@@ -43,6 +41,7 @@ async def fetch_today_games():
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(API_FOOTBALL_URL, headers=headers, params=params)
         data = r.json()
+
         fixtures = data.get("response", [])
 
         for f in fixtures:
@@ -69,28 +68,25 @@ async def fetch_today_games():
     games.sort(key=lambda x: x["score"], reverse=True)
     return games[:10]
 
-# ================= FETCH ODDS =================
-async def fetch_odds():
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.get(
-            ODDS_URL,
-            params={"apiKey": THE_ODDS_API_KEY, "regions": "eu"}
-        )
-        return r.json()
-
-# ================= FETCH NBA =================
+# ================= NBA =================
 async def fetch_nba():
+    if not THE_ODDS_API_KEY:
+        return []
+
     url = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
+
     async with httpx.AsyncClient(timeout=20) as client:
         r = await client.get(url, params={"apiKey": THE_ODDS_API_KEY})
         return r.json()
 
-# ================= FETCH NEWS =================
+# ================= NEWS =================
 def fetch_news():
     feed = feedparser.parse("https://www.espn.com/espn/rss/news")
     news = []
+
     for n in feed.entries[:5]:
         news.append({"title": n.title, "link": n.link})
+
     return news
 
 # ================= START =================
@@ -116,11 +112,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ================= POST TO CHANNEL =================
+# ================= POST CHANNEL =================
 async def post_channel(context, text):
-    await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
+    if CHANNEL_ID:
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode="Markdown")
 
-# ================= BUTTON HANDLER =================
+# ================= BUTTONS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -128,6 +125,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # TOP JOGOS
     if q.data == "top":
         games = await fetch_today_games()
+
+        if not games:
+            await q.message.reply_text("⚠️ Nenhum jogo real encontrado hoje.")
+            return
+
         msg = "🔥 **TOP JOGOS HOJE**\n\n"
 
         for g in games:
@@ -139,6 +141,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # NBA
     elif q.data == "nba":
         nba = await fetch_nba()
+
+        if not nba:
+            await q.message.reply_text("🏀 Sem jogos NBA hoje.")
+            return
+
         msg = "🏀 **NBA HOJE**\n\n"
 
         for g in nba[:3]:
@@ -150,6 +157,11 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ALL IN
     elif q.data == "allin":
         games = await fetch_today_games()
+
+        if not games:
+            await q.message.reply_text("⚠️ Nenhum jogo confiável hoje.")
+            return
+
         g = games[0]
 
         msg = (
@@ -160,12 +172,17 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 Confiança: ALTÍSSIMA\n"
         )
 
-        await q.message.reply_text(msg, parse_mode="Markdown")
+        awaitawait = await q.message.reply_text(msg, parse_mode="Markdown")
         await post_channel(context, msg)
 
     # TROCO DO PÃO
     elif q.data == "troco":
         games = await fetch_today_games()
+
+        if not games:
+            await q.message.reply_text("⚠️ Nenhum jogo hoje.")
+            return
+
         picks = games[:3]
 
         msg = "💣 **TROCO DO PÃO — MÚLTIPLA**\n\n"
@@ -182,8 +199,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ROI
     elif q.data == "roi":
-        msg = "📊 ROI Tracker ativo — relatório em breve"
-        await q.message.reply_text(msg)
+        await q.message.reply_text("📊 ROI será ativado na próxima versão.")
 
     # NEWS
     elif q.data == "news":
@@ -203,7 +219,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
 
-    logging.info("🦁 BOT ALL IN SUPREMO ONLINE — MODO ELITE")
+    logging.info("🦁 BOT ONLINE — ALL IN SUPREMO")
     app.run_polling(close_loop=False)
 
 if __name__ == "__main__":
