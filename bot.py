@@ -16,7 +16,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 
 # --- LOGS ---
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime )s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ PORT = int(os.getenv("PORT", 10000))
 
 # APIs
 FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN")  # football-data.org
-THE_ODDS_API_KEY = os.getenv("THE_ODD_API_KEY")  # The Odds API
+THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")  # The Odds API (Corrigido!)
 
 SENT_LINKS = set()
 
@@ -83,7 +83,7 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
     """Busca e envia notícias de futebol periodicamente."""
     try:
         def get_feed():
-            return feedparser.parse("https://ge.globo.com/rss/ge/")
+            return feedparser.parse("https://ge.globo.com/rss/ge/" )
 
         feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
 
@@ -131,9 +131,9 @@ class SportsEngine:
         self.football_data_token = FOOTBALL_DATA_TOKEN
         
         self.theodds_url = "https://api.the-odds-api.com/v4"
-        self.theodds_key = THEODDS_KEY
+        self.theodds_key = THE_ODDS_API_KEY
 
-    def get_today_date(self):
+    def get_today_date(self ):
         """Retorna a data de hoje em formato YYYY-MM-DD (timezone São Paulo)."""
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
@@ -151,7 +151,7 @@ class SportsEngine:
                 headers = {"X-Auth-Token": self.football_data_token}
                 url = f"{self.football_data_url}/competitions"
                 
-                async with httpx.AsyncClient(timeout=30) as client:
+                async with httpx.AsyncClient(timeout=30 ) as client:
                     response = await client.get(url, headers=headers)
                     
                     if response.status_code == 200:
@@ -171,7 +171,7 @@ class SportsEngine:
                 url = f"{self.theodds_url}/sports"
                 params = {"apiKey": self.theodds_key}
                 
-                async with httpx.AsyncClient(timeout=30) as client:
+                async with httpx.AsyncClient(timeout=30 ) as client:
                     response = await client.get(url, params=params)
                     
                     if response.status_code == 200:
@@ -202,7 +202,7 @@ class SportsEngine:
                 "oddsFormat": "decimal"
             }
             
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30 ) as client:
                 response = await client.get(url, params=params)
                 
                 if response.status_code == 200:
@@ -255,7 +255,7 @@ class SportsEngine:
             all_games = []
             today = self.get_today_date()
             
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30 ) as client:
                 for comp_id in competition_ids:
                     try:
                         url = f"{self.football_data_url}/competitions/{comp_id}/matches"
