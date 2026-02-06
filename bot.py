@@ -19,25 +19,28 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# --- CONFIGURAÇÕES E CHAVES ---
+# --- CONFIGURAÇÕES ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# AS 3 CHAVES (Se alguma faltar, o bot avisa no teste, mas não para)
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")     # Principal (Estaduais/NBA)
-FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN") # Reserva Agenda
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")     # Reserva Odds
+# CHAVES
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN")
+THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 
 SENT_LINKS = set()
 
-# Times VIP
-VIP_TEAMS_LIST = [
-    "FLAMENGO", "PALMEIRAS", "BOTAFOGO", "FLUMINENSE", "SAO PAULO", "CORINTHIANS",
-    "VASCO", "CRUZEIRO", "ATLETICO MINEIRO", "INTERNACIONAL", "GREMIO", "BAHIA",
-    "FORTALEZA", "ATHLETICO", "SANTOS", "BRAGANTINO", "REAL MADRID", "MANCHESTER CITY", 
-    "BAYERN", "PSG", "CHELSEA", "LIVERPOOL", "ARSENAL", "BARCELONA", "LAKERS", "CELTICS",
-    "WARRIORS", "HEAT", "BUCKS", "SUNS"
+TIER_1_LEAGUES = [
+    "CHAMPIONS LEAGUE", "LIBERTADORES", "PREMIER LEAGUE", "LA LIGA", 
+    "SERIE A", "BUNDESLIGA", "LIGUE 1", "BRASILEIRO SERIE A", 
+    "COPA DO BRASIL", "SUDAMERICANA", "PAULISTA", "CARIOCA"
+]
+
+VIP_TEAMS = [
+    "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO",
+    "REAL MADRID", "BARCELONA", "MANCHESTER CITY", "LIVERPOOL", "ARSENAL",
+    "PSG", "BAYERN", "INTER MIAMI", "AL NASSR", "LAKERS", "CELTICS", "WARRIORS"
 ]
 
 def normalize_name(name):
@@ -47,7 +50,7 @@ def normalize_name(name):
 # --- SERVER ---
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V104 ONLINE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V108 - DATA SCIENTIST")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -58,7 +61,7 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
         feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
         whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação"]
-        blacklist = ["bbb", "festa", "namorada", "traição"]
+        blacklist = ["bbb", "festa", "namorada"]
         c=0
         for entry in feed.entries:
             if entry.link in SENT_LINKS: continue
@@ -70,64 +73,34 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V104 (PAINEL DE CONTROLE) =================
+# ================= MOTOR V108 (DATA SCIENTIST) =================
 class SportsEngine:
     def __init__(self):
         self.headers_as = {"x-apisports-key": API_FOOTBALL_KEY}
-        self.headers_fd = {"X-Auth-Token": FOOTBALL_DATA_TOKEN}
         self.remaining_requests = 100
 
     def get_today_date(self):
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
-    # --- NOVO: TESTA AS 3 APIS ---
     async def test_all_connections(self):
-        report = "📊 **RELATÓRIO DE CONEXÃO**\n\n"
-
-        # 1. API-SPORTS (A Principal)
+        report = "📊 **STATUS V108**\n\n"
         if API_FOOTBALL_KEY:
             async with httpx.AsyncClient(timeout=5) as client:
                 try:
                     r = await client.get("https://v3.football.api-sports.io/status", headers=self.headers_as)
                     data = r.json()
-                    if "errors" in data and data["errors"]:
-                        report += f"❌ **API-Sports:** Erro ({data['errors']})\n"
+                    if "errors" in data and data["errors"]: report += f"❌ API-Sports: Erro\n"
                     else:
                         curr = data['response']['requests']['current']
                         limit = data['response']['requests']['limit_day']
                         self.remaining_requests = limit - curr
-                        report += f"✅ **API-Sports:** Conectada ({self.remaining_requests}/{limit} Restantes)\n"
-                except: report += "❌ **API-Sports:** Falha na Conexão\n"
-        else:
-            report += "⚠️ **API-Sports:** Não Configurada\n"
-
-        # 2. FOOTBALL-DATA (Reserva)
-        if FOOTBALL_DATA_TOKEN:
-            async with httpx.AsyncClient(timeout=5) as client:
-                try:
-                    r = await client.get("https://api.football-data.org/v4/competitions", headers=self.headers_fd)
-                    if r.status_code == 200: report += "✅ **Football-Data:** Conectada\n"
-                    else: report += f"❌ **Football-Data:** Erro {r.status_code}\n"
-                except: report += "❌ **Football-Data:** Falha na Conexão\n"
-        else:
-            report += "⚠️ **Football-Data:** Não Configurada\n"
-
-        # 3. THE ODDS API (Reserva)
-        if THE_ODDS_API_KEY:
-            async with httpx.AsyncClient(timeout=5) as client:
-                try:
-                    r = await client.get(f"https://api.the-odds-api.com/v4/sports?apiKey={THE_ODDS_API_KEY}")
-                    if r.status_code == 200: report += "✅ **The Odds API:** Conectada\n"
-                    else: report += f"❌ **The Odds API:** Erro {r.status_code}\n"
-                except: report += "❌ **The Odds API:** Falha na Conexão\n"
-        else:
-            report += "⚠️ **The Odds API:** Não Configurada\n"
-
+                        report += f"✅ API-Sports: OK ({self.remaining_requests}/{limit})\n"
+                except: report += "❌ API-Sports: Falha\n"
+        else: report += "⚠️ API-Sports: N/A\n"
         return report
 
-    async def get_matches(self, mode="soccer"):
-        # Segurança da Cota
-        if self.remaining_requests < 5: return [], "⛔ Cota crítica. Automação pausada."
+    async def get_matches(self, mode="soccer", limit=5):
+        if self.remaining_requests < 5: return [], "⛔ Cota crítica."
 
         host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
         date_str = self.get_today_date()
@@ -163,30 +136,30 @@ class SportsEngine:
                     time_match = datetime.fromisoformat(item['fixture']['date']).strftime("%H:%M")
                     
                     score = 10
-                    if any(v in normalize_name(h) for v in VIP_TEAMS_LIST) or any(v in normalize_name(a) for v in VIP_TEAMS_LIST): score += 5000
-                    if "FLAMENGO" in full: score += 10000
-                    if "SERIE A" in full: score += 5000
-                    if "CARIOCA" in full or "PAULISTA" in full: score += 3000
+                    if any(l in full for l in TIER_1_LEAGUES): score += 20000
+                    if any(v in full for v in VIP_TEAMS): score += 5000
+                    if mode == "nba": score += 2000
 
                     games_list.append({"id": fid, "match": f"{h} x {a}", "league": league, "time": time_match, "score": score, "home": h, "away": a})
                 except: continue
 
             games_list.sort(key=lambda x: x['score'], reverse=True)
-            top_games = games_list[:5] # Top 5 Economia
+            top_games = games_list[:limit]
 
             if not top_games: return [], "⚠️ Nenhum jogo top hoje."
 
             final_list = []
             for game in top_games:
-                odd_val, tip_str = await self._scan_any_bookmaker(client, host, game['id'], game['home'], game['away'])
+                # ANÁLISE COMPLETA DO PACOTE
+                report = await self._analyze_full_package(client, host, game['id'], game['home'], game['away'], mode)
                 final_list.append({
                     "match": game['match'], "league": game['league'], "time": game['time'],
-                    "odd": odd_val, "tip": tip_str
+                    "report": report
                 })
             
             return final_list, None
 
-    async def _scan_any_bookmaker(self, client, host, fid, h, a):
+    async def _analyze_full_package(self, client, host, fid, h, a, mode):
         try:
             url = f"https://{host}/odds?fixture={fid}&timezone=America/Sao_Paulo"
             r = await client.get(url, headers=self.headers_as)
@@ -194,31 +167,90 @@ class SportsEngine:
                 self.remaining_requests = int(r.headers['x-ratelimit-requests-remaining'])
 
             data = r.json().get("response", [])
-            if not data: return 0.0, "🔒 (S/ Odd)"
-            bets = data[0]['bookmakers'][0]['bets']
-            if not bets: return 0.0, "🔒 Fechado"
+            if not data: return ["🔒 (Sem Odds)"]
+            
+            bets = None
+            for book in data[0]['bookmakers']:
+                bets = book['bets']
+                break
+            if not bets: return ["🔒 Fechado"]
 
-            w = next((b for b in bets if b['id'] == 1), None)
+            lines = []
+
+            # --- 1. SEGURANÇA (Vencedor / DC) ---
+            w = next((b for b in bets if b['id'] == 1), None) # Match Winner
             if w:
                 oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
                 oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
-                if oh > 0 and oa > 0:
-                    if oh < 1.65: return oh, f"✅ {h}"
-                    if oa < 1.65: return oa, f"✅ {a}"
-                    if oh < 2.5: return oh, f"🛡️ {h} (DC)"
+                
+                if oh > 1 and oh < 1.65: lines.append(f"🎯 **Segura:** {h} Vence (@{oh})")
+                elif oa > 1 and oa < 1.65: lines.append(f"🎯 **Segura:** {a} Vence (@{oa})")
+                elif oh > 1 and oh < 2.5: lines.append(f"🛡️ **Segura:** {h} ou Empate (@{oh})") # Simplificado
 
-            g = next((b for b in bets if b['id'] == 5), None)
-            if g:
-                ov = next((float(v['odd']) for v in g['values'] if 'Over' in v['value']), 0)
-                if ov > 1: return ov, f"⚽ {g['values'][0]['value']} Gols"
+            # --- 2. GOLS / AMBAS MARCAM (BTTS) ---
+            # BTTS (ID 8 geralmente)
+            btts = next((b for b in bets if b['id'] == 8), None)
+            if btts:
+                yes_odd = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
+                if yes_odd > 1 and yes_odd < 1.95:
+                    lines.append(f"🔥 **Valor:** Ambas Marcam: Sim (@{yes_odd})")
+            
+            # Se não deu BTTS, tenta Over 2.5
+            if len(lines) < 2:
+                g = next((b for b in bets if b['id'] == 5), None)
+                if g:
+                    ov = next((float(v['odd']) for v in g['values'] if 'Over 2.5' in v['value']), 0)
+                    if ov > 1.5: lines.append(f"🔥 **Valor:** +2.5 Gols (@{ov})")
 
-            for b in bets:
-                nl = b['name'].lower()
-                if "corner" in nl or "escanteio" in nl: return float(b['values'][0]['odd']), f"⛳ {b['name']}"
-                if "card" in nl or "cartão" in nl: return float(b['values'][0]['odd']), f"🟨 {b['name']}"
+            # --- 3. A OUSADA (Placar Exato ou Player) ---
+            found_bold = False
+            
+            # Tenta Player Score
+            if not found_bold:
+                for b in bets:
+                    if "scorer" in b['name'].lower() or "marcar" in b['name'].lower():
+                        # Pega o mais provável (menor odd)
+                        vals = sorted(b['values'], key=lambda x: float(x['odd']))
+                        best = vals[0]
+                        if float(best['odd']) < 3.0:
+                            lines.append(f"👟 **Player:** {best['value']} Marca (@{best['odd']})")
+                            found_bold = True
+                            break
+            
+            # Se não achou player, tenta Placar Exato (ID 10)
+            if not found_bold:
+                cs = next((b for b in bets if b['id'] == 10), None)
+                if cs:
+                    # Pega o placar com menor odd (o mais provável matematicamente)
+                    vals = sorted(cs['values'], key=lambda x: float(x['odd']))
+                    likely = vals[0]
+                    lines.append(f"💎 **Fezinha:** Placar {likely['value']} (@{likely['odd']})")
+                    found_bold = True
 
-            return float(bets[0]['values'][0]['odd']), "🎲 Aposta"
-        except: return 0.0, "Erro Odd"
+            # NBA SPECIAL PROPS
+            if mode == "nba":
+                lines = [] # Reseta para NBA
+                # Moneyline
+                if w:
+                    oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
+                    if oh < 1.5: lines.append(f"🎯 {h} Vence (@{oh})")
+                    else: lines.append(f"🎯 {a} Vence")
+                
+                # Pontos
+                for b in bets:
+                    if "points" in b['name'].lower() and "player" in b['name'].lower():
+                        for val in b['values']:
+                             if "Over" in val['value'] and float(val['odd']) < 1.95:
+                                 lines.append(f"🏀 {val['value']} Pts (@{val['odd']})")
+                                 if len(lines) >= 3: break
+                    if len(lines) >= 3: break
+
+            # Preenchimento se faltar info
+            if not lines: lines.append("🎲 Verificar Odds no Site")
+
+            return lines
+
+        except Exception as e: return [f"⚠️ Erro: {e}"]
 
 engine = SportsEngine()
 
@@ -226,34 +258,35 @@ async def enviar(context, text):
     try: await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode=ParseMode.MARKDOWN)
     except: pass
 
-# --- JOBS AGENDADOS (9H e 18H) ---
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
-    games, error = await engine.get_matches("soccer")
+    games, error = await engine.get_matches("soccer", limit=7)
     if error or not games: return
-    msg = f"🌞 **BOM DIA! GRADE V104**\n\n"
+    
+    msg = f"🌞 **BOM DIA! DOSSIÊ V108**\n\n"
     for g in games:
-        txt_odd = f"@{g['odd']}" if g['odd'] > 0 else "🚫"
-        msg += f"⏰ {g['time']} | 🏟 {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | {txt_odd}\n\n"
+        block = "\n".join(g['report'])
+        msg += f"🏟 **{g['match']}**\n🏆 {g['league']}\n{block}\n\n"
     msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
     await context.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
-    games, error = await engine.get_matches("nba")
+    games, error = await engine.get_matches("nba", limit=3)
     if error or not games: return
-    msg = f"🏀 **NBA NIGHT - V104**\n\n"
+    
+    msg = f"🏀 **NBA REPORT - V108**\n\n"
     for g in games:
-        txt_odd = f"@{g['odd']}" if g['odd'] > 0 else "🚫"
-        msg += f"⏰ {g['time']} | 🏟 {g['match']}\n🎯 {g['tip']} | {txt_odd}\n\n"
+        block = "\n".join(g['report'])
+        msg += f"🏟 **{g['match']}**\n{block}\n\n"
     msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
     await context.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("🔥 Top 5 Jogos", callback_data="top_jogos"),
+        [InlineKeyboardButton("🔥 Top 7 (Dossiê)", callback_data="top_jogos"),
          InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
         [InlineKeyboardButton("🔧 Testar APIs", callback_data="test_api")]
     ]
-    await update.message.reply_text("🦁 **PAINEL V104 - DASHBOARD**\nVeja o status das 3 APIs.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V108 - CIENTISTA**\nRelatórios completos de aposta.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -261,30 +294,30 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = q.data
 
     if data == "test_api":
-        await q.edit_message_text("⏳ Conectando aos 3 satélites...")
+        await q.edit_message_text("⏳ Diagnóstico...")
         report = await engine.test_all_connections()
         kb = [[InlineKeyboardButton("🔥 Voltar", callback_data="top_jogos")]]
         await q.edit_message_text(report, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
-    await q.edit_message_text("🔎 Buscando...")
+    await q.edit_message_text("🔎 Gerando Relatório Completo...")
     mode = "nba" if "nba" in data else "soccer"
-    games, error = await engine.get_matches(mode)
+    games, error = await engine.get_matches(mode, limit=7)
 
     if error:
         await q.message.reply_text(error)
         return
 
-    msg = f"🔥 **GRADE MANUAL V104**\n\n"
-    if mode == "nba": msg = "🏀 **NBA V104**\n\n"
+    msg = f"🔥 **DOSSIÊ V108 (MANUAL)**\n\n"
+    if mode == "nba": msg = "🏀 **NBA DOSSIÊ V108**\n\n"
     
     for g in games:
-        txt_odd = f"@{g['odd']}" if g['odd'] > 0 else "🚫"
-        msg += f"⏰ {g['time']} | 🏟 {g['match']}\n🏆 {g['league']}\n🎯 {g['tip']} | {txt_odd}\n\n"
+        block = "\n".join(g['report'])
+        msg += f"🏟 **{g['match']}**\n🏆 {g['league']}\n{block}\n\n"
     
     msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
     await enviar(context, msg)
-    await q.message.reply_text("✅ Postado!")
+    await q.message.reply_text("✅ Relatório Postado!")
 
 def main():
     if not BOT_TOKEN: return
@@ -295,7 +328,6 @@ def main():
     
     if app.job_queue:
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
-        # 9h e 18h BRT
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=12, minute=0, tzinfo=timezone.utc))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=21, minute=0, tzinfo=timezone.utc))
         
