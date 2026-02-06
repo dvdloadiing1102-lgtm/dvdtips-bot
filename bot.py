@@ -40,7 +40,7 @@ TIER_1_LEAGUES = [
 VIP_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO",
     "REAL MADRID", "BARCELONA", "MANCHESTER CITY", "LIVERPOOL", "ARSENAL",
-    "PSG", "BAYERN", "INTER MIAMI", "AL NASSR", "LAKERS", "CELTICS", "WARRIORS"
+    "PSG", "BAYERN", "INTER MIAMI", "AL NASSR", "LAKERS", "CELTICS", "WARRIORS", "HEAT", "BUCKS", "SUNS"
 ]
 
 def normalize_name(name):
@@ -50,7 +50,7 @@ def normalize_name(name):
 # --- SERVER ---
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V108 - DATA SCIENTIST")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V110 - DESIGNER MODE")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -73,7 +73,7 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V108 (DATA SCIENTIST) =================
+# ================= MOTOR V110 (LAYOUT PREMIUM) =================
 class SportsEngine:
     def __init__(self):
         self.headers_as = {"x-apisports-key": API_FOOTBALL_KEY}
@@ -83,7 +83,7 @@ class SportsEngine:
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V108**\n\n"
+        report = "📊 **STATUS V110**\n\n"
         if API_FOOTBALL_KEY:
             async with httpx.AsyncClient(timeout=5) as client:
                 try:
@@ -150,7 +150,6 @@ class SportsEngine:
 
             final_list = []
             for game in top_games:
-                # ANÁLISE COMPLETA DO PACOTE
                 report = await self._analyze_full_package(client, host, game['id'], game['home'], game['away'], mode)
                 final_list.append({
                     "match": game['match'], "league": game['league'], "time": game['time'],
@@ -177,77 +176,72 @@ class SportsEngine:
 
             lines = []
 
-            # --- 1. SEGURANÇA (Vencedor / DC) ---
-            w = next((b for b in bets if b['id'] == 1), None) # Match Winner
-            if w:
-                oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
-                oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
-                
-                if oh > 1 and oh < 1.65: lines.append(f"🎯 **Segura:** {h} Vence (@{oh})")
-                elif oa > 1 and oa < 1.65: lines.append(f"🎯 **Segura:** {a} Vence (@{oa})")
-                elif oh > 1 and oh < 2.5: lines.append(f"🛡️ **Segura:** {h} ou Empate (@{oh})") # Simplificado
-
-            # --- 2. GOLS / AMBAS MARCAM (BTTS) ---
-            # BTTS (ID 8 geralmente)
-            btts = next((b for b in bets if b['id'] == 8), None)
-            if btts:
-                yes_odd = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
-                if yes_odd > 1 and yes_odd < 1.95:
-                    lines.append(f"🔥 **Valor:** Ambas Marcam: Sim (@{yes_odd})")
-            
-            # Se não deu BTTS, tenta Over 2.5
-            if len(lines) < 2:
-                g = next((b for b in bets if b['id'] == 5), None)
-                if g:
-                    ov = next((float(v['odd']) for v in g['values'] if 'Over 2.5' in v['value']), 0)
-                    if ov > 1.5: lines.append(f"🔥 **Valor:** +2.5 Gols (@{ov})")
-
-            # --- 3. A OUSADA (Placar Exato ou Player) ---
-            found_bold = False
-            
-            # Tenta Player Score
-            if not found_bold:
-                for b in bets:
-                    if "scorer" in b['name'].lower() or "marcar" in b['name'].lower():
-                        # Pega o mais provável (menor odd)
-                        vals = sorted(b['values'], key=lambda x: float(x['odd']))
-                        best = vals[0]
-                        if float(best['odd']) < 3.0:
-                            lines.append(f"👟 **Player:** {best['value']} Marca (@{best['odd']})")
-                            found_bold = True
-                            break
-            
-            # Se não achou player, tenta Placar Exato (ID 10)
-            if not found_bold:
-                cs = next((b for b in bets if b['id'] == 10), None)
-                if cs:
-                    # Pega o placar com menor odd (o mais provável matematicamente)
-                    vals = sorted(cs['values'], key=lambda x: float(x['odd']))
-                    likely = vals[0]
-                    lines.append(f"💎 **Fezinha:** Placar {likely['value']} (@{likely['odd']})")
-                    found_bold = True
-
-            # NBA SPECIAL PROPS
-            if mode == "nba":
-                lines = [] # Reseta para NBA
-                # Moneyline
+            # ================= FUTEBOL =================
+            if mode == "soccer":
+                # 1. SEGURANÇA (Verde)
+                w = next((b for b in bets if b['id'] == 1), None)
                 if w:
                     oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
-                    if oh < 1.5: lines.append(f"🎯 {h} Vence (@{oh})")
-                    else: lines.append(f"🎯 {a} Vence")
+                    oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
+                    if oh > 1 and oh < 1.65: lines.append(f"🟢 **Segura:** {h} Vence (@{oh})")
+                    elif oa > 1 and oa < 1.65: lines.append(f"🟢 **Segura:** {a} Vence (@{oa})")
+                    elif oh > 1 and oh < 2.5: lines.append(f"🟢 **Segura:** {h} ou Empate (@{oh})")
+
+                # 2. VALOR (Amarelo)
+                btts = next((b for b in bets if b['id'] == 8), None)
+                if btts:
+                    yes_odd = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
+                    if yes_odd > 1 and yes_odd < 1.95: lines.append(f"🟡 **Valor:** Ambas Marcam (@{yes_odd})")
                 
-                # Pontos
+                if len(lines) < 2:
+                    g = next((b for b in bets if b['id'] == 5), None)
+                    if g:
+                        ov = next((float(v['odd']) for v in g['values'] if 'Over 2.5' in v['value']), 0)
+                        if ov > 1.5: lines.append(f"🟡 **Valor:** +2.5 Gols (@{ov})")
+
+                # 3. OUSADA (Vermelho)
+                found_bold = False
+                for b in bets:
+                    if "scorer" in b['name'].lower() or "marcar" in b['name'].lower():
+                        vals = sorted(b['values'], key=lambda x: float(x['odd']))
+                        best = vals[0]
+                        if float(best['odd']) < 3.2:
+                            lines.append(f"🔴 **Ousada:** {best['value']} Marca (@{best['odd']})")
+                            found_bold = True
+                            break
+                if not found_bold:
+                    cs = next((b for b in bets if b['id'] == 10), None)
+                    if cs:
+                        vals = sorted(cs['values'], key=lambda x: float(x['odd']))
+                        lines.append(f"🔴 **Fezinha:** Placar {vals[0]['value']} (@{vals[0]['odd']})")
+
+            # ================= NBA =================
+            elif mode == "nba":
+                # 1. SEGURANÇA
+                w = next((b for b in bets if b['id'] == 1), None)
+                if w:
+                    oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
+                    oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
+                    if oh < oa: lines.append(f"🟢 **Segura:** {h} Vence (@{oh})")
+                    else: lines.append(f"🟢 **Segura:** {a} Vence (@{oa})")
+                
+                # 2. VALOR
+                totals = next((b for b in bets if b['id'] == 5), None)
+                if totals:
+                     ov = next((v for v in totals['values'] if 'Over' in v['value']), None)
+                     if ov: lines.append(f"🟡 **Valor:** Total {ov['value']} (@{ov['odd']})")
+
+                # 3. OUSADA
                 for b in bets:
                     if "points" in b['name'].lower() and "player" in b['name'].lower():
+                        stars = ["LeBron", "Curry", "Tatum", "Doncic", "Giannis", "Jokic", "Durant", "Davis"]
                         for val in b['values']:
-                             if "Over" in val['value'] and float(val['odd']) < 1.95:
-                                 lines.append(f"🏀 {val['value']} Pts (@{val['odd']})")
-                                 if len(lines) >= 3: break
-                    if len(lines) >= 3: break
+                            if "Over" in val['value'] and any(s in val['value'] for s in stars):
+                                lines.append(f"🔴 **Player:** {val['value']} Pts (@{val['odd']})")
+                                if len(lines) >= 3: break
+                        if len(lines) >= 3: break
 
-            # Preenchimento se faltar info
             if not lines: lines.append("🎲 Verificar Odds no Site")
-
             return lines
 
         except Exception as e: return [f"⚠️ Erro: {e}"]
@@ -262,31 +256,41 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games, error = await engine.get_matches("soccer", limit=7)
     if error or not games: return
     
-    msg = f"🌞 **BOM DIA! DOSSIÊ V108**\n\n"
+    msg = f"🔥 **DOSSIÊ DE ELITE** 🔥\n\n"
     for g in games:
         block = "\n".join(g['report'])
-        msg += f"🏟 **{g['match']}**\n🏆 {g['league']}\n{block}\n\n"
-    msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
+        # LAYOUT NOVO AQUI
+        msg += f"🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n"
+        msg += f"⚔️ **{g['match']}**\n\n"
+        msg += f"{block}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+        
+    msg += f"🔋 Cota Restante: {engine.remaining_requests}/100"
     await context.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games, error = await engine.get_matches("nba", limit=3)
     if error or not games: return
     
-    msg = f"🏀 **NBA REPORT - V108**\n\n"
+    msg = f"🏀 **NBA PRIME** 🏀\n\n"
     for g in games:
         block = "\n".join(g['report'])
-        msg += f"🏟 **{g['match']}**\n{block}\n\n"
-    msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
+        # LAYOUT NOVO AQUI
+        msg += f"🏟 **{g['league'].upper()}** • ⏰ {g['time']}\n"
+        msg += f"⚔️ **{g['match']}**\n\n"
+        msg += f"{block}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    msg += f"🔋 Cota Restante: {engine.remaining_requests}/100"
     await context.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("🔥 Top 7 (Dossiê)", callback_data="top_jogos"),
-         InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
+        [InlineKeyboardButton("🔥 Top 7 (Futebol)", callback_data="top_jogos"),
+         InlineKeyboardButton("🏀 NBA (Prime)", callback_data="nba_hoje")],
         [InlineKeyboardButton("🔧 Testar APIs", callback_data="test_api")]
     ]
-    await update.message.reply_text("🦁 **PAINEL V108 - CIENTISTA**\nRelatórios completos de aposta.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V110 - DESIGNER**\nNovo layout ativado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -300,7 +304,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(report, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
         return
 
-    await q.edit_message_text("🔎 Gerando Relatório Completo...")
+    await q.edit_message_text("🔎 Caprichando no visual...")
     mode = "nba" if "nba" in data else "soccer"
     games, error = await engine.get_matches(mode, limit=7)
 
@@ -308,16 +312,20 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text(error)
         return
 
-    msg = f"🔥 **DOSSIÊ V108 (MANUAL)**\n\n"
-    if mode == "nba": msg = "🏀 **NBA DOSSIÊ V108**\n\n"
+    msg = f"🔥 **GRADE MANUAL V110**\n\n"
+    if mode == "nba": msg = "🏀 **NBA PRIME V110**\n\n"
     
     for g in games:
         block = "\n".join(g['report'])
-        msg += f"🏟 **{g['match']}**\n🏆 {g['league']}\n{block}\n\n"
+        # LAYOUT NOVO AQUI
+        msg += f"🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n"
+        msg += f"⚔️ **{g['match']}**\n\n"
+        msg += f"{block}\n"
+        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
     
-    msg += f"__________________\n🔋 Cota: {engine.remaining_requests}/100"
+    msg += f"🔋 Cota: {engine.remaining_requests}/100"
     await enviar(context, msg)
-    await q.message.reply_text("✅ Relatório Postado!")
+    await q.message.reply_text("✅ Postado com estilo!")
 
 def main():
     if not BOT_TOKEN: return
