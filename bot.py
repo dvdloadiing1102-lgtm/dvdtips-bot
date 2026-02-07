@@ -35,7 +35,6 @@ THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 SENT_LINKS = set()
 LATEST_HEADLINES = []
 
-# LISTA DE OURO (SÓ PASSA O QUE TIVER AQUI)
 TIER_1_LEAGUES = [
     "CHAMPIONS LEAGUE", "LIBERTADORES", "PREMIER LEAGUE", "LA LIGA", 
     "SERIE A", "BUNDESLIGA", "LIGUE 1", "BRASILEIRO SERIE A", 
@@ -44,7 +43,6 @@ TIER_1_LEAGUES = [
     "EREDIVISIE", "PRIMEIRA LIGA", "EUROPA LEAGUE", "CONFERENCE LEAGUE"
 ]
 
-# TIREI NOMES GENÉRICOS ÁRABES PARA NÃO PUXAR LIGA EGÍPCIA
 VIP_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "GREMIO", "INTERNACIONAL",
     "REAL MADRID", "BARCELONA", "MANCHESTER CITY", "LIVERPOOL", "ARSENAL", "CHELSEA",
@@ -58,7 +56,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V119 - GATEKEEPER MODE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V120 - TICKET GENERATOR")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -82,17 +80,19 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V119 (PORTEIRA FECHADA) =================
+# ================= MOTOR V120 (BILHETEIRO) =================
 class SportsEngine:
     def __init__(self):
         self.headers_as = {"x-apisports-key": API_FOOTBALL_KEY}
         self.remaining_requests = 100
+        # Armazena os palpites para o bilhete
+        self.daily_accumulator = []
 
     def get_today_date(self):
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V119 (FILTRO RÍGIDO)**\n\n"
+        report = "📊 **STATUS V120**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
         if API_FOOTBALL_KEY:
@@ -161,25 +161,19 @@ class SportsEngine:
             except: return [], "❌ Erro Conexão"
             
             games_list = []
-            
-            # BLACKLIST TURBINADA (V119)
             BLACKLIST = [
-                "WOMEN", " W ", " W", "(W)", "FEMININO", "FEM", "FRAUEN", "DAMEN", "FEMININE", # Varias linguas
+                "WOMEN", " W ", " W", "(W)", "FEMININO", "FEM", "FRAUEN", "DAMEN", "FEMININE", 
                 "U21", "U23", "U20", "U19", "SUB-20", "SUB-21", "SUB20",
-                "RESERVE", "YOUTH", "JUVENIL", "AMADOR", 
-                "ESOCCER", "SIMULATED", "SRL", "BATTLE", "VIRTUAL"
+                "RESERVE", "YOUTH", "JUVENIL", "AMADOR", "ESOCCER", "SIMULATED", "SRL", "BATTLE", "VIRTUAL"
             ]
             
             for item in data:
                 try:
                     h, a = item['teams']['home']['name'], item['teams']['away']['name']
                     full = normalize_name(f"{h} {a} {item['league']['name']}")
-                    
-                    # 1. FILTRO DE LIXO (Primeira peneira)
                     if any(b in full for b in BLACKLIST): continue
                     
                     score = 0 
-                    # 2. SISTEMA DE PONTUAÇÃO
                     if any(l in full for l in TIER_1_LEAGUES): score += 50000
                     if any(v in full for v in VIP_TEAMS): score += 20000
                     if mode == "nba": score += 10000
@@ -189,10 +183,8 @@ class SportsEngine:
                         if normalize_name(h) in normalize_name(news) or normalize_name(a) in normalize_name(news):
                             has_news = True; score += 5000
 
-                    # 3. A REGRA DE OURO (V119):
-                    # Se o Score for 0, o jogo é irrelevante. TCHAU.
-                    if score == 0:
-                        continue
+                    # Filtro Rígido V119
+                    if score == 0: continue
 
                     games_list.append({
                         "id": item['fixture']['id'], "match": f"{h} x {a}", "league": item['league']['name'], 
@@ -205,6 +197,9 @@ class SportsEngine:
             top_games = games_list[:limit]
             
             if not top_games: return [], "⚠️ Nenhum jogo da Elite encontrado hoje."
+
+            # RESETA O BILHETE DO DIA
+            self.daily_accumulator = []
 
             final_list = []
             for i, game in enumerate(top_games):
@@ -225,10 +220,12 @@ class SportsEngine:
             lines = []
             if game['has_news']: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
 
+            # Coleta dados para Bilhete se não for prediction (prediction é chato de pegar odd)
             if is_main_event:
                 pred = data[0]['predictions']
                 lines.append(f"🧠 **IA:** {pred['advice']}")
                 lines.append(f"⚔️ **Provável:** {pred['winner']['name']}")
+                # Tentamos achar odd aqui se der, senão paciência
                 return lines
 
             bets = None
@@ -236,41 +233,63 @@ class SportsEngine:
             if not bets: return ["🔒 Fechado"]
 
             w = next((b for b in bets if b['id'] == 1), None)
+            best_pick = None # Para salvar no bilhete
+
             if w:
                 oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
                 oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
-                # Filtro Anti-Misharia (>1.25)
-                if 1.25 < oh < 1.65: lines.append(f"🟢 **Segura:** {game['home']} (@{oh})")
-                elif 1.25 < oa < 1.65: lines.append(f"🟢 **Segura:** {game['away']} (@{oa})")
-                elif 1.25 < oh < 2.5: lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{oh})")
+                
+                # Regras de Odds V119
+                if 1.25 < oh < 1.75: # Levemente mais seguro para bilhete
+                    msg = f"🟢 **Segura:** {game['home']} (@{oh})"
+                    lines.append(msg)
+                    best_pick = {"pick": f"{game['home']} Vence", "odd": oh, "match": game['match']}
+                    
+                elif 1.25 < oa < 1.75: 
+                    msg = f"🟢 **Segura:** {game['away']} (@{oa})"
+                    lines.append(msg)
+                    best_pick = {"pick": f"{game['away']} Vence", "odd": oa, "match": game['match']}
+                    
+                elif 1.25 < oh < 2.5: 
+                    msg = f"🟢 **Segura:** {game['home']} ou Empate (@{oh})"
+                    lines.append(msg)
+                    # Double Chance paga pouco, bom pra bilhete se for odd decente
+                    if oh > 1.30 and not best_pick: 
+                        best_pick = {"pick": f"{game['home']} ou Empate", "odd": oh, "match": game['match']}
 
-            # Scanner Escanteios
+            # Se não pegou vencedor, tenta Valor ou Escanteios
+            if not best_pick:
+                btts = next((b for b in bets if b['id'] == 8), None)
+                if btts:
+                    yo = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
+                    if 1.40 < yo < 1.95: 
+                         lines.append(f"🟡 **Valor:** Ambas Marcam (@{yo})")
+                         best_pick = {"pick": "Ambas Marcam", "odd": yo, "match": game['match']}
+
+            # Adiciona ao acumulador global se tiver um bom palpite
+            if best_pick:
+                self.daily_accumulator.append(best_pick)
+
+            # Resto das analises (Cantos/Cartoes) para o relatorio
             corners = False
             for b in bets:
                 name_l = b['name'].lower()
-                if "corner" in name_l or "escanteio" in name_l:
+                if "corner" in name_l:
                     for val in b['values']:
                         if "Over" in val['value'] and float(val['odd']) < 1.60:
                             lines.append(f"⛳ **Cantos:** Tendência de {val['value']} (@{val['odd']})")
                             corners = True; break
                 if corners: break
 
-            # Scanner Cartões
             cards = False
             for b in bets:
                 name_l = b['name'].lower()
-                if "card" in name_l or "cartão" in name_l:
+                if "card" in name_l:
                      for val in b['values']:
                         if "Over" in val['value'] and float(val['odd']) < 1.70:
                             lines.append(f"🟨 **Cartões:** Jogo Pegado! {val['value']} (@{val['odd']})")
                             cards = True; break
                 if cards: break
-            
-            if len(lines) < 2:
-                btts = next((b for b in bets if b['id'] == 8), None)
-                if btts:
-                    yo = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
-                    if 1.25 < yo < 1.95: lines.append(f"🟡 **Valor:** Ambas Marcam (@{yo})")
 
             if not lines: lines.append("🎲 Verificar Odds")
             return lines
@@ -278,10 +297,33 @@ class SportsEngine:
 
 engine = SportsEngine()
 
-async def enviar_com_botao(context, text, poll_data=None):
+# FUNÇÃO PARA GERAR O TEXTO DO BILHETE LUNÁTICO
+def gerar_texto_bilhete(palpites):
+    if not palpites: return ""
+    
+    selected = []
+    total_odd = 1.0
+    
+    # Tenta montar acumulada entre 15 e 30
+    for p in palpites:
+        if total_odd > 30: break # Passou do teto, para
+        selected.append(p)
+        total_odd *= p['odd']
+    
+    # Se ficou muito baixa (menos de 5), nem manda bilhete separado
+    if total_odd < 5.0: return ""
+    
+    txt = f"\n🎟️ **BILHETE LUNÁTICO (ODD {total_odd:.2f})** 🚀\n"
+    for s in selected:
+        txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
+    txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
+    return txt
+
+async def enviar_com_botao(context, text, poll_data=None, bilhete_txt=""):
+    full_text = text + bilhete_txt
     kb = [[InlineKeyboardButton("💸 Apostar Agora", url=AFFILIATE_LINK)]]
     try: 
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
         if poll_data:
             await asyncio.sleep(2)
             await context.bot.send_poll(chat_id=CHANNEL_ID, question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", options=[poll_data['h'], "Empate", poll_data['a']], is_anonymous=True)
@@ -297,22 +339,26 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games, error = await engine.get_matches("soccer", limit=7)
-    if not games: return # Se não tiver jogo de elite, não manda nada!
+    if not games: return 
     
-    msg = f"🔥 **DOSSIÊ V119 (FILTRO RÍGIDO)** 🔥\n\n"
+    msg = f"🔥 **DOSSIÊ V120 (COM BILHETE)** 🔥\n\n"
     poll_data = None
     for g in games:
         icon = "⭐ **JOGO DO DIA** ⭐\n" if g['is_main'] else ""
         if g['is_main']: poll_data = {"h": g['home'], "a": g['away']}
         block = "\n".join(g['report'])
         msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # GERA O BILHETE COM OS DADOS COLETADOS
+    bilhete = gerar_texto_bilhete(engine.daily_accumulator)
+    
     msg += f"🔋 Cota: {engine.remaining_requests}/100"
-    await enviar_com_botao(context, msg, poll_data)
+    await enviar_com_botao(context, msg, poll_data, bilhete)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games, _ = await engine.get_matches("nba", limit=3)
     if not games: return
-    msg = f"🏀 **NBA PRIME V119** 🏀\n\n"
+    msg = f"🏀 **NBA PRIME V120** 🏀\n\n"
     for g in games:
         block = "\n".join(g['report'])
         msg += f"🏟 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -322,7 +368,7 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights, _ = await engine.get_ufc_fights()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V119)** 🥊\n\n"
+    msg = "🥊 **UFC FIGHT DAY (V120)** 🥊\n\n"
     for f in fights:
         msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
@@ -330,7 +376,7 @@ async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
           [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V119 - PORTEIRA FECHADA**\nSó passa Jogo TOP. Lixo bloqueado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V120 - BILHETEIRO**\nGerador de Múltipla (Odd 15-30) Ativado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
@@ -346,19 +392,23 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for f in fights: msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
     
-    await q.edit_message_text("🔎 Buscando a Elite..."); mode = "nba" if "nba" in data else "soccer"; limit_req = 7 if mode == "soccer" else 3
+    await q.edit_message_text("🔎 Buscando..."); mode = "nba" if "nba" in data else "soccer"; limit_req = 7 if mode == "soccer" else 3
     games, err = await engine.get_matches(mode, limit=limit_req)
     if err: await q.message.reply_text(err); return
     
-    msg = f"🔥 **GRADE V119**\n\n"
+    msg = f"🔥 **GRADE V120**\n\n"
     poll_data = None
     for g in games:
         icon = "⭐ **JOGO DO DIA** ⭐\n" if g.get('is_main') else ""
         if g.get('is_main') and mode == "soccer": poll_data = {"h": g['home'], "a": g['away']}
         blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
     
+    # GERA BILHETE SE FOR FUTEBOL
+    bilhete = ""
+    if mode == "soccer": bilhete = gerar_texto_bilhete(engine.daily_accumulator)
+    
     msg += f"🔋 Cota: {engine.remaining_requests}/100"
-    await enviar_com_botao(context, msg, poll_data)
+    await enviar_com_botao(context, msg, poll_data, bilhete)
     await q.message.reply_text("✅ Postado!")
 
 def main():
