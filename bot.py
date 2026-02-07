@@ -7,7 +7,7 @@ import httpx
 import threading
 import unicodedata
 import psutil
-import random # NOVO: Para o delay aleatório
+import random
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -29,26 +29,24 @@ PORT = int(os.getenv("PORT", 10000))
 AFFILIATE_LINK = os.getenv("AFFILIATE_LINK", "https://www.bet365.com") 
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# CHAVES
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+# 🚨 CHAVE NOVA (THE ODDS API) - USE ESTA PARA EVITAR BAN E LIXO
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 
 SENT_LINKS = set()
 LATEST_HEADLINES = []
 
-TIER_1_LEAGUES = [
-    "CHAMPIONS LEAGUE", "LIBERTADORES", "PREMIER LEAGUE", "LA LIGA", 
-    "SERIE A", "BUNDESLIGA", "LIGUE 1", "BRASILEIRO SERIE A", 
-    "COPA DO BRASIL", "SUDAMERICANA", "PAULISTA", "CARIOCA",
-    "MINEIRO", "GAUCHO", "CATARINENSE", "SAUDI", "PRO LEAGUE", "CHAMPIONSHIP",
-    "EREDIVISIE", "PRIMEIRA LIGA", "EUROPA LEAGUE", "CONFERENCE LEAGUE"
-]
-
-VIP_TEAMS = [
-    "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "GREMIO", "INTERNACIONAL",
-    "REAL MADRID", "BARCELONA", "MANCHESTER CITY", "LIVERPOOL", "ARSENAL", "CHELSEA",
-    "PSG", "BAYERN MUNICH", "INTER MIAMI", "AL NASSR",
-    "LAKERS", "CELTICS", "WARRIORS", "HEAT", "BUCKS", "SUNS", "MAVERICKS"
+# --- CONFIGURAÇÃO RÍGIDA DE LIGAS (SÓ A ELITE) ---
+# O bot SÓ vai buscar essas chaves. Impossível vir Sub-18 ou Feminino.
+SOCCER_LEAGUES = [
+    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO A"},
+    {"key": "soccer_england_premier_league", "name": "PREMIER LEAGUE"},
+    {"key": "soccer_spain_la_liga", "name": "LA LIGA"},
+    {"key": "soccer_italy_serie_a", "name": "SERIE A"},
+    {"key": "soccer_germany_bundesliga", "name": "BUNDESLIGA"},
+    {"key": "soccer_france_ligue_one", "name": "LIGUE 1"},
+    {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE"},
+    {"key": "soccer_brazil_campeonato_paulista", "name": "PAULISTA A1"},
+    {"key": "soccer_brazil_campeonato_carioca", "name": "CARIOCA A1"}
 ]
 
 def normalize_name(name):
@@ -57,7 +55,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V121 - STEALTH MODE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V122 - ELITE ONLY")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -81,226 +79,154 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V121 (STEALTH MODE) =================
+# ================= MOTOR V122 (THE ODDS API - ZERO LIXO) =================
 class SportsEngine:
     def __init__(self):
-        self.headers_as = {
-            "x-apisports-key": API_FOOTBALL_KEY,
-            # MASCARAMENTO: Parece um navegador real agora
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
-        }
-        self.remaining_requests = 100
         self.daily_accumulator = []
-
-    def get_today_date(self):
-        return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
+        # Não usamos mais API-Sports aqui para evitar o problema do "Everton U18"
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V121 (STEALTH)**\n\n"
+        report = "📊 **STATUS V122 (ELITE)**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
-        if API_FOOTBALL_KEY:
-            async with httpx.AsyncClient(timeout=10) as client: # Aumentei timeout
-                try:
-                    r = await client.get("https://v3.football.api-sports.io/status", headers=self.headers_as)
-                    data = r.json()
-                    if "errors" in data and data["errors"]:
-                        report += f"❌ API-Sports: ERRO (Provável Ban)\nMSG: {data['errors']}\n"
-                    else:
-                        curr = data['response']['requests']['current']
-                        limit = data['response']['requests']['limit_day']
-                        self.remaining_requests = limit - curr
-                        report += f"✅ API-Sports: {self.remaining_requests}/{limit}\n"
-                except Exception as e: report += f"❌ API-Sports: Falha ({str(e)})\n"
         
-        # Teste UFC
         if THE_ODDS_API_KEY:
-             # The Odds API é tranquila, não precisa de stealth pesado
-             pass 
+            async with httpx.AsyncClient(timeout=10) as client:
+                try:
+                    r = await client.get(f"https://api.the-odds-api.com/v4/sports?apiKey={THE_ODDS_API_KEY}")
+                    if r.status_code == 200: 
+                        rem = r.headers.get("x-requests-remaining", "?")
+                        report += f"✅ The Odds API: {rem} créditos restantes\n"
+                    else: report += "❌ The Odds API: Chave Inválida ou Expirada\n"
+                except: report += "❌ The Odds API: Erro de Conexão\n"
+        else: report += "⚠️ CHAVE DA ODDS API NÃO CONFIGURADA!\n"
         return report
 
-    async def get_ufc_fights(self):
-        if not THE_ODDS_API_KEY: return [], "⚠️ API UFC Off"
-        url = f"https://api.the-odds-api.com/v4/sports/mma_mixed_martial_arts/odds?regions=us&oddsFormat=decimal&apiKey={THE_ODDS_API_KEY}"
-        async with httpx.AsyncClient(timeout=10) as client:
+    async def fetch_odds(self, sport_key, display_name):
+        if not THE_ODDS_API_KEY: return []
+        
+        # Pega odds de hoje (apenas H2H = Vencedor)
+        url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds?regions=us&oddsFormat=decimal&markets=h2h&apiKey={THE_ODDS_API_KEY}"
+        
+        async with httpx.AsyncClient(timeout=15) as client:
             try:
                 r = await client.get(url)
                 data = r.json()
-                if not isinstance(data, list): return [], None
-                fights = []
+                
+                # Se a chave da liga não existir ou não tiver jogos, retorna vazio
+                if not isinstance(data, list): return []
+                
+                games = []
                 now = datetime.now(timezone.utc)
-                limit_time = now + timedelta(hours=36)
-                for event in data[:6]:
+                # Pega jogos das próximas 30 horas (pra pegar o dia todo e um pouco de amanhã)
+                limit_time = now + timedelta(hours=30) 
+                
+                for event in data:
                     try:
                         evt_time = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                        if evt_time > limit_time: continue
-                        time_str = evt_time.astimezone(timezone(timedelta(hours=-3))).strftime("%d/%m %H:%M")
-                        h, a = event['home_team'], event['away_team']
-                        odds_h, odds_a = 0, 0
+                        # Filtro de Data
+                        if evt_time > limit_time or evt_time < now: continue 
+
+                        time_str = evt_time.astimezone(timezone(timedelta(hours=-3))).strftime("%H:%M")
+                        h = event['home_team']
+                        a = event['away_team']
+                        
+                        odds_h, odds_a, odds_d = 0, 0, 0
+                        
+                        # Varre as casas para achar a melhor odd
                         for book in event['bookmakers']:
                             for m in book['markets']:
                                 if m['key'] == 'h2h':
                                     for o in m['outcomes']:
-                                        if o['name'] == h: odds_h = o['price']
-                                        if o['name'] == a: odds_a = o['price']
-                                    break
-                            if odds_h > 0: break
-                        if odds_h > 0: fights.append({"match": f"{h} x {a}", "time": time_str, "odd_h": odds_h, "odd_a": odds_a, "h": h, "a": a})
+                                        if o['name'] == h: odds_h = max(odds_h, o['price'])
+                                        if o['name'] == a: odds_a = max(odds_a, o['price'])
+                                        if o['name'] == 'Draw': odds_d = max(odds_d, o['price'])
+                        
+                        # SÓ ADICIONA SE TIVER ODDS REAIS
+                        if odds_h > 1.0 and odds_a > 1.0:
+                            games.append({
+                                "match": f"{h} x {a}",
+                                "league": display_name,
+                                "time": time_str,
+                                "odd_h": odds_h,
+                                "odd_a": odds_a,
+                                "odd_d": odds_d,
+                                "home": h,
+                                "away": a
+                            })
                     except: continue
-                return fights, None
-            except: return [], None
+                return games
+            except: return []
 
-    async def get_matches(self, mode="soccer", limit=7):
-        if self.remaining_requests < 5: return [], "⛔ Cota crítica."
-        host = "v3.football.api-sports.io" if mode == "soccer" else "v1.basketball.api-sports.io"
-        date_str = self.get_today_date()
-        url = f"https://{host}/fixtures?date={date_str}&timezone=America/Sao_Paulo"
-        if mode == "nba": url += "&league=12&season=2025"
+    def analyze_game(self, game):
+        lines = []
+        best_pick = None
         
-        async with httpx.AsyncClient(timeout=30) as client:
-            try:
-                r = await client.get(url, headers=self.headers_as)
-                if 'x-ratelimit-requests-remaining' in r.headers:
-                    self.remaining_requests = int(r.headers['x-ratelimit-requests-remaining'])
-                data = r.json().get("response", [])
-            except: return [], "❌ Erro Conexão ou Banimento de IP."
+        # Notícias
+        has_news = False
+        for news in LATEST_HEADLINES:
+            if normalize_name(game['home']) in normalize_name(news) or normalize_name(game['away']) in normalize_name(news):
+                has_news = True
+        
+        if has_news: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
+
+        oh, oa, od = game['odd_h'], game['odd_a'], game['odd_d']
+
+        # LOGICA DE ODD
+        if 1.25 < oh < 1.70:
+            lines.append(f"🟢 **Segura:** {game['home']} Vence (@{oh})")
+            best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
+        elif 1.25 < oa < 1.70:
+            lines.append(f"🟢 **Segura:** {game['away']} Vence (@{oa})")
+            best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
+        elif 1.25 < oh < 2.20 and od > 0:
+            # Calculo aproximado de Dupla Chance
+            dc_odd = round(1 / (1/oh + 1/od), 2)
+            if 1.20 < dc_odd < 1.55:
+                 lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{dc_odd})")
+                 if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}
+
+        # Se não deu segura, tenta valor
+        if not lines:
+            if oh < 2.05: lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
+            elif oa < 2.05: lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
+            else: lines.append("🎲 Jogo Equilibrado (Verificar site)")
+
+        return lines, best_pick
+
+    async def get_soccer_grade(self):
+        all_games = []
+        self.daily_accumulator = []
+        
+        # AQUI É A MÁGICA: Só busca nas ligas da lista SOCCER_LEAGUES.
+        # Não tem como vir "U18" se não pedirmos.
+        for league in SOCCER_LEAGUES:
+            games = await self.fetch_odds(league['key'], league['name'])
+            for g in games:
+                report, pick = self.analyze_game(g)
+                g['report'] = report
+                if pick: self.daily_accumulator.append(pick)
+                all_games.append(g)
             
-            games_list = []
-            BLACKLIST = [
-                "WOMEN", " W ", " W", "(W)", "FEMININO", "FEM", "FRAUEN", "DAMEN", "FEMININE", 
-                "U21", "U23", "U20", "U19", "SUB-20", "SUB-21", "SUB20",
-                "RESERVE", "YOUTH", "JUVENIL", "AMADOR", "ESOCCER", "SIMULATED", "SRL", "BATTLE", "VIRTUAL"
-            ]
-            
-            for item in data:
-                try:
-                    h, a = item['teams']['home']['name'], item['teams']['away']['name']
-                    full = normalize_name(f"{h} {a} {item['league']['name']}")
-                    if any(b in full for b in BLACKLIST): continue
-                    
-                    score = 0 
-                    if any(l in full for l in TIER_1_LEAGUES): score += 50000
-                    if any(v in full for v in VIP_TEAMS): score += 20000
-                    if mode == "nba": score += 10000
-                    
-                    has_news = False
-                    for news in LATEST_HEADLINES:
-                        if normalize_name(h) in normalize_name(news) or normalize_name(a) in normalize_name(news):
-                            has_news = True; score += 5000
+            # Delay anti-stress da API
+            await asyncio.sleep(1) 
 
-                    if score == 0: continue
+        # Ordena por horário e depois por "tamanho" da odd (jogos mais equilibrados primeiro)
+        all_games.sort(key=lambda x: x['time'])
+        return all_games
 
-                    games_list.append({
-                        "id": item['fixture']['id'], "match": f"{h} x {a}", "league": item['league']['name'], 
-                        "time": datetime.fromisoformat(item['fixture']['date']).strftime("%H:%M"), 
-                        "score": score, "home": h, "away": a, "has_news": has_news
-                    })
-                except: continue
+    async def get_nba_games(self):
+        games = await self.fetch_odds("basketball_nba", "NBA")
+        processed = []
+        for g in games:
+            report, _ = self.analyze_game(g)
+            g['report'] = report
+            processed.append(g)
+        return processed
 
-            games_list.sort(key=lambda x: x['score'], reverse=True)
-            top_games = games_list[:limit]
-            
-            if not top_games: return [], "⚠️ Nenhum jogo da Elite encontrado hoje."
-
-            self.daily_accumulator = []
-
-            final_list = []
-            for i, game in enumerate(top_games):
-                # STEALTH DELAY: Espera entre 1.5 e 3 segundos antes de cada chamada
-                # Isso impede o "Burst Rate Limit"
-                await asyncio.sleep(random.uniform(1.5, 3.0))
-                
-                is_main_event = (i == 0 and mode == "soccer")
-                report = await self._analyze_match(client, host, game, is_main_event)
-                final_list.append({"match": game['match'], "league": game['league'], "time": game['time'], "report": report, "is_main": is_main_event, "home": game['home'], "away": game['away']})
-            return final_list, None
-
-    async def _analyze_match(self, client, host, game, is_main_event):
-        try:
-            endpoint = "predictions" if is_main_event else "odds"
-            url = f"https://{host}/{endpoint}?fixture={game['id']}"
-            if not is_main_event: url += "&timezone=America/Sao_Paulo"
-            
-            # STEALTH: Se der erro 403 (Forbidden), a gente trata
-            r = await client.get(url, headers=self.headers_as)
-            
-            if r.status_code == 403:
-                logger.error(f"⚠️ Erro 403 no jogo {game['match']}. API bloqueou.")
-                return ["🔒 Bloqueio de Segurança (API)"]
-            
-            data = r.json().get("response", [])
-            if not data: return ["🔒 (Sem Dados)"]
-
-            lines = []
-            if game['has_news']: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
-
-            if is_main_event:
-                pred = data[0]['predictions']
-                lines.append(f"🧠 **IA:** {pred['advice']}")
-                lines.append(f"⚔️ **Provável:** {pred['winner']['name']}")
-                return lines
-
-            bets = None
-            for book in data[0]['bookmakers']: bets = book['bets']; break
-            if not bets: return ["🔒 Fechado"]
-
-            w = next((b for b in bets if b['id'] == 1), None)
-            best_pick = None
-
-            if w:
-                oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
-                oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
-                
-                if 1.25 < oh < 1.75: 
-                    msg = f"🟢 **Segura:** {game['home']} (@{oh})"
-                    lines.append(msg)
-                    best_pick = {"pick": f"{game['home']} Vence", "odd": oh, "match": game['match']}
-                    
-                elif 1.25 < oa < 1.75: 
-                    msg = f"🟢 **Segura:** {game['away']} (@{oa})"
-                    lines.append(msg)
-                    best_pick = {"pick": f"{game['away']} Vence", "odd": oa, "match": game['match']}
-                    
-                elif 1.25 < oh < 2.5: 
-                    msg = f"🟢 **Segura:** {game['home']} ou Empate (@{oh})"
-                    lines.append(msg)
-                    if oh > 1.30 and not best_pick: 
-                        best_pick = {"pick": f"{game['home']} ou Empate", "odd": oh, "match": game['match']}
-
-            if not best_pick:
-                btts = next((b for b in bets if b['id'] == 8), None)
-                if btts:
-                    yo = next((float(v['odd']) for v in btts['values'] if v['value'] == 'Yes'), 0)
-                    if 1.40 < yo < 1.95: 
-                         lines.append(f"🟡 **Valor:** Ambas Marcam (@{yo})")
-                         best_pick = {"pick": "Ambas Marcam", "odd": yo, "match": game['match']}
-
-            if best_pick: self.daily_accumulator.append(best_pick)
-
-            corners = False
-            for b in bets:
-                name_l = b['name'].lower()
-                if "corner" in name_l:
-                    for val in b['values']:
-                        if "Over" in val['value'] and float(val['odd']) < 1.60:
-                            lines.append(f"⛳ **Cantos:** Tendência de {val['value']} (@{val['odd']})")
-                            corners = True; break
-                if corners: break
-
-            cards = False
-            for b in bets:
-                name_l = b['name'].lower()
-                if "card" in name_l:
-                     for val in b['values']:
-                        if "Over" in val['value'] and float(val['odd']) < 1.70:
-                            lines.append(f"🟨 **Cartões:** Jogo Pegado! {val['value']} (@{val['odd']})")
-                            cards = True; break
-                if cards: break
-
-            if not lines: lines.append("🎲 Verificar Odds")
-            return lines
-        except: return ["⚠️ Erro Análise"]
+    async def get_ufc_games(self):
+        games = await self.fetch_odds("mma_mixed_martial_arts", "UFC/MMA")
+        return games
 
 engine = SportsEngine()
 
@@ -308,11 +234,17 @@ def gerar_texto_bilhete(palpites):
     if not palpites: return ""
     selected = []
     total_odd = 1.0
+    import random
+    random.shuffle(palpites)
+    
+    # Tenta montar bilhete com odd até 30
     for p in palpites:
-        if total_odd > 30: break 
+        if total_odd > 25: break 
         selected.append(p)
         total_odd *= p['odd']
-    if total_odd < 5.0: return ""
+        
+    if total_odd < 3.0: return ""
+    
     txt = f"\n🎟️ **BILHETE LUNÁTICO (ODD {total_odd:.2f})** 🚀\n"
     for s in selected: txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
     txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
@@ -329,7 +261,7 @@ async def enviar_com_botao(context, text, poll_data=None, bilhete_txt=""):
     except: pass
 
 async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Reiniciando sistema...")
+    await update.message.reply_text("🔄 Reiniciando...")
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -337,73 +269,89 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(rep, parse_mode=ParseMode.MARKDOWN)
 
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
-    games, error = await engine.get_matches("soccer", limit=7)
-    if not games: return 
-    msg = f"🔥 **DOSSIÊ V121 (STEALTH)** 🔥\n\n"
+    games = await engine.get_soccer_grade()
+    if not games: 
+        # Se não achar nada, não manda nada. Melhor silêncio que lixo.
+        return 
+    
+    # Pega Top 7
+    top_games = games[:7]
+    
+    msg = f"🔥 **DOSSIÊ V122 (ELITE)** 🔥\n\n"
     poll_data = None
-    for g in games:
-        icon = "⭐ **JOGO DO DIA** ⭐\n" if g['is_main'] else ""
-        if g['is_main']: poll_data = {"h": g['home'], "a": g['away']}
+    
+    for i, g in enumerate(top_games):
+        is_main = (i == 0)
+        icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
+        if is_main: poll_data = {"h": g['home'], "a": g['away']}
+        
         block = "\n".join(g['report'])
-        msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
+        msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
+    
     bilhete = gerar_texto_bilhete(engine.daily_accumulator)
-    msg += f"🔋 Cota: {engine.remaining_requests}/100"
     await enviar_com_botao(context, msg, poll_data, bilhete)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
-    games, _ = await engine.get_matches("nba", limit=3)
+    games = await engine.get_nba_games()
     if not games: return
-    msg = f"🏀 **NBA PRIME V121** 🏀\n\n"
-    for g in games:
+    top = games[:3]
+    msg = f"🏀 **NBA PRIME V122** 🏀\n\n"
+    for g in top:
         block = "\n".join(g['report'])
-        msg += f"🏟 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🔋 Cota: {engine.remaining_requests}/100"
+        msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
 
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
-    fights, _ = await engine.get_ufc_fights()
+    fights = await engine.get_ufc_games()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V121)** 🥊\n\n"
-    for f in fights:
-        msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
+    top = fights[:6]
+    msg = "🥊 **UFC FIGHT DAY (V122)** 🥊\n\n"
+    for f in top:
+        msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
           [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V121 - STEALTH**\nProteção Anti-Ban + Bilheteiro.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V122 - ELITE**\nSem Sub-18. Sem Feminino. Só Odds Reais.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
+    
     if data == "test_api":
         await q.edit_message_text("⏳ Check-up..."); rep = await engine.test_all_connections()
         kb = [[InlineKeyboardButton("Voltar", callback_data="top_jogos")]]
         await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN); return
     
     if data == "ufc_fights":
-        await q.edit_message_text("🥊 Buscando Lutas..."); fights, _ = await engine.get_ufc_fights()
-        if not fights: await q.message.reply_text("⚠️ Sem lutas hoje."); return
+        await q.edit_message_text("🥊 Buscando Lutas..."); fights = await engine.get_ufc_games()
+        if not fights: await q.message.reply_text("⚠️ Sem lutas encontradas."); return
         msg = "🥊 **UFC MANUAL** 🥊\n\n"
-        for f in fights: msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
+        for f in fights[:6]: msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
-    
-    await q.edit_message_text("🔎 Buscando a Elite..."); mode = "nba" if "nba" in data else "soccer"; limit_req = 7 if mode == "soccer" else 3
-    games, err = await engine.get_matches(mode, limit=limit_req)
-    if err: await q.message.reply_text(err); return
-    
-    msg = f"🔥 **GRADE V121**\n\n"
-    poll_data = None
-    for g in games:
-        icon = "⭐ **JOGO DO DIA** ⭐\n" if g.get('is_main') else ""
-        if g.get('is_main') and mode == "soccer": poll_data = {"h": g['home'], "a": g['away']}
-        blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
-    
-    bilhete = ""
-    if mode == "soccer": bilhete = gerar_texto_bilhete(engine.daily_accumulator)
-    
-    msg += f"🔋 Cota: {engine.remaining_requests}/100"
-    await enviar_com_botao(context, msg, poll_data, bilhete)
-    await q.message.reply_text("✅ Postado!")
+
+    if data == "nba_hoje":
+        await q.edit_message_text("🏀 Buscando NBA..."); games = await engine.get_nba_games()
+        if not games: await q.message.reply_text("⚠️ Sem jogos NBA."); return
+        msg = f"🏀 **NBA MANUAL** 🏀\n\n"
+        for g in games[:3]:
+            blk = "\n".join(g['report']); msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
+        await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
+
+    if data == "top_jogos":
+        await q.edit_message_text("⚽ Buscando Futebol (Elite)..."); games = await engine.get_soccer_grade()
+        if not games: await q.message.reply_text("⚠️ Sem jogos Tier 1 com Odds hoje."); return
+        msg = f"🔥 **GRADE MANUAL V122**\n\n"
+        poll_data = None
+        for i, g in enumerate(games[:7]):
+            is_main = (i == 0)
+            icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
+            if is_main: poll_data = {"h": g['home'], "a": g['away']}
+            blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
+        
+        bilhete = gerar_texto_bilhete(engine.daily_accumulator)
+        await enviar_com_botao(context, msg, poll_data, bilhete)
+        await q.message.reply_text("✅ Postado!")
 
 def main():
     if not BOT_TOKEN: return
