@@ -7,6 +7,7 @@ import httpx
 import threading
 import unicodedata
 import psutil
+import random # NOVO: Para o delay aleatório
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -56,7 +57,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V120 - TICKET GENERATOR")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V121 - STEALTH MODE")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -80,38 +81,43 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V120 (BILHETEIRO) =================
+# ================= MOTOR V121 (STEALTH MODE) =================
 class SportsEngine:
     def __init__(self):
-        self.headers_as = {"x-apisports-key": API_FOOTBALL_KEY}
+        self.headers_as = {
+            "x-apisports-key": API_FOOTBALL_KEY,
+            # MASCARAMENTO: Parece um navegador real agora
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
         self.remaining_requests = 100
-        # Armazena os palpites para o bilhete
         self.daily_accumulator = []
 
     def get_today_date(self):
         return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%d")
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V120**\n\n"
+        report = "📊 **STATUS V121 (STEALTH)**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
         if API_FOOTBALL_KEY:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=10) as client: # Aumentei timeout
                 try:
                     r = await client.get("https://v3.football.api-sports.io/status", headers=self.headers_as)
                     data = r.json()
-                    curr = data['response']['requests']['current']
-                    limit = data['response']['requests']['limit_day']
-                    self.remaining_requests = limit - curr
-                    report += f"✅ API-Sports: {self.remaining_requests}/{limit}\n"
-                except: report += "❌ API-Sports: Erro\n"
+                    if "errors" in data and data["errors"]:
+                        report += f"❌ API-Sports: ERRO (Provável Ban)\nMSG: {data['errors']}\n"
+                    else:
+                        curr = data['response']['requests']['current']
+                        limit = data['response']['requests']['limit_day']
+                        self.remaining_requests = limit - curr
+                        report += f"✅ API-Sports: {self.remaining_requests}/{limit}\n"
+                except Exception as e: report += f"❌ API-Sports: Falha ({str(e)})\n"
+        
+        # Teste UFC
         if THE_ODDS_API_KEY:
-            async with httpx.AsyncClient(timeout=5) as client:
-                try:
-                    r = await client.get(f"https://api.the-odds-api.com/v4/sports?apiKey={THE_ODDS_API_KEY}")
-                    if r.status_code == 200: report += f"✅ The Odds API: OK\n"
-                    else: report += "❌ The Odds API: Erro Key\n"
-                except: report += "❌ The Odds API: Erro Conexão\n"
+             # The Odds API é tranquila, não precisa de stealth pesado
+             pass 
         return report
 
     async def get_ufc_fights(self):
@@ -158,7 +164,7 @@ class SportsEngine:
                 if 'x-ratelimit-requests-remaining' in r.headers:
                     self.remaining_requests = int(r.headers['x-ratelimit-requests-remaining'])
                 data = r.json().get("response", [])
-            except: return [], "❌ Erro Conexão"
+            except: return [], "❌ Erro Conexão ou Banimento de IP."
             
             games_list = []
             BLACKLIST = [
@@ -183,7 +189,6 @@ class SportsEngine:
                         if normalize_name(h) in normalize_name(news) or normalize_name(a) in normalize_name(news):
                             has_news = True; score += 5000
 
-                    # Filtro Rígido V119
                     if score == 0: continue
 
                     games_list.append({
@@ -198,11 +203,14 @@ class SportsEngine:
             
             if not top_games: return [], "⚠️ Nenhum jogo da Elite encontrado hoje."
 
-            # RESETA O BILHETE DO DIA
             self.daily_accumulator = []
 
             final_list = []
             for i, game in enumerate(top_games):
+                # STEALTH DELAY: Espera entre 1.5 e 3 segundos antes de cada chamada
+                # Isso impede o "Burst Rate Limit"
+                await asyncio.sleep(random.uniform(1.5, 3.0))
+                
                 is_main_event = (i == 0 and mode == "soccer")
                 report = await self._analyze_match(client, host, game, is_main_event)
                 final_list.append({"match": game['match'], "league": game['league'], "time": game['time'], "report": report, "is_main": is_main_event, "home": game['home'], "away": game['away']})
@@ -213,19 +221,24 @@ class SportsEngine:
             endpoint = "predictions" if is_main_event else "odds"
             url = f"https://{host}/{endpoint}?fixture={game['id']}"
             if not is_main_event: url += "&timezone=America/Sao_Paulo"
+            
+            # STEALTH: Se der erro 403 (Forbidden), a gente trata
             r = await client.get(url, headers=self.headers_as)
+            
+            if r.status_code == 403:
+                logger.error(f"⚠️ Erro 403 no jogo {game['match']}. API bloqueou.")
+                return ["🔒 Bloqueio de Segurança (API)"]
+            
             data = r.json().get("response", [])
             if not data: return ["🔒 (Sem Dados)"]
 
             lines = []
             if game['has_news']: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
 
-            # Coleta dados para Bilhete se não for prediction (prediction é chato de pegar odd)
             if is_main_event:
                 pred = data[0]['predictions']
                 lines.append(f"🧠 **IA:** {pred['advice']}")
                 lines.append(f"⚔️ **Provável:** {pred['winner']['name']}")
-                # Tentamos achar odd aqui se der, senão paciência
                 return lines
 
             bets = None
@@ -233,14 +246,13 @@ class SportsEngine:
             if not bets: return ["🔒 Fechado"]
 
             w = next((b for b in bets if b['id'] == 1), None)
-            best_pick = None # Para salvar no bilhete
+            best_pick = None
 
             if w:
                 oh = next((float(v['odd']) for v in w['values'] if v['value'] == 'Home'), 0)
                 oa = next((float(v['odd']) for v in w['values'] if v['value'] == 'Away'), 0)
                 
-                # Regras de Odds V119
-                if 1.25 < oh < 1.75: # Levemente mais seguro para bilhete
+                if 1.25 < oh < 1.75: 
                     msg = f"🟢 **Segura:** {game['home']} (@{oh})"
                     lines.append(msg)
                     best_pick = {"pick": f"{game['home']} Vence", "odd": oh, "match": game['match']}
@@ -253,11 +265,9 @@ class SportsEngine:
                 elif 1.25 < oh < 2.5: 
                     msg = f"🟢 **Segura:** {game['home']} ou Empate (@{oh})"
                     lines.append(msg)
-                    # Double Chance paga pouco, bom pra bilhete se for odd decente
                     if oh > 1.30 and not best_pick: 
                         best_pick = {"pick": f"{game['home']} ou Empate", "odd": oh, "match": game['match']}
 
-            # Se não pegou vencedor, tenta Valor ou Escanteios
             if not best_pick:
                 btts = next((b for b in bets if b['id'] == 8), None)
                 if btts:
@@ -266,11 +276,8 @@ class SportsEngine:
                          lines.append(f"🟡 **Valor:** Ambas Marcam (@{yo})")
                          best_pick = {"pick": "Ambas Marcam", "odd": yo, "match": game['match']}
 
-            # Adiciona ao acumulador global se tiver um bom palpite
-            if best_pick:
-                self.daily_accumulator.append(best_pick)
+            if best_pick: self.daily_accumulator.append(best_pick)
 
-            # Resto das analises (Cantos/Cartoes) para o relatorio
             corners = False
             for b in bets:
                 name_l = b['name'].lower()
@@ -297,25 +304,17 @@ class SportsEngine:
 
 engine = SportsEngine()
 
-# FUNÇÃO PARA GERAR O TEXTO DO BILHETE LUNÁTICO
 def gerar_texto_bilhete(palpites):
     if not palpites: return ""
-    
     selected = []
     total_odd = 1.0
-    
-    # Tenta montar acumulada entre 15 e 30
     for p in palpites:
-        if total_odd > 30: break # Passou do teto, para
+        if total_odd > 30: break 
         selected.append(p)
         total_odd *= p['odd']
-    
-    # Se ficou muito baixa (menos de 5), nem manda bilhete separado
     if total_odd < 5.0: return ""
-    
     txt = f"\n🎟️ **BILHETE LUNÁTICO (ODD {total_odd:.2f})** 🚀\n"
-    for s in selected:
-        txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
+    for s in selected: txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
     txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
     return txt
 
@@ -340,25 +339,21 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games, error = await engine.get_matches("soccer", limit=7)
     if not games: return 
-    
-    msg = f"🔥 **DOSSIÊ V120 (COM BILHETE)** 🔥\n\n"
+    msg = f"🔥 **DOSSIÊ V121 (STEALTH)** 🔥\n\n"
     poll_data = None
     for g in games:
         icon = "⭐ **JOGO DO DIA** ⭐\n" if g['is_main'] else ""
         if g['is_main']: poll_data = {"h": g['home'], "a": g['away']}
         block = "\n".join(g['report'])
         msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
-    
-    # GERA O BILHETE COM OS DADOS COLETADOS
     bilhete = gerar_texto_bilhete(engine.daily_accumulator)
-    
     msg += f"🔋 Cota: {engine.remaining_requests}/100"
     await enviar_com_botao(context, msg, poll_data, bilhete)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games, _ = await engine.get_matches("nba", limit=3)
     if not games: return
-    msg = f"🏀 **NBA PRIME V120** 🏀\n\n"
+    msg = f"🏀 **NBA PRIME V121** 🏀\n\n"
     for g in games:
         block = "\n".join(g['report'])
         msg += f"🏟 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -368,7 +363,7 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights, _ = await engine.get_ufc_fights()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V120)** 🥊\n\n"
+    msg = "🥊 **UFC FIGHT DAY (V121)** 🥊\n\n"
     for f in fights:
         msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
@@ -376,7 +371,7 @@ async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
           [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V120 - BILHETEIRO**\nGerador de Múltipla (Odd 15-30) Ativado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V121 - STEALTH**\nProteção Anti-Ban + Bilheteiro.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
@@ -392,18 +387,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for f in fights: msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['h']}: @{f['odd_h']}\n👊 {f['a']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
     
-    await q.edit_message_text("🔎 Buscando..."); mode = "nba" if "nba" in data else "soccer"; limit_req = 7 if mode == "soccer" else 3
+    await q.edit_message_text("🔎 Buscando a Elite..."); mode = "nba" if "nba" in data else "soccer"; limit_req = 7 if mode == "soccer" else 3
     games, err = await engine.get_matches(mode, limit=limit_req)
     if err: await q.message.reply_text(err); return
     
-    msg = f"🔥 **GRADE V120**\n\n"
+    msg = f"🔥 **GRADE V121**\n\n"
     poll_data = None
     for g in games:
         icon = "⭐ **JOGO DO DIA** ⭐\n" if g.get('is_main') else ""
         if g.get('is_main') and mode == "soccer": poll_data = {"h": g['home'], "a": g['away']}
         blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league'].upper()}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
     
-    # GERA BILHETE SE FOR FUTEBOL
     bilhete = ""
     if mode == "soccer": bilhete = gerar_texto_bilhete(engine.daily_accumulator)
     
