@@ -33,26 +33,27 @@ THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 SENT_LINKS = set()
 LATEST_HEADLINES = []
 
-# LISTA VIP (ESSES TIMES SEMPRE APARECEM, NÃO IMPORTA A HORA)
+# LISTA VIP (PONTUAÇÃO MÁXIMA - TOPO DA LISTA)
 VIP_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "GREMIO", "INTERNACIONAL",
     "REAL MADRID", "BARCELONA", "ATLETICO MADRID",
-    "MANCHESTER CITY", "LIVERPOOL", "ARSENAL", "CHELSEA", "MANCHESTER UNITED", "TOTTENHAM",
-    "PSG", "BAYERN MUNICH", "DORTMUND", "INTER MILAN", "AC MILAN", "JUVENTUS",
+    "MANCHESTER CITY", "LIVERPOOL", "ARSENAL", "CHELSEA", "MANCHESTER UNITED", "TOTTENHAM", "NEWCASTLE",
+    "PSG", "BAYERN MUNICH", "DORTMUND", "LEVERKUSEN",
+    "INTER MILAN", "AC MILAN", "JUVENTUS", "NAPOLI",
     "INTER MIAMI", "AL NASSR", "AL HILAL"
 ]
 
-# LIGAS ELITE (The Odds API Keys)
+# LIGAS ELITE (PESOS DE PRIORIDADE)
 SOCCER_LEAGUES = [
-    {"key": "soccer_england_premier_league", "name": "PREMIER LEAGUE", "weight": 500},
-    {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE", "weight": 500},
-    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO A", "weight": 400},
-    {"key": "soccer_spain_la_liga", "name": "LA LIGA", "weight": 300},
-    {"key": "soccer_italy_serie_a", "name": "SERIE A", "weight": 300},
-    {"key": "soccer_germany_bundesliga", "name": "BUNDESLIGA", "weight": 300},
-    {"key": "soccer_france_ligue_one", "name": "LIGUE 1", "weight": 200},
-    {"key": "soccer_brazil_campeonato_paulista", "name": "PAULISTA A1", "weight": 100},
-    {"key": "soccer_brazil_campeonato_carioca", "name": "CARIOCA A1", "weight": 100}
+    {"key": "soccer_england_premier_league", "name": "PREMIER LEAGUE", "weight": 2000},
+    {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE", "weight": 2000},
+    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO A", "weight": 1500},
+    {"key": "soccer_spain_la_liga", "name": "LA LIGA", "weight": 1000},
+    {"key": "soccer_italy_serie_a", "name": "SERIE A", "weight": 1000},
+    {"key": "soccer_germany_bundesliga", "name": "BUNDESLIGA", "weight": 1000},
+    {"key": "soccer_france_ligue_one", "name": "LIGUE 1", "weight": 500},
+    {"key": "soccer_brazil_campeonato_paulista", "name": "PAULISTA A1", "weight": 200},
+    {"key": "soccer_brazil_campeonato_carioca", "name": "CARIOCA A1", "weight": 200}
 ]
 
 def normalize_name(name):
@@ -61,7 +62,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V123 - VIP PRIORITY")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V126 - FULL TRANSPARENCY")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -85,13 +86,13 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V123 (PRIORIDADE VIP) =================
+# ================= MOTOR V126 (TRANSPARÊNCIA TOTAL) =================
 class SportsEngine:
     def __init__(self):
         self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V123 (VIP)**\n\n"
+        report = "📊 **STATUS V126**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
         
@@ -131,16 +132,14 @@ class SportsEngine:
                         h = event['home_team']
                         a = event['away_team']
                         
-                        # --- CÁLCULO DE SCORE DE IMPORTÂNCIA (V123) ---
-                        match_score = weight # Começa com o peso da liga
+                        match_score = weight 
                         h_norm = normalize_name(h)
                         a_norm = normalize_name(a)
                         
-                        # Se tiver time VIP, ganha MUITO ponto (fura a fila)
                         is_vip = False
                         for vip in VIP_TEAMS:
                             if vip in h_norm or vip in a_norm:
-                                match_score += 1000
+                                match_score += 100000 
                                 is_vip = True
                                 break
                         
@@ -158,7 +157,7 @@ class SportsEngine:
                                 "match": f"{h} x {a}",
                                 "league": display_name,
                                 "time": time_str,
-                                "datetime": evt_time, # Usado para ordenação secundaria
+                                "datetime": evt_time,
                                 "odd_h": odds_h,
                                 "odd_a": odds_a,
                                 "odd_d": odds_d,
@@ -184,7 +183,7 @@ class SportsEngine:
 
         oh, oa, od = game['odd_h'], game['odd_a'], game['odd_d']
 
-        # LOGICA DE ODD AJUSTADA
+        # ESTRATÉGIA: SEGURANÇA (Verde)
         if 1.15 < oh < 1.75:
             lines.append(f"🟢 **Segura:** {game['home']} Vence (@{oh})")
             best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
@@ -197,10 +196,17 @@ class SportsEngine:
                  lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{dc_odd})")
                  if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}
 
+        # SE NÃO ACHOU SEGURA, MOSTRA O QUE TEM (V126)
         if not lines:
-            if oh < 2.05: lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
-            elif oa < 2.05: lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
-            else: lines.append("🎲 Jogo Equilibrado (Verificar site)")
+            if oh < 2.05: 
+                lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
+                best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
+            elif oa < 2.05: 
+                lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
+                best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
+            else: 
+                # AQUI ESTÁ A MUDANÇA: MOSTRA A ODD CRUA
+                lines.append(f"⚖️ **Equilibrado:** Casa @{oh} | Fora @{oa}")
 
         return lines, best_pick
 
@@ -209,7 +215,6 @@ class SportsEngine:
         self.daily_accumulator = []
         
         for league in SOCCER_LEAGUES:
-            # Passa o Peso da Liga
             games = await self.fetch_odds(league['key'], league['name'], league['weight'])
             for g in games:
                 report, pick = self.analyze_game(g)
@@ -218,15 +223,11 @@ class SportsEngine:
                 all_games.append(g)
             await asyncio.sleep(0.5)
 
-        # ORDENAÇÃO INTELIGENTE V123:
-        # 1. Primeiro pelo Score (VIPs e Premier League no topo)
-        # 2. Depois pelo Horário (Crescente)
-        # O sinal negativo em -x['match_score'] faz a ordem ser Decrescente no score
+        # Ordena pelo Score (VIP) e Hora
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
         
         return all_games
 
-    # NBA e UFC não mudaram, ja funcionam bem
     async def get_nba_games(self):
         games = await self.fetch_odds("basketball_nba", "NBA", 500)
         processed = []
@@ -249,8 +250,8 @@ def gerar_texto_bilhete(palpites):
     import random
     random.shuffle(palpites)
     
-    # Prioriza jogos VIP no bilhete também
-    palpites.sort(key=lambda x: 1 if "Real" in x['match'] or "City" in x['match'] or "Flamengo" in x['match'] else 0, reverse=True)
+    # Prioriza VIPs
+    palpites.sort(key=lambda x: 1 if "Real" in x['match'] or "City" in x['match'] or "Flamengo" in x['match'] or "Arsenal" in x['match'] else 0, reverse=True)
 
     for p in palpites:
         if total_odd > 20: break 
@@ -286,17 +287,15 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
     if not games: return
     
-    # Top 7, mas agora ordenado por importância
     top_games = games[:7]
     
-    msg = f"🔥 **DOSSIÊ V123 (VIP PRIORITY)** 🔥\n\n"
+    msg = f"🔥 **DOSSIÊ V126 (TRANSPARENTE)** 🔥\n\n"
     poll_data = None
     
     for i, g in enumerate(top_games):
-        # O Jogo do dia será o primeiro da lista (Maior Score)
         is_main = (i == 0)
         icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
-        if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n" # Icone especial para VIPs
+        if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
         
         if is_main: poll_data = {"h": g['home'], "a": g['away']}
         
@@ -309,7 +308,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_nba_games()
     if not games: return
-    msg = f"🏀 **NBA PRIME V123** 🏀\n\n"
+    msg = f"🏀 **NBA PRIME V126** 🏀\n\n"
     for g in games[:3]:
         block = "\n".join(g['report'])
         msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -318,7 +317,7 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights = await engine.get_ufc_games()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V123)** 🥊\n\n"
+    msg = "🥊 **UFC FIGHT DAY (V126)** 🥊\n\n"
     for f in fights[:6]:
         msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
@@ -326,7 +325,7 @@ async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
           [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V123 - CURADOR**\nPrioridade para Premier League e VIPs.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V126 - TRANSPARENTE**\nMostrando Odds de tudo!", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
@@ -352,9 +351,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
 
     if data == "top_jogos":
-        await q.edit_message_text("⚽ Buscando Elite (V123)..."); games = await engine.get_soccer_grade()
+        await q.edit_message_text("⚽ Buscando Elite (V126)..."); games = await engine.get_soccer_grade()
         if not games: await q.message.reply_text("⚠️ Sem jogos Tier 1 com Odds."); return
-        msg = f"🔥 **GRADE MANUAL V123**\n\n"
+        msg = f"🔥 **GRADE MANUAL V126**\n\n"
         poll_data = None
         for i, g in enumerate(games[:7]):
             is_main = (i == 0)
