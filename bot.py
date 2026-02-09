@@ -11,8 +11,6 @@ import random
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
-
-# --- NOVIDADE: TEXTO PARA VOZ ---
 from gtts import gTTS 
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -32,15 +30,8 @@ PORT = int(os.getenv("PORT", 10000))
 ADMIN_ID = os.getenv("ADMIN_ID")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 
-# --- SISTEMA DE AFILIADO ROTATIVO (Ideia 6) ---
-AFFILIATE_LINKS = [
-    "https://www.bet365.com",
-    "https://br.betano.com",
-    "https://stake.com"
-]
-
-def get_random_link():
-    return random.choice(AFFILIATE_LINKS)
+AFFILIATE_LINKS = ["https://www.bet365.com", "https://br.betano.com", "https://stake.com"]
+def get_random_link(): return random.choice(AFFILIATE_LINKS)
 
 SENT_LINKS = set()
 LATEST_HEADLINES = []
@@ -72,7 +63,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V127 - CONTENT MACHINE")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V129 - NEWS DIAGNOSTIC")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -82,27 +73,38 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
         feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
-        whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação"]
-        blacklist = ["bbb", "festa", "namorada"]
-        LATEST_HEADLINES = [entry.title for entry in feed.entries[:20]]
+        
+        # Filtro Rigoroso (Só manda se tiver essas palavras)
+        whitelist = ["lesão", "vetado", "fora", "contratado", "vendido", "reforço", "escalação", "desfalque", "dúvida"]
+        blacklist = ["bbb", "festa", "namorada", "reality"]
+        
+        # Atualiza cache para o Radar dos jogos
+        if feed.entries:
+            LATEST_HEADLINES = [entry.title for entry in feed.entries[:20]]
+        
         c=0
         for entry in feed.entries:
             if entry.link in SENT_LINKS: continue
-            if any(w in entry.title.lower() for w in whitelist) and not any(b in entry.title.lower() for b in blacklist):
+            
+            # Lógica de Filtro
+            title_lower = entry.title.lower()
+            if any(w in title_lower for w in whitelist) and not any(b in title_lower for b in blacklist):
                 await context.bot.send_message(chat_id=CHANNEL_ID, text=f"⚠️ **BOLETIM**\n\n📰 {entry.title}\n🔗 {entry.link}")
                 SENT_LINKS.add(entry.link)
                 c+=1
-                if c>=2: break
+                if c>=2: break # Não manda mais que 2 de uma vez pra não floodar
+        
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
-    except: pass
+    except Exception as e:
+        logger.error(f"Erro no News Job: {e}")
 
-# ================= MOTOR V127 =================
+# ================= MOTOR V129 =================
 class SportsEngine:
     def __init__(self):
         self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V127**\n\n"
+        report = "📊 **STATUS V129**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
         if THE_ODDS_API_KEY:
@@ -166,51 +168,66 @@ class SportsEngine:
                 return games
             except: return []
 
+    def calculate_stats(self, odd):
+        try:
+            prob = round((1 / odd) * 100, 1)
+            stake = "1 Unidade"
+            risk = "🟢 Baixo"
+            if odd >= 1.70 and odd < 2.20: stake = "0.75 Unidade"; risk = "🟡 Médio"
+            elif odd >= 2.20: stake = "0.5 Unidade"; risk = "🔴 Alto"
+            return prob, stake, risk
+        except: return 0, "?", "?"
+
     def analyze_game(self, game):
         lines = []
         best_pick = None
         has_news = False
+        # Verifica Radar de Notícias
         for news in LATEST_HEADLINES:
             if normalize_name(game['home']) in normalize_name(news) or normalize_name(game['away']) in normalize_name(news): has_news = True
         
         if has_news: lines.append("📰 **Radar:** Notícias recentes no GE.")
 
         oh, oa, od = game['odd_h'], game['odd_a'], game['odd_d']
+        pick_odd = 0
 
-        # ESTRATÉGIA PADRÃO
+        # ESTRATÉGIA
         if 1.15 < oh < 1.75:
             lines.append(f"🟢 **Segura:** {game['home']} Vence (@{oh})")
             best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
+            pick_odd = oh
         elif 1.15 < oa < 1.75:
             lines.append(f"🟢 **Segura:** {game['away']} Vence (@{oa})")
             best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
+            pick_odd = oa
         elif 1.25 < oh < 2.30 and od > 0:
             dc_odd = round(1 / (1/oh + 1/od), 2)
             if 1.15 < dc_odd < 1.60:
                  lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{dc_odd})")
-                 if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}
+                 if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}; pick_odd = dc_odd
 
-        # IDEIA 12: CAÇADOR DE ZEBRAS (Valor Alto)
         if not lines:
+            # Caçador de Zebras
             if oh > 3.00 and oa < 1.50 and od > 0:
                 dc_zebra = round(1 / (1/oh + 1/od), 2)
-                if dc_zebra > 1.90:
-                     lines.append(f"🦓 **ZEBRA ALERTA:** {game['home']} ou Empate (@{dc_zebra})")
-            
+                if dc_zebra > 1.90: lines.append(f"🦓 **ZEBRA ALERTA:** {game['home']} ou Empate (@{dc_zebra})")
             if oa > 3.00 and oh < 1.50 and od > 0:
                 dc_zebra = round(1 / (1/oa + 1/od), 2)
-                if dc_zebra > 1.90:
-                     lines.append(f"🦓 **ZEBRA ALERTA:** {game['away']} ou Empate (@{dc_zebra})")
+                if dc_zebra > 1.90: lines.append(f"🦓 **ZEBRA ALERTA:** {game['away']} ou Empate (@{dc_zebra})")
 
         if not lines:
             if oh < 2.05: 
                 lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
-                best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
+                best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}; pick_odd = oh
             elif oa < 2.05: 
                 lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
-                best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
+                best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}; pick_odd = oa
             else: 
                 lines.append(f"⚖️ **Equilibrado:** Casa @{oh} | Fora @{oa}")
+
+        if pick_odd > 0:
+            prob, stake, risk = self.calculate_stats(pick_odd)
+            lines.append(f"📊 **Prob:** {prob}% | ⚖️ **Stake:** {stake}")
 
         return lines, best_pick
 
@@ -260,15 +277,17 @@ def gerar_texto_bilhete(palpites):
     txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
     return txt
 
-# --- FUNÇÃO DE ÁUDIO (Ideia 2) ---
 async def enviar_audio_narracao(context, game):
-    text = f"Fala galera! Destaque do dia: {game['match']} pela {game['league']}. "
+    text = f"Destaque do dia: {game['match']} pela {game['league']}. "
+    found_bet = False
     for line in game['report']:
-        # Limpa caracteres markdown para o áudio ficar limpo
-        clean_line = line.replace("*", "").replace("🟢", "").replace("🟡", "").replace("📰", "")
-        text += f"{clean_line}. "
-    text += "Boa sorte a todos!"
-    
+        if "Segura" in line or "Valor" in line:
+            clean = line.replace("*", "").replace("🟢", "").replace("🟡", "")
+            text += f"Nossa análise indica: {clean}. "
+            found_bet = True
+            break
+    if not found_bet: text += "Jogo equilibrado, confira as odds."
+    text += "Boa sorte!"
     try:
         tts = gTTS(text=text, lang='pt')
         tts.save("narracao.mp3")
@@ -279,26 +298,41 @@ async def enviar_audio_narracao(context, game):
 
 async def enviar_com_botao(context, text, poll_data=None, bilhete_txt=""):
     full_text = text + bilhete_txt
-    # IDEIA 6: Link Rotativo
     link = get_random_link()
     kb = [[InlineKeyboardButton("💸 Apostar Agora", url=link)]]
     try: 
         await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
-        
-        # IDEIA 5: Botões de Reação (Enquete Simples)
         if poll_data:
             await asyncio.sleep(2)
-            await context.bot.send_poll(
-                chat_id=CHANNEL_ID, 
-                question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", 
-                options=["🔥 Casa", "🤝 Empate", "🤑 Visitante"], 
-                is_anonymous=True
-            )
+            await context.bot.send_poll(chat_id=CHANNEL_ID, question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", options=["🔥 Casa", "🤝 Empate", "🤑 Visitante"], is_anonymous=True)
     except: pass
 
-# --- NOVOS COMANDOS ---
 async def sos_red_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "🆘 **SOS RED** 🆘\n\nCalma, guerreiro. Dia ruim acontece.\n\n1. Pare por hoje.\n2. Não tente recuperar tudo de uma vez.\n3. Respeite sua gestão (1% a 2% da banca).\n\nAmanhã tem mais. O mercado não vai fugir."
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+
+# --- NOVO COMANDO DE DIAGNÓSTICO DE NOTÍCIAS ---
+async def testar_news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🕵️‍♂️ **Testando Radar de Notícias...**")
+    try:
+        def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
+        feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
+        
+        if not feed.entries:
+            await update.message.reply_text("❌ Erro: Feed RSS vazio ou inacessível.")
+            return
+
+        msg = f"✅ **Feed OK! Encontradas {len(feed.entries)} notícias.**\n\n**Últimas 3 (Sem Filtro):**\n"
+        for entry in feed.entries[:3]:
+            msg += f"- {entry.title}\n"
+        
+        msg += "\n*Se você está vendo isso, o sistema está funcionando. Se não chega notificação automática, é porque nenhuma notícia recente caiu no filtro (lesão, vetado, etc).*"
+        await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro Crítico: {str(e)}")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = "📚 **Dicionário do Apostador**\n\n🟢 **Segura:** Odd baixa, alta chance.\n🟡 **Valor:** Odd média.\n📊 **Prob:** Chance estatística.\n⚖️ **Stake:** Quanto apostar."
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -313,28 +347,24 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
     if not games: return
     top_games = games[:7]
-    msg = f"🔥 **DOSSIÊ V127 (AUDIO + ZEBRA)** 🔥\n\n"
+    msg = f"🔥 **DOSSIÊ V129 (DIAGNOSTIC)** 🔥\n\n"
     poll_data = None
-    
     for i, g in enumerate(top_games):
         is_main = (i == 0)
         icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
         if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
         if is_main: 
             poll_data = {"h": g['home'], "a": g['away']}
-            # Envia áudio do jogo principal
             await enviar_audio_narracao(context, g)
-        
         block = "\n".join(g['report'])
         msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
-    
     bilhete = gerar_texto_bilhete(engine.daily_accumulator)
     await enviar_com_botao(context, msg, poll_data, bilhete)
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_nba_games()
     if not games: return
-    msg = f"🏀 **NBA PRIME V127** 🏀\n\n"
+    msg = f"🏀 **NBA PRIME V129** 🏀\n\n"
     for g in games[:3]:
         block = "\n".join(g['report'])
         msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -343,15 +373,15 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights = await engine.get_ufc_games()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V127)** 🥊\n\n"
+    msg = "🥊 **UFC FIGHT DAY (V129)** 🥊\n\n"
     for f in fights[:6]:
         msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
-          [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V127 - CONTENT MACHINE**\nÁudio, Zebras e Afiliados.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+          [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("📚 Ajuda", callback_data="help_msg")]]
+    await update.message.reply_text("🦁 **PAINEL V129 - DIAGNÓSTICO**\nUse /testar_news para verificar as notícias.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
@@ -361,6 +391,10 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = [[InlineKeyboardButton("Voltar", callback_data="top_jogos")]]
         await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN); return
     
+    if data == "help_msg":
+        msg = "📚 **Dicionário**\n\n🟢 **Segura:** Odd baixa, alta chance.\n🟡 **Valor:** Odd média.\n📊 **Prob:** Chance estatística.\n⚖️ **Stake:** Quanto apostar (1 Unidade = Padrão)."
+        await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN); return
+
     if data == "ufc_fights":
         await q.edit_message_text("🥊 Buscando Lutas..."); fights = await engine.get_ufc_games()
         if not fights: await q.message.reply_text("⚠️ Sem lutas."); return
@@ -377,9 +411,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
 
     if data == "top_jogos":
-        await q.edit_message_text("⚽ Buscando Elite (V127)..."); games = await engine.get_soccer_grade()
+        await q.edit_message_text("⚽ Buscando Elite (V129)..."); games = await engine.get_soccer_grade()
         if not games: await q.message.reply_text("⚠️ Sem jogos Tier 1 com Odds."); return
-        msg = f"🔥 **GRADE MANUAL V127**\n\n"
+        msg = f"🔥 **GRADE MANUAL V129**\n\n"
         poll_data = None
         for i, g in enumerate(games[:7]):
             is_main = (i == 0)
@@ -387,11 +421,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
             if is_main: 
                 poll_data = {"h": g['home'], "a": g['away']}
-                # Áudio manual também
                 await enviar_audio_narracao(context, g)
-
             blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
-        
         bilhete = gerar_texto_bilhete(engine.daily_accumulator)
         await enviar_com_botao(context, msg, poll_data, bilhete)
         await q.message.reply_text("✅ Postado!")
@@ -403,7 +434,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("reboot", reboot_command))
-    app.add_handler(CommandHandler("sosred", sos_red_command)) # Novo Comando
+    app.add_handler(CommandHandler("sosred", sos_red_command))
+    app.add_handler(CommandHandler("ajuda", help_command))
+    app.add_handler(CommandHandler("testar_news", testar_news_command)) # Novo
     app.add_handler(CallbackQueryHandler(button))
     if app.job_queue:
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
