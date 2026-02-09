@@ -12,6 +12,9 @@ from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
+# --- NOVIDADE: TEXTO PARA VOZ ---
+from gtts import gTTS 
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -26,14 +29,22 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
-AFFILIATE_LINK = os.getenv("AFFILIATE_LINK", "https://www.bet365.com") 
 ADMIN_ID = os.getenv("ADMIN_ID")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
+
+# --- SISTEMA DE AFILIADO ROTATIVO (Ideia 6) ---
+AFFILIATE_LINKS = [
+    "https://www.bet365.com",
+    "https://br.betano.com",
+    "https://stake.com"
+]
+
+def get_random_link():
+    return random.choice(AFFILIATE_LINKS)
 
 SENT_LINKS = set()
 LATEST_HEADLINES = []
 
-# LISTA VIP (PONTUAÇÃO MÁXIMA - TOPO DA LISTA)
 VIP_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "GREMIO", "INTERNACIONAL",
     "REAL MADRID", "BARCELONA", "ATLETICO MADRID",
@@ -43,7 +54,6 @@ VIP_TEAMS = [
     "INTER MIAMI", "AL NASSR", "AL HILAL"
 ]
 
-# LIGAS ELITE (PESOS DE PRIORIDADE)
 SOCCER_LEAGUES = [
     {"key": "soccer_england_premier_league", "name": "PREMIER LEAGUE", "weight": 2000},
     {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE", "weight": 2000},
@@ -62,7 +72,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V126 - FULL TRANSPARENCY")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V127 - CONTENT MACHINE")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -86,39 +96,34 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except: pass
 
-# ================= MOTOR V126 (TRANSPARÊNCIA TOTAL) =================
+# ================= MOTOR V127 =================
 class SportsEngine:
     def __init__(self):
         self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 **STATUS V126**\n\n"
+        report = "📊 **STATUS V127**\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
-        
         if THE_ODDS_API_KEY:
             async with httpx.AsyncClient(timeout=10) as client:
                 try:
                     r = await client.get(f"https://api.the-odds-api.com/v4/sports?apiKey={THE_ODDS_API_KEY}")
                     if r.status_code == 200: 
                         rem = r.headers.get("x-requests-remaining", "?")
-                        report += f"✅ The Odds API: {rem} restantes\n"
-                    else: report += "❌ The Odds API: Erro Key\n"
-                except: report += "❌ The Odds API: Erro Conexão\n"
-        else: report += "⚠️ CHAVE API FALTANDO\n"
+                        report += f"✅ API Odds: {rem} rest.\n"
+                    else: report += "❌ API Odds: Erro Key\n"
+                except: report += "❌ API Odds: Erro Conexão\n"
         return report
 
     async def fetch_odds(self, sport_key, display_name, weight):
         if not THE_ODDS_API_KEY: return []
-        
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds?regions=us&oddsFormat=decimal&markets=h2h&apiKey={THE_ODDS_API_KEY}"
-        
         async with httpx.AsyncClient(timeout=15) as client:
             try:
                 r = await client.get(url)
                 data = r.json()
                 if not isinstance(data, list): return []
-                
                 games = []
                 now = datetime.now(timezone.utc)
                 limit_time = now + timedelta(hours=30) 
@@ -140,8 +145,7 @@ class SportsEngine:
                         for vip in VIP_TEAMS:
                             if vip in h_norm or vip in a_norm:
                                 match_score += 100000 
-                                is_vip = True
-                                break
+                                is_vip = True; break
                         
                         odds_h, odds_a, odds_d = 0, 0, 0
                         for book in event['bookmakers']:
@@ -154,17 +158,9 @@ class SportsEngine:
                         
                         if odds_h > 1.0 and odds_a > 1.0:
                             games.append({
-                                "match": f"{h} x {a}",
-                                "league": display_name,
-                                "time": time_str,
-                                "datetime": evt_time,
-                                "odd_h": odds_h,
-                                "odd_a": odds_a,
-                                "odd_d": odds_d,
-                                "home": h,
-                                "away": a,
-                                "match_score": match_score,
-                                "is_vip": is_vip
+                                "match": f"{h} x {a}", "league": display_name, "time": time_str,
+                                "datetime": evt_time, "odd_h": odds_h, "odd_a": odds_a, "odd_d": odds_d,
+                                "home": h, "away": a, "match_score": match_score, "is_vip": is_vip
                             })
                     except: continue
                 return games
@@ -173,17 +169,15 @@ class SportsEngine:
     def analyze_game(self, game):
         lines = []
         best_pick = None
-        
         has_news = False
         for news in LATEST_HEADLINES:
-            if normalize_name(game['home']) in normalize_name(news) or normalize_name(game['away']) in normalize_name(news):
-                has_news = True
+            if normalize_name(game['home']) in normalize_name(news) or normalize_name(game['away']) in normalize_name(news): has_news = True
         
-        if has_news: lines.append("📰 **Radar:** Notícias recentes detectadas no GE.")
+        if has_news: lines.append("📰 **Radar:** Notícias recentes no GE.")
 
         oh, oa, od = game['odd_h'], game['odd_a'], game['odd_d']
 
-        # ESTRATÉGIA: SEGURANÇA (Verde)
+        # ESTRATÉGIA PADRÃO
         if 1.15 < oh < 1.75:
             lines.append(f"🟢 **Segura:** {game['home']} Vence (@{oh})")
             best_pick = {"pick": f"{game['home']}", "odd": oh, "match": game['match']}
@@ -196,7 +190,18 @@ class SportsEngine:
                  lines.append(f"🟢 **Segura:** {game['home']} ou Empate (@{dc_odd})")
                  if not best_pick: best_pick = {"pick": f"{game['home']} ou Empate", "odd": dc_odd, "match": game['match']}
 
-        # SE NÃO ACHOU SEGURA, MOSTRA O QUE TEM (V126)
+        # IDEIA 12: CAÇADOR DE ZEBRAS (Valor Alto)
+        if not lines:
+            if oh > 3.00 and oa < 1.50 and od > 0:
+                dc_zebra = round(1 / (1/oh + 1/od), 2)
+                if dc_zebra > 1.90:
+                     lines.append(f"🦓 **ZEBRA ALERTA:** {game['home']} ou Empate (@{dc_zebra})")
+            
+            if oa > 3.00 and oh < 1.50 and od > 0:
+                dc_zebra = round(1 / (1/oa + 1/od), 2)
+                if dc_zebra > 1.90:
+                     lines.append(f"🦓 **ZEBRA ALERTA:** {game['away']} ou Empate (@{dc_zebra})")
+
         if not lines:
             if oh < 2.05: 
                 lines.append(f"🟡 **Valor:** {game['home']} (@{oh})")
@@ -205,7 +210,6 @@ class SportsEngine:
                 lines.append(f"🟡 **Valor:** {game['away']} (@{oa})")
                 best_pick = {"pick": f"{game['away']}", "odd": oa, "match": game['match']}
             else: 
-                # AQUI ESTÁ A MUDANÇA: MOSTRA A ODD CRUA
                 lines.append(f"⚖️ **Equilibrado:** Casa @{oh} | Fora @{oa}")
 
         return lines, best_pick
@@ -213,7 +217,6 @@ class SportsEngine:
     async def get_soccer_grade(self):
         all_games = []
         self.daily_accumulator = []
-        
         for league in SOCCER_LEAGUES:
             games = await self.fetch_odds(league['key'], league['name'], league['weight'])
             for g in games:
@@ -222,10 +225,7 @@ class SportsEngine:
                 if pick: self.daily_accumulator.append(pick)
                 all_games.append(g)
             await asyncio.sleep(0.5)
-
-        # Ordena pelo Score (VIP) e Hora
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
-        
         return all_games
 
     async def get_nba_games(self):
@@ -249,31 +249,57 @@ def gerar_texto_bilhete(palpites):
     total_odd = 1.0
     import random
     random.shuffle(palpites)
-    
-    # Prioriza VIPs
     palpites.sort(key=lambda x: 1 if "Real" in x['match'] or "City" in x['match'] or "Flamengo" in x['match'] or "Arsenal" in x['match'] else 0, reverse=True)
-
     for p in palpites:
         if total_odd > 20: break 
         selected.append(p)
         total_odd *= p['odd']
-        
     if total_odd < 3.0: return ""
-    
     txt = f"\n🎟️ **BILHETE LUNÁTICO (ODD {total_odd:.2f})** 🚀\n"
     for s in selected: txt += f"🎯 {s['match']}: {s['pick']} (@{s['odd']})\n"
     txt += "⚠️ *Alto Risco. Aposte com moderação.*\n"
     return txt
 
+# --- FUNÇÃO DE ÁUDIO (Ideia 2) ---
+async def enviar_audio_narracao(context, game):
+    text = f"Fala galera! Destaque do dia: {game['match']} pela {game['league']}. "
+    for line in game['report']:
+        # Limpa caracteres markdown para o áudio ficar limpo
+        clean_line = line.replace("*", "").replace("🟢", "").replace("🟡", "").replace("📰", "")
+        text += f"{clean_line}. "
+    text += "Boa sorte a todos!"
+    
+    try:
+        tts = gTTS(text=text, lang='pt')
+        tts.save("narracao.mp3")
+        with open("narracao.mp3", "rb") as audio:
+            await context.bot.send_voice(chat_id=CHANNEL_ID, voice=audio)
+        os.remove("narracao.mp3")
+    except: pass
+
 async def enviar_com_botao(context, text, poll_data=None, bilhete_txt=""):
     full_text = text + bilhete_txt
-    kb = [[InlineKeyboardButton("💸 Apostar Agora", url=AFFILIATE_LINK)]]
+    # IDEIA 6: Link Rotativo
+    link = get_random_link()
+    kb = [[InlineKeyboardButton("💸 Apostar Agora", url=link)]]
     try: 
         await context.bot.send_message(chat_id=CHANNEL_ID, text=full_text, parse_mode=ParseMode.MARKDOWN, reply_markup=InlineKeyboardMarkup(kb))
+        
+        # IDEIA 5: Botões de Reação (Enquete Simples)
         if poll_data:
             await asyncio.sleep(2)
-            await context.bot.send_poll(chat_id=CHANNEL_ID, question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", options=[poll_data['h'], "Empate", poll_data['a']], is_anonymous=True)
+            await context.bot.send_poll(
+                chat_id=CHANNEL_ID, 
+                question=f"Quem ganha: {poll_data['h']} x {poll_data['a']}?", 
+                options=["🔥 Casa", "🤝 Empate", "🤑 Visitante"], 
+                is_anonymous=True
+            )
     except: pass
+
+# --- NOVOS COMANDOS ---
+async def sos_red_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = "🆘 **SOS RED** 🆘\n\nCalma, guerreiro. Dia ruim acontece.\n\n1. Pare por hoje.\n2. Não tente recuperar tudo de uma vez.\n3. Respeite sua gestão (1% a 2% da banca).\n\nAmanhã tem mais. O mercado não vai fugir."
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Reiniciando...")
@@ -286,18 +312,18 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
     if not games: return
-    
     top_games = games[:7]
-    
-    msg = f"🔥 **DOSSIÊ V126 (TRANSPARENTE)** 🔥\n\n"
+    msg = f"🔥 **DOSSIÊ V127 (AUDIO + ZEBRA)** 🔥\n\n"
     poll_data = None
     
     for i, g in enumerate(top_games):
         is_main = (i == 0)
         icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
         if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
-        
-        if is_main: poll_data = {"h": g['home'], "a": g['away']}
+        if is_main: 
+            poll_data = {"h": g['home'], "a": g['away']}
+            # Envia áudio do jogo principal
+            await enviar_audio_narracao(context, g)
         
         block = "\n".join(g['report'])
         msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -308,7 +334,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_nba_games()
     if not games: return
-    msg = f"🏀 **NBA PRIME V126** 🏀\n\n"
+    msg = f"🏀 **NBA PRIME V127** 🏀\n\n"
     for g in games[:3]:
         block = "\n".join(g['report'])
         msg += f"🏟 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -317,7 +343,7 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights = await engine.get_ufc_games()
     if not fights: return
-    msg = "🥊 **UFC FIGHT DAY (V126)** 🥊\n\n"
+    msg = "🥊 **UFC FIGHT DAY (V127)** 🥊\n\n"
     for f in fights[:6]:
         msg += f"⏰ {f['time']} | ⚔️ **{f['match']}**\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
@@ -325,7 +351,7 @@ async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
           [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")]]
-    await update.message.reply_text("🦁 **PAINEL V126 - TRANSPARENTE**\nMostrando Odds de tudo!", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text("🦁 **PAINEL V127 - CONTENT MACHINE**\nÁudio, Zebras e Afiliados.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
@@ -351,15 +377,19 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
 
     if data == "top_jogos":
-        await q.edit_message_text("⚽ Buscando Elite (V126)..."); games = await engine.get_soccer_grade()
+        await q.edit_message_text("⚽ Buscando Elite (V127)..."); games = await engine.get_soccer_grade()
         if not games: await q.message.reply_text("⚠️ Sem jogos Tier 1 com Odds."); return
-        msg = f"🔥 **GRADE MANUAL V126**\n\n"
+        msg = f"🔥 **GRADE MANUAL V127**\n\n"
         poll_data = None
         for i, g in enumerate(games[:7]):
             is_main = (i == 0)
             icon = "⭐ **JOGO DO DIA** ⭐\n" if is_main else ""
             if g['is_vip']: icon = "💎 **SUPER VIP** 💎\n"
-            if is_main: poll_data = {"h": g['home'], "a": g['away']}
+            if is_main: 
+                poll_data = {"h": g['home'], "a": g['away']}
+                # Áudio manual também
+                await enviar_audio_narracao(context, g)
+
             blk = "\n".join(g['report']); msg += f"{icon}🏆 **{g['league']}** • ⏰ {g['time']}\n⚔️ **{g['match']}**\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"
         
         bilhete = gerar_texto_bilhete(engine.daily_accumulator)
@@ -373,6 +403,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("reboot", reboot_command))
+    app.add_handler(CommandHandler("sosred", sos_red_command)) # Novo Comando
     app.add_handler(CallbackQueryHandler(button))
     if app.job_queue:
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
