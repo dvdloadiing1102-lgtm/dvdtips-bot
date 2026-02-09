@@ -27,7 +27,6 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
-ADMIN_ID = os.getenv("ADMIN_ID")
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
 
 AFFILIATE_LINKS = ["https://www.bet365.com", "https://br.betano.com", "https://stake.com"]
@@ -63,20 +62,13 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V131 - ERROR HANDLER")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V133 - FULL FEATURES")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
 
-# --- TRATAMENTO DE ERROS (NOVIDADE V131) ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Loga o erro e tenta continuar rodando."""
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
-    try:
-        # Se for erro de conflito, avisa no log
-        if "Conflict" in str(context.error):
-            logger.critical("🚨 ERRO DE CONFLITO: EXISTEM DOIS BOTS RODANDO! FECHE O OUTRO.")
-    except: pass
 
 async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
     global LATEST_HEADLINES
@@ -99,12 +91,12 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
         if len(SENT_LINKS)>500: SENT_LINKS.clear()
     except Exception as e: logger.error(f"Erro News: {e}")
 
-# ================= MOTOR V131 =================
+# ================= MOTOR V133 =================
 class SportsEngine:
     def __init__(self): self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V131</b>\n\n"
+        report = "📊 <b>STATUS V133</b>\n\n"
         mem = psutil.virtual_memory()
         report += f"💻 RAM: {mem.percent}%\n"
         if THE_ODDS_API_KEY:
@@ -294,6 +286,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📚 <b>Dicionário</b>\n\n🟢 <b>Segura:</b> Odd baixa, alta chance.\n🟡 <b>Valor:</b> Odd média.\n📊 <b>Prob:</b> Chance.\n⚖️ <b>Stake:</b> Aposta."
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [
+        [InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
+        [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")],
+        [InlineKeyboardButton("🆘 SOS Red", callback_data="sos_help"), InlineKeyboardButton("📚 Dicionário", callback_data="help_msg")]
+    ]
+    await update.message.reply_text("🦁 <b>MENU COMPLETO V133</b>\nEscolha uma função:", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+
 async def reboot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Reiniciando...")
     os.execl(sys.executable, sys.executable, *sys.argv)
@@ -306,7 +306,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
     if not games: return
     top_games = games[:7]
-    msg = f"🔥 <b>DOSSIÊ V131 (SAFE)</b> 🔥\n\n"
+    msg = f"🔥 <b>DOSSIÊ V133 (FULL)</b> 🔥\n\n"
     poll_data = None
     for i, g in enumerate(top_games):
         is_main = (i == 0)
@@ -323,7 +323,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_nba_games()
     if not games: return
-    msg = f"🏀 <b>NBA PRIME V131</b> 🏀\n\n"
+    msg = f"🏀 <b>NBA PRIME V133</b> 🏀\n\n"
     for g in games[:3]:
         block = "\n".join(g['report'])
         msg += f"🏟 <b>{g['league']}</b> • ⏰ {g['time']}\n⚔️ <b>{g['match']}</b>\n{block}\n━━━━━━━━━━━━━━━━━━━━\n"
@@ -332,30 +332,44 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 async def daily_ufc_job(context: ContextTypes.DEFAULT_TYPE):
     fights = await engine.get_ufc_games()
     if not fights: return
-    msg = "🥊 <b>UFC FIGHT DAY (V131)</b> 🥊\n\n"
+    msg = "🥊 <b>UFC FIGHT DAY (V133)</b> 🥊\n\n"
     for f in fights[:6]: msg += f"⏰ {f['time']} | ⚔️ <b>{f['match']}</b>\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"
     await enviar_com_botao(context, msg)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
-          [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("📚 Ajuda", callback_data="help_msg")]]
-    await update.message.reply_text("🦁 <b>PAINEL V131 - IMORTAL</b>\nError Handler Ativado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    # ATENÇÃO: Teclado Simplificado no Start para não bugar no celular
+    kb = [[InlineKeyboardButton("🦁 ABRIR MENU COMPLETO", callback_data="open_menu")]]
+    await update.message.reply_text("🦁 <b>PAINEL V133</b>\nTodas as funções ativas.\n<i>Proteção de Erro Ligada.</i>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer(); data = q.data
-    if data == "test_api": await q.edit_message_text("⏳ Check-up..."); rep = await engine.test_all_connections(); kb = [[InlineKeyboardButton("Voltar", callback_data="top_jogos")]]; await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML); return
+    
+    # NOVO: Handler do Menu
+    if data == "open_menu":
+        kb = [
+            [InlineKeyboardButton("🔥 Futebol", callback_data="top_jogos"), InlineKeyboardButton("🏀 NBA", callback_data="nba_hoje")],
+            [InlineKeyboardButton("🥊 UFC Manual", callback_data="ufc_fights"), InlineKeyboardButton("🔧 Status", callback_data="test_api")],
+            [InlineKeyboardButton("🆘 SOS Red", callback_data="sos_help"), InlineKeyboardButton("📚 Dicionário", callback_data="help_msg")]
+        ]
+        await q.edit_message_text("🦁 <b>MENU PRINCIPAL</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML); return
+
+    if data == "test_api": await q.edit_message_text("⏳ Check-up..."); rep = await engine.test_all_connections(); kb = [[InlineKeyboardButton("Voltar", callback_data="open_menu")]]; await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML); return
     if data == "help_msg": msg = "📚 <b>Dicionário</b>\n\n🟢 <b>Segura:</b> Odd baixa.\n🟡 <b>Valor:</b> Odd média.\n📊 <b>Prob:</b> Chance."; await q.message.reply_text(msg, parse_mode=ParseMode.HTML); return
+    if data == "sos_help": msg = "🆘 <b>SOS RED</b>\nRespire fundo. Siga sua gestão de banca."; await q.message.reply_text(msg, parse_mode=ParseMode.HTML); return
+    
     if data == "ufc_fights": await q.edit_message_text("🥊 Buscando..."); fights = await engine.get_ufc_games(); 
     if not fights: await q.message.reply_text("⚠️ Sem lutas."); return
     msg = "🥊 <b>UFC MANUAL</b> 🥊\n\n"; 
     for f in fights[:6]: msg += f"⏰ {f['time']} | ⚔️ <b>{f['match']}</b>\n👊 {f['home']}: @{f['odd_h']}\n👊 {f['away']}: @{f['odd_a']}\n━━━━━━━━━━━━━━━━━━━━\n"; await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
+    
     if data == "nba_hoje": await q.edit_message_text("🏀 Buscando..."); games = await engine.get_nba_games(); 
     if not games: await q.message.reply_text("⚠️ Sem jogos."); return
     msg = f"🏀 <b>NBA MANUAL</b> 🏀\n\n"; 
     for g in games[:3]: blk = "\n".join(g['report']); msg += f"🏟 <b>{g['league']}</b> • ⏰ {g['time']}\n⚔️ <b>{g['match']}</b>\n{blk}\n━━━━━━━━━━━━━━━━━━━━\n"; await enviar_com_botao(context, msg); await q.message.reply_text("✅ Postado!"); return
-    if data == "top_jogos": await q.edit_message_text("⚽ Buscando (V131)..."); games = await engine.get_soccer_grade(); 
+    
+    if data == "top_jogos": await q.edit_message_text("⚽ Buscando (V133)..."); games = await engine.get_soccer_grade(); 
     if not games: await q.message.reply_text("⚠️ Sem jogos."); return
-    msg = f"🔥 <b>GRADE MANUAL V131</b>\n\n"; poll_data = None
+    msg = f"🔥 <b>GRADE MANUAL V133</b>\n\n"; poll_data = None
     for i, g in enumerate(games[:7]):
         is_main = (i == 0); icon = "⭐ <b>JOGO DO DIA</b> ⭐\n" if is_main else ""; 
         if g['is_vip']: icon = "💎 <b>SUPER VIP</b> 💎\n"
@@ -368,13 +382,13 @@ def main():
     threading.Thread(target=run_web_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu_command)) # Novo comando explícito
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("reboot", reboot_command))
     app.add_handler(CommandHandler("sosred", sos_red_command))
     app.add_handler(CommandHandler("ajuda", help_command))
     app.add_handler(CommandHandler("testar_news", testar_news_command))
     app.add_handler(CallbackQueryHandler(button))
-    # --- REGISTRA O ERROR HANDLER ---
     app.add_error_handler(error_handler)
 
     if app.job_queue:
