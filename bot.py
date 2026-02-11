@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from gtts import gTTS 
-import google.generativeai as genai # IMPORTANTE
+import google.generativeai as genai
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
@@ -30,14 +30,20 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 PORT = int(os.getenv("PORT", 10000))
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY")
-GEMINI_KEY = os.getenv("GEMINI_KEY") # ADICIONE ISSO NO .ENV
+GEMINI_KEY = os.getenv("GEMINI_KEY")
 
-# CONFIGURA A IA
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
+# CONFIGURA A IA (COM PROTEÇÃO)
+try:
+    if GEMINI_KEY:
+        genai.configure(api_key=GEMINI_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        print("✅ GEMINI AI: ATIVADA")
+    else:
+        model = None
+        print("⚠️ GEMINI AI: DESATIVADA (Chave ausente)")
+except Exception as e:
     model = None
+    print(f"⚠️ ERRO GEMINI: {e}")
 
 AFFILIATE_LINKS = ["https://www.bet365.com", "https://br.betano.com", "https://stake.com"]
 def get_random_link(): return random.choice(AFFILIATE_LINKS)
@@ -85,7 +91,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V149 - AI ANALYST")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V150 - MENU FIXED")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -97,19 +103,12 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def get_ai_stats(match_name):
     if not model: return ""
     try:
-        # Prompt otimizado para economizar tokens e ser direto
         prompt = f"""
         Aja como um analista de apostas profissional.
         Para o jogo: {match_name}.
         Baseado no estilo tático RECENTE dos times, me dê APENAS UMA recomendação estatística de valor alto (Cantos, Cartões ou Gols).
-        
         Responda EXATAMENTE neste formato curto:
         💡 IA Check: [Mercado] [Linha] (Motivo curto)
-        
-        Exemplos de resposta:
-        💡 IA Check: Cantos Over 9.5 (Times ofensivos pelas pontas)
-        💡 IA Check: Cartões Over 4.5 (Histórico de clássico violento)
-        💡 IA Check: Gols Over 2.5 (Defesas frágeis recentemente)
         """
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip()
@@ -143,10 +142,10 @@ class SportsEngine:
     def __init__(self): self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V149</b>\n"
+        report = "📊 <b>STATUS V150</b>\n"
         if THE_ODDS_API_KEY: report += "✅ API Odds: Conectada\n"
-        if GEMINI_KEY: report += "✅ Google Gemini AI: Conectada\n"
-        else: report += "❌ Google Gemini AI: Sem chave\n"
+        if model: report += "✅ Google Gemini AI: Conectada\n"
+        else: report += "❌ Google Gemini AI: Sem chave ou Erro\n"
         return report
 
     async def fetch_odds(self, sport_key, display_name, league_score=0, is_nba=False):
@@ -208,7 +207,6 @@ class SportsEngine:
                 return games
             except: return []
 
-    # --- ANÁLISE HÍBRIDA (MATEMÁTICA + IA) ---
     async def analyze_game_async(self, game):
         lines = []
         best_pick = None
@@ -233,25 +231,17 @@ class SportsEngine:
             return lines, best_pick
 
         # --- FUTEBOL ---
-        
-        # 1. TENDÊNCIA DE MERCADO (MATEMÁTICA PURA)
-        # O mercado não mente. Se a odd é baixa, a probabilidade é alta.
         market_stats = ""
+        # Análise matemática simples
+        if oh < 1.30 or oa < 1.30: market_stats = "📊 <i>Mercado: Over 2.5 Gols provável</i>"
+        elif od < 3.05: market_stats = "📊 <i>Mercado: Under 2.5 Gols (Jogo Truncado)</i>"
         
-        # Gols: Se o favorito tem odd muito baixa, tendência de Over.
-        if oh < 1.30 or oa < 1.30:
-            market_stats = "📊 <i>Mercado: Over 2.5 Gols provável</i>"
-        # Jogo trancado: Se o empate é baixo
-        elif od < 3.05:
-            market_stats = "📊 <i>Mercado: Under 2.5 Gols (Jogo Truncado)</i>"
-        
-        # 2. CONSULTA À IA (SÓ PARA JOGOS VIP PARA NÃO ESTOURAR A API)
+        # Análise IA (Só VIP e se o modelo existir)
         ai_msg = ""
         if game.get('is_vip') and model:
-            # Chama o Gemini para dar o dado real
             ai_msg = await get_ai_stats(game['match'])
         
-        # 3. LÓGICA 1x2
+        # Pick 1x2
         if oh < 1.55:
             lines.append(f"🔥 <b>Favorito:</b> {game['home']} (@{oh})")
             best_pick = {"pick": game['home'], "odd": oh, "match": game['match']}
@@ -281,7 +271,6 @@ class SportsEngine:
         for league in SOCCER_LEAGUES:
             games = await self.fetch_odds(league['key'], league['name'], league['score'], is_nba=False)
             for g in games:
-                # Agora usamos await porque a função é assíncrona (chamada de API)
                 report, pick = await self.analyze_game_async(g)
                 g['report'] = report
                 if pick: self.daily_accumulator.append(pick)
@@ -303,7 +292,7 @@ class SportsEngine:
 
 engine = SportsEngine()
 
-# --- MÚLTIPLA ---
+# --- MÚLTIPLA 10x-20x ---
 def gerar_bilhete(palpites):
     if len(palpites) < 3: return ""
     for _ in range(500):
@@ -364,33 +353,26 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
         msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
     await enviar_post(context, msg)
 
-# --- MAIN ---
-def main():
-    if not BOT_TOKEN: print("ERRO: Configure o BOT_TOKEN no .env"); return
-    threading.Thread(target=run_web_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("🦁 <b>BOT V149 ONLINE</b>\nIA Gemini Ativada para Análises.", parse_mode=ParseMode.HTML)))
-    app.add_handler(CallbackQueryHandler(menu_callback))
-    app.add_error_handler(error_handler)
-    
-    if app.job_queue:
-        app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
-        app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-        app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    
-    print("BOT V149 RODANDO...")
-    app.run_polling()
+# --- START COM BOTÕES ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [
+        [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
+        [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]
+    ]
+    await update.message.reply_text(
+        "🦁 <b>BOT V150 ONLINE</b>\nIA Ativada. Botões Restaurados.",
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode=ParseMode.HTML
+    )
 
-# Callback
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V149</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V150</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>IA Analisando Jogos... (Pode demorar uns segs)</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>IA Analisando Jogos...</b>", parse_mode=ParseMode.HTML)
         await daily_soccer_job(context)
         await q.message.reply_text("✅ Enviado!")
     elif q.data == "nba":
@@ -405,6 +387,23 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif q.data == "status":
         rep = await engine.test_all_connections()
         await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data="menu")]]), parse_mode=ParseMode.HTML)
+
+def main():
+    if not BOT_TOKEN: print("ERRO: Configure o BOT_TOKEN no .env"); return
+    threading.Thread(target=run_web_server, daemon=True).start()
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(menu_callback))
+    app.add_error_handler(error_handler)
+    
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
+        app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
+        app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
+    
+    print("BOT V150 RODANDO...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
