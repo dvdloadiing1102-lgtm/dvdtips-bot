@@ -36,44 +36,25 @@ def get_random_link(): return random.choice(AFFILIATE_LINKS)
 SENT_LINKS = set()
 LATEST_HEADLINES = []
 
-# --- ELENCOS NBA 2026 (BASE DE DADOS DE ESTRELAS) ---
-NBA_STARS = {
-    # LESTE
-    "CELTICS": "Jayson Tatum & Jaylen Brown",
-    "BUCKS": "Giannis Antetokounmpo & Khris Middleton",
-    "KNICKS": "Jalen Brunson & Karl-Anthony Towns",
-    "76ERS": "Joel Embiid & Tyrese Maxey",
-    "HEAT": "Bam Adebayo & Tyler Herro",
-    "PACERS": "Tyrese Haliburton & Pascal Siakam",
-    "CAVALIERS": "Donovan Mitchell & Evan Mobley",
-    "MAGIC": "Paolo Banchero & Franz Wagner",
-    "HAWKS": "Trae Young & Jalen Johnson",
-    "NETS": "Cam Thomas & Nic Claxton",
-    "RAPTORS": "Scottie Barnes & RJ Barrett",
-    "BULLS": "Coby White & Josh Giddey",
-    "HORNETS": "LaMelo Ball & Brandon Miller",
-    "WIZARDS": "Alex Sarr & Bilal Coulibaly",
-    "PISTONS": "Cade Cunningham & Jalen Duren",
-
-    # OESTE
-    "NUGGETS": "Nikola Jokic & Jamal Murray",
-    "TIMBERWOLVES": "Anthony Edwards & Rudy Gobert",
-    "THUNDER": "Shai Gilgeous-Alexander & Chet Holmgren",
-    "CLIPPERS": "Kawhi Leonard & James Harden",
-    "MAVERICKS": "Anthony Davis & Kyrie Irving", # AD foi trocado para os Mavs na timeline 2026
-    "SUNS": "Devin Booker & Bradley Beal",
-    "LAKERS": "Luka Doncic & LeBron James", # Luka nos Lakers na timeline 2026
-    "WARRIORS": "Stephen Curry & Draymond Green",
-    "KINGS": "De'Aaron Fox & Domantas Sabonis",
-    "PELICANS": "Zion Williamson & Jordan Poole",
-    "ROCKETS": "Kevin Durant & Alperen Sengun", # KD nos Rockets na timeline 2026
-    "GRIZZLIES": "Ja Morant & Jaren Jackson Jr.",
-    "JAZZ": "Lauri Markkanen & Keyonte George",
-    "SPURS": "Victor Wembanyama & Devin Vassell",
-    "TRAIL BLAZERS": "Damian Lillard & Scoot Henderson"
+# --- BASE DE DADOS ESTATÍSTICA ---
+TEAM_STATS = {
+    # TIMES OVER CANTOS
+    "MANCHESTER CITY": "🚩 Over 10.5 Cantos", "LIVERPOOL": "🚩 Over 10.5 Cantos", "ARSENAL": "🚩 Over 9.5 Cantos",
+    "FLAMENGO": "🚩 Over 10.5 Cantos", "PALMEIRAS": "🚩 Over 10.5 Cantos", "BAYERN MUNICH": "🚩 Over 9.5 Cantos",
+    "TOTTENHAM": "🚩 Over 10.5 Cantos", "MANCHESTER UNITED": "🚩 Over 9.5 Cantos", "NEWCASTLE": "🚩 Over 10.5 Cantos",
+    
+    # TIMES OVER GOLS
+    "REAL MADRID": "⚽ Over 2.5 Gols", "BARCELONA": "⚽ Over 3.5 Gols", "PSG": "⚽ Over 3.5 Gols", 
+    "LEVERKUSEN": "⚽ Over 2.5 Gols", "BENFICA": "⚽ Over 2.5 Gols", "INTER MIAMI": "⚽ Over 3.5 Gols",
+    "CHELSEA": "⚽ Ambas Marcam", "ATALANTA": "⚽ Over 2.5 Gols", "DORTMUND": "⚽ Over 3.5 Gols",
+    
+    # TIMES UNDER / CARTÕES
+    "ATLETICO MADRID": "🟨 Over 4.5 Cartões", "GETAFE": "🟨 Over 5.5 Cartões", "CORINTHIANS": "⛔ Under 2.5 Gols", 
+    "VASCO": "🟨 Over 4.5 Cartões", "BOCA JUNIORS": "🟨 Over 5.5 Cartões", "JUVENTUS": "⛔ Under 2.5 Gols",
+    "SAO PAULO": "⛔ Under 2.5 Gols", "INTERNACIONAL": "🟨 Over 5.5 Cartões"
 }
 
-# --- HIERARQUIA FUTEBOL ---
+# HIERARQUIA
 TIER_S_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO",
     "REAL MADRID", "BARCELONA", "LIVERPOOL", "MANCHESTER CITY", "ARSENAL", 
@@ -85,6 +66,7 @@ TIER_A_TEAMS = [
     "JUVENTUS", "INTER MILAN", "AC MILAN", "NAPOLI", "ATLETICO MADRID", 
     "DORTMUND", "LEVERKUSEN", "BOCA JUNIORS", "RIVER PLATE", "PSV", "FEYENOORD"
 ]
+NBA_VIP_TEAMS = ["LAKERS", "CELTICS", "WARRIORS", "BUCKS", "SUNS", "NUGGETS", "HEAT", "MAVERICKS", "KNICKS", "76ERS"]
 
 # LIGAS
 SOCCER_LEAGUES = [
@@ -106,21 +88,13 @@ SOCCER_LEAGUES = [
     {"key": "soccer_uefa_europa_league", "name": "EUROPA LEAGUE", "score": 80}
 ]
 
-# TENDÊNCIAS FUTEBOL
-TEAM_STATS = {
-    "MANCHESTER CITY": "🚩 Over Cantos", "LIVERPOOL": "🚩 Over Cantos", "ARSENAL": "🚩 Over Cantos",
-    "FLAMENGO": "🚩 Over Cantos", "REAL MADRID": "⚽ Over 2.5 Gols", "BARCELONA": "⚽ Over 2.5 Gols",
-    "CHELSEA": "⚽ Ambas Marcam", "TOTTENHAM": "⚽ Over 2.5 Gols", "MANCHESTER UNITED": "🚩 Over Cantos",
-    "BENFICA": "⚽ Over 2.5 Gols", "SPORTING": "⚽ Over 2.5 Gols", "AJAX": "⚽ Over 2.5 Gols"
-}
-
 def normalize_name(name):
     if not name: return ""
     return ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn').upper()
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V144 - NBA ROSTERS")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V147 - NO MORE EQUILIBRADO")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -132,7 +106,7 @@ class SportsEngine:
     def __init__(self): self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V144</b>\n"
+        report = "📊 <b>STATUS V147</b>\n"
         if THE_ODDS_API_KEY:
             async with httpx.AsyncClient(timeout=10) as client:
                 try:
@@ -163,7 +137,6 @@ class SportsEngine:
                         evt_time_br = evt_time_utc.astimezone(br_tz)
                         
                         if is_nba:
-                            # Janela NBA (jogos até 5 da manhã do dia seguinte valem)
                             tomorrow = today_date + timedelta(days=1)
                             is_valid = (evt_time_br.date() == today_date) or (evt_time_br.date() == tomorrow and evt_time_br.hour < 5)
                             if not is_valid: continue
@@ -174,18 +147,13 @@ class SportsEngine:
                         h, a = event['home_team'], event['away_team']
                         h_norm = normalize_name(h); a_norm = normalize_name(a)
                         
-                        # SCORE
                         match_score = league_score
                         is_vip = False
-                        
                         if is_nba:
-                            # Se for NBA, o jogo ganha pontos se tiver times conhecidos
                             match_score += 1000
                         else:
-                            if any(t in h_norm or t in a_norm for t in TIER_S_TEAMS):
-                                match_score += 1000; is_vip = True
-                            elif any(t in h_norm or t in a_norm for t in TIER_A_TEAMS):
-                                match_score += 500
+                            if any(t in h_norm or t in a_norm for t in TIER_S_TEAMS): match_score += 1000; is_vip = True
+                            elif any(t in h_norm or t in a_norm for t in TIER_A_TEAMS): match_score += 500
                         
                         odds_h, odds_a, odds_d = 0, 0, 0
                         for book in event['bookmakers']:
@@ -202,8 +170,7 @@ class SportsEngine:
                                 "time": time_str, "datetime": evt_time_br, 
                                 "odd_h": odds_h, "odd_a": odds_a, "odd_d": odds_d, 
                                 "home": h, "away": a, "is_vip": is_vip,
-                                "match_score": match_score,
-                                "is_nba": is_nba
+                                "match_score": match_score, "is_nba": is_nba
                             })
                     except: continue
                 return games
@@ -216,63 +183,74 @@ class SportsEngine:
         h_norm = normalize_name(game['home'])
         a_norm = normalize_name(game['away'])
         
-        # --- ANÁLISE NBA (COM PLAYERS) ---
+        # --- NBA ---
         if game.get('is_nba'):
-            # Procura os craques do time mandante
-            stars_h = ""
-            for team_key, stars in NBA_STARS.items():
-                if team_key in h_norm: stars_h = stars; break
-            
-            # Procura os craques do time visitante
-            stars_a = ""
-            for team_key, stars in NBA_STARS.items():
-                if team_key in a_norm: stars_a = stars; break
-            
-            if stars_h or stars_a:
-                lines.append(f"🌟 <b>Estrelas:</b> {stars_h if stars_h else ''} {('vs ' + stars_a) if stars_a else ''}")
-
+            handicap = 0.0
             if oh < 1.50:
+                if oh < 1.15: handicap = -12.5
+                elif oh < 1.25: handicap = -9.5
+                elif oh < 1.35: handicap = -7.5
+                else: handicap = -4.5
                 lines.append(f"🏀 <b>Vencedor:</b> {game['home']} (@{oh})")
+                lines.append(f"📉 <b>Handicap:</b> {game['home']} {handicap}")
                 best_pick = {"pick": game['home'], "odd": oh, "match": game['match']}
             elif oa < 1.50:
+                if oa < 1.15: handicap = -12.5
+                elif oa < 1.25: handicap = -9.5
+                elif oa < 1.35: handicap = -7.5
+                else: handicap = -4.5
                 lines.append(f"🏀 <b>Vencedor:</b> {game['away']} (@{oa})")
+                lines.append(f"📉 <b>Handicap:</b> {game['away']} {handicap}")
                 best_pick = {"pick": game['away'], "odd": oa, "match": game['match']}
             else:
-                lines.append("🔥 <b>Jogo Parelho (Clutch Time)</b>")
+                lines.append("🔥 <b>Jogo Parelho (Clutch)</b>")
                 if 1.80 < oh < 2.20: lines.append(f"💎 <b>Valor:</b> {game['home']} (@{oh})")
                 elif 1.80 < oa < 2.20: lines.append(f"💎 <b>Valor:</b> {game['away']} (@{oa})")
-            
             return lines, best_pick
 
-        # --- ANÁLISE FUTEBOL ---
+        # --- FUTEBOL ---
         trend_msg = ""
-        for team, trend in TEAM_STATS.items():
-            if team in h_norm or team in a_norm: trend_msg = f"💡 <i>{trend}</i>"; break
+        found_trend = False
         
+        # 1. TENDÊNCIA DIRETA (Database)
+        for team, trend in TEAM_STATS.items():
+            if team in h_norm or team in a_norm: 
+                trend_msg = f"💡 <i>{trend}</i>"; found_trend = True; break
+        
+        # 2. SE NÃO TEM TENDÊNCIA, CALCULA PELA MATEMÁTICA
+        if not found_trend:
+            if oh < 1.35 or oa < 1.35: trend_msg = "💡 <i>⚽ Tendência: Over 2.5 Gols</i>"
+            elif od < 3.05: trend_msg = "💡 <i>⛔ Tendência: Under 2.5 Gols (Travado)</i>"
+            elif od > 3.60: trend_msg = "💡 <i>⚽ Tendência: Ambas Marcam (Aberto)</i>"
+        
+        # 3. LÓGICA DE APOSTA (SEM EQUILIBRADO)
         if oh < 1.55:
             lines.append(f"🔥 <b>Favorito:</b> {game['home']} (@{oh})")
             best_pick = {"pick": game['home'], "odd": oh, "match": game['match']}
         elif oa < 1.55:
             lines.append(f"🔥 <b>Favorito:</b> {game['away']} (@{oa})")
             best_pick = {"pick": game['away'], "odd": oa, "match": game['match']}
-        elif 1.80 < oh < 2.30 and od > 0:
-            dc = round(1 / (1/oh + 1/od), 2); dnb = round(oh * (1 - (1/od)), 2)
-            lines.append(f"🛡️ <b>Dupla Chance:</b> 1X (@{dc})")
-            lines.append(f"♻️ <b>DNB:</b> {game['home']} (@{dnb})")
-            if not best_pick: best_pick = {"pick": "1X", "odd": dc, "match": game['match']}
-        elif 1.80 < oa < 2.30 and od > 0:
-            dc = round(1 / (1/oa + 1/od), 2); dnb = round(oa * (1 - (1/od)), 2)
-            lines.append(f"🛡️ <b>Dupla Chance:</b> X2 (@{dc})")
-            lines.append(f"♻️ <b>DNB:</b> {game['away']} (@{dnb})")
-            if not best_pick: best_pick = {"pick": "X2", "odd": dc, "match": game['match']}
+        
+        # Jogo Equilibrado? Acha Valor no DNB ou Dupla Chance
         else:
-            if oh < 2.10: 
-                lines.append(f"💎 <b>Valor:</b> {game['home']} (@{oh})")
-                best_pick = {"pick": game['home'], "odd": oh, "match": game['match']}
-            elif oa < 2.10: 
-                lines.append(f"💎 <b>Valor:</b> {game['away']} (@{oa})")
-                best_pick = {"pick": game['away'], "odd": oa, "match": game['match']}
-            else: lines.append("⚖️ <b>Equilibrado</b>")
+            if oh < oa: # Casa é levemente favorita
+                dnb = round(oh * 0.75, 2) 
+                if dnb > 1.45:
+                     lines.append(f"♻️ <b>Empate Anula:</b> {game['home']} (@{dnb})")
+                     lines.append(f"🛡️ <b>Dupla Chance:</b> 1X (@{round(1/(1/oh+1/od),2)})")
+                     best_pick = {"pick": f"DNB {game['home']}", "odd": dnb, "match": game['match']}
+                else:
+                     lines.append(f"🛡️ <b>Dupla Chance:</b> 1X (@{round(1/(1/oh+1/od),2)})")
+                     best_pick = {"pick": "1X", "odd": round(1/(1/oh+1/od),2), "match": game['match']}
+            else: # Visitante é levemente favorito
+                dnb = round(oa * 0.75, 2)
+                if dnb > 1.45:
+                    lines.append(f"♻️ <b>Empate Anula:</b> {game['away']} (@{dnb})")
+                    lines.append(f"🛡️ <b>Dupla Chance:</b> X2 (@{round(1/(1/oa+1/od),2)})")
+                    best_pick = {"pick": f"DNB {game['away']}", "odd": dnb, "match": game['match']}
+                else:
+                    lines.append(f"🛡️ <b>Dupla Chance:</b> X2 (@{round(1/(1/oa+1/od),2)})")
+                    best_pick = {"pick": "X2", "odd": round(1/(1/oa+1/od),2), "match": game['match']}
 
         if trend_msg: lines.append(trend_msg)
         return lines, best_pick
@@ -304,7 +282,7 @@ class SportsEngine:
 
 engine = SportsEngine()
 
-# --- MÚLTIPLA ---
+# --- MÚLTIPLA 10x-20x ---
 def gerar_bilhete(palpites):
     if len(palpites) < 3: return ""
     for _ in range(500):
@@ -324,9 +302,11 @@ def gerar_bilhete(palpites):
     return "\n⚠️ <i>Sem múltipla segura (10x-20x) hoje.</i>"
 
 async def enviar_audio(context, game):
-    text = f"Jogão de hoje: {game['match']} pela {game['league']}. "
-    bet = game['report'][0].replace("<b>","").replace("</b>","").replace("🔥","").replace("🛡️","")
-    text += f"Dica principal: {bet}. Boa sorte!"
+    text = f"Destaque: {game['match']}."
+    bet = game['report'][0].replace("<b>","").replace("</b>","").replace("🔥","").replace("🛡️","").replace("♻️","").replace("📉","")
+    text += f" Palpite: {bet}. "
+    if "Over" in str(game['report']): text += "Promessa de gols."
+    if "Under" in str(game['report']): text += "Jogo truncado."
     try:
         tts = gTTS(text=text, lang='pt'); tts.save("audio.mp3")
         with open("audio.mp3", "rb") as f: await context.bot.send_voice(chat_id=CHANNEL_ID, voice=f)
@@ -338,65 +318,13 @@ async def enviar_post(context, text, bilhete=""):
     try: await context.bot.send_message(chat_id=CHANNEL_ID, text=text+bilhete, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e: logger.error(f"Erro envio: {e}")
 
-# --- COMANDOS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🦁 ABRIR MENU", callback_data="menu")]]
-    await update.message.reply_text("🦁 <b>BOT V144 ONLINE</b>\nNBA Atualizada (2026 Rosters).", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
-
-async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
-    if q.data == "menu":
-        kb = [[InlineKeyboardButton("⚽ Futebol Hoje", callback_data="fut"), InlineKeyboardButton("🏀 NBA (Rodada)", callback_data="nba")],
-              [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V144</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
-    
-    elif q.data == "status":
-        rep = await engine.test_all_connections()
-        await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data="menu")]]), parse_mode=ParseMode.HTML)
-
-    elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Buscando Futebol...</b>", parse_mode=ParseMode.HTML)
-        games = await engine.get_soccer_grade()
-        if not games: await q.message.reply_text("❌ Nenhum jogo encontrado HOJE."); return
-        
-        chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
-        for i, chunk in enumerate(chunks):
-            header = "🔥 <b>GRADE DE HOJE</b> 🔥\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
-            msg = header
-            for g in chunk:
-                icon = "💎" if g['is_vip'] else "⚽"
-                if i==0 and g == chunk[0]: await enviar_audio(context, g); icon = "⭐ <b>JOGO DO DIA</b>\n"
-                reports = "\n".join(g['report'])
-                msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
-            bilhete = gerar_bilhete(engine.daily_accumulator) if i == len(chunks)-1 else ""
-            await enviar_post(context, msg, bilhete)
-        await q.message.reply_text("✅ Futebol Enviado!")
-
-    elif q.data == "nba":
-        await q.message.reply_text("🏀 <b>Buscando NBA (Com Estrelas)...</b>", parse_mode=ParseMode.HTML)
-        games = await engine.get_nba_games()
-        if not games: await q.message.reply_text("❌ Nenhum jogo da NBA encontrado."); return
-        
-        msg = "🏀 <b>NBA - RODADA DE HOJE</b> 🏀\n\n"
-        for g in games[:8]:
-            icon = "⭐" if g['is_vip'] else "🏀"
-            reports = "\n".join(g['report'])
-            msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
-        
-        await enviar_post(context, msg)
-        await q.message.reply_text("✅ NBA Enviada!")
-
-    elif q.data == "force":
-        await q.message.reply_text("🔄 <b>Atualizando...</b>", parse_mode=ParseMode.HTML)
-        await daily_soccer_job(context)
-        await q.message.reply_text("✅ Feito.")
-
+# --- JOBS AUTOMÁTICOS ---
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
     if not games: return
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V144</b> ☀️\n\n" if i == 0 else "👇 <b>CONTINUAÇÃO...</b>\n\n"
+        header = "☀️ <b>BOM DIA! FUTEBOL DE HOJE</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -406,20 +334,57 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
         bilhete = gerar_bilhete(engine.daily_accumulator) if i == len(chunks)-1 else ""
         await enviar_post(context, msg, bilhete)
 
+async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
+    games = await engine.get_nba_games()
+    if not games: return
+    msg = "🏀 <b>NBA - RODADA DA NOITE</b> 🏀\n\n"
+    for g in games[:8]: # Top 8 jogos
+        icon = "⭐" if g['is_vip'] else "🏀"
+        reports = "\n".join(g['report'])
+        msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
+    await enviar_post(context, msg)
+
+# --- MAIN ---
 def main():
     if not BOT_TOKEN: print("ERRO: Configure o BOT_TOKEN no .env"); return
     threading.Thread(target=run_web_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("🦁 <b>BOT V147 ONLINE</b>\nStatus Equilibrado: REMOVIDO.", parse_mode=ParseMode.HTML)))
     app.add_handler(CallbackQueryHandler(menu_callback))
     app.add_error_handler(error_handler)
     
     if app.job_queue:
-        app.job_queue.run_daily(daily_soccer_job, time=time(hour=11, minute=0, tzinfo=timezone(timedelta(hours=-3))))
+        # AGENDAMENTO 8H E 18H (UTC-3)
+        app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
+        app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
     
-    print("BOT V144 RODANDO...")
+    print("BOT V147 RODANDO...")
     app.run_polling()
+
+# Callback do Menu
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    if q.data == "menu":
+        kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
+              [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]]
+        await q.edit_message_text("🦁 <b>MENU V147</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    elif q.data == "fut":
+        await q.message.reply_text("⏳ <b>Buscando Futebol...</b>", parse_mode=ParseMode.HTML)
+        await daily_soccer_job(context)
+        await q.message.reply_text("✅ Enviado!")
+    elif q.data == "nba":
+        await q.message.reply_text("🏀 <b>Buscando NBA...</b>", parse_mode=ParseMode.HTML)
+        await daily_nba_job(context)
+        await q.message.reply_text("✅ Enviado!")
+    elif q.data == "force":
+        await q.message.reply_text("🔄 <b>Atualizando Tudo...</b>", parse_mode=ParseMode.HTML)
+        await daily_soccer_job(context)
+        await daily_nba_job(context)
+        await q.message.reply_text("✅ Feito.")
+    elif q.data == "status":
+        rep = await engine.test_all_connections()
+        await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data="menu")]]), parse_mode=ParseMode.HTML)
 
 if __name__ == "__main__":
     main()
