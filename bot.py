@@ -33,12 +33,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# CONFIGURA A IA (APENAS PARA ESTADUAIS AGORA)
+# CONFIGURA A IA 
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ GEMINI AI: ATIVADO (Apenas para Estaduais)")
+        print("✅ GEMINI AI: ATIVADO")
     else:
         model = None
         print("⚠️ GEMINI AI: Chave ausente")
@@ -74,7 +74,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V164 - BLINDADO")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V165 - ESTADUAIS BLINDADOS")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -82,7 +82,6 @@ def run_web_server():
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception:", exc_info=context.error)
 
-# --- GERADOR NATIVO (100% GARANTIDO, NUNCA FALHA) ---
 def get_native_props(home, away, is_vip):
     if is_vip:
         props = [
@@ -99,23 +98,57 @@ def get_native_props(home, away, is_vip):
         ]
     return random.choice(props)
 
-# --- SESSÃO ESTADUAIS VIA IA (ÚNICA CHAMADA PRA NÃO TRAVAR) ---
-async def get_estaduais_via_ai():
-    if not model: return "\n\n⚠️ <i>Giro dos Estaduais indisponível (IA Desconectada).</i>"
+# --- SISTEMA BLINDADO DO BRASIL (IA + PLANO B) ---
+async def get_estaduais_br():
+    texto_final = "\n\n🔰 <b>GIRO DOS ESTADUAIS NO BRASIL</b> 🔰\n\n"
+    
+    # TENTATIVA 1: IA (Com Respiro de segurança)
+    if model:
+        try:
+            await asyncio.sleep(4.0) # Espera 4 segs pro Google não bloquear
+            prompt = """
+            Você é um tipster brasileiro. Liste os 3 melhores jogos dos Campeonatos Estaduais de hoje (Paulistão, Carioca, Mineiro, Gaúcho).
+            Dê o jogo e o palpite (Ex: Vencedor ou Gols).
+            Formato:
+            🇧🇷 [Campeonato]: [Casa] x [Fora]
+            🎯 Palpite: [Sua Dica]
+            """
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            if response.text:
+                return texto_final + response.text.strip()
+        except Exception as e:
+            print(f"[Aviso] IA falhou nos estaduais (Rate Limit). Acionando Plano B: {e}")
+            pass # Cai pro Plano B silenciosamente
+            
+    # TENTATIVA 2: PLANO B (Radar Globo Esporte)
     try:
-        prompt = """
-        Atue como Tipster profissional de futebol brasileiro.
-        Liste 3 jogos dos Estaduais do Brasil de HOJE (Paulistão, Carioca, Gaúcho, Mineiro, etc).
-        Para cada jogo, dê uma dica clara (Vencedor, Gols ou Ambas).
-        Formato obrigatório:
-        🇧🇷 [Campeonato]: [Time Casa] x [Time Fora]
-        🎯 Palpite: [Sua Dica]
-        """
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return "\n\n🔰 <b>GIRO DOS ESTADUAIS (Radar IA)</b> 🔰\n\n" + response.text.strip()
+        def get_ge(): return feedparser.parse("https://ge.globo.com/rss/ge/")
+        feed = await asyncio.get_running_loop().run_in_executor(None, get_ge)
+        
+        dicas_ge = []
+        # Palavras-chave dos campeonatos e times
+        palavras_chave = ["paulista", "carioca", "gaúcho", "mineiro", "flamengo", "corinthians", "palmeiras", "são paulo", "vasco", "botafogo", "grêmio", "inter"]
+        
+        for entry in feed.entries:
+            titulo = entry.title.lower()
+            if any(p in titulo for p in palavras_chave):
+                # Tenta achar qual time foi citado para criar a dica
+                time_citado = "Favorito"
+                for p in palavras_chave[4:]: 
+                    if p in titulo: 
+                        time_citado = p.title()
+                        break
+                
+                dicas_ge.append(f"🇧🇷 <b>Radar Brasil:</b> {entry.title}\n💡 <b>Dica de Valor:</b> Olho em {time_citado} (Vencedor ou Over Gols)\n")
+                if len(dicas_ge) >= 3: break # Pega as 3 principais
+        
+        if dicas_ge:
+            return texto_final + "\n".join(dicas_ge) + "\n*(Análise Baseada no Radar Esportivo)*"
     except Exception as e:
-        logger.error(f"Erro Estaduais AI: {e}")
-        return "\n\n⚠️ <i>Giro dos Estaduais indisponível no momento (Limite de IA atingido).</i>"
+        print(f"[Aviso] Plano B falhou: {e}")
+        pass
+    
+    return texto_final + "⚠️ <i>Jogos Estaduais em andamento. Consulte os mercados Ao Vivo nas plataformas!</i>"
 
 class SportsEngine:
     def __init__(self): 
@@ -127,7 +160,7 @@ class SportsEngine:
         self.estaduais_cache = ""
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V164</b>\n"
+        report = "📊 <b>STATUS V165</b>\n"
         if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
         if model: report += "✅ Gemini AI: OK\n"
         return report
@@ -204,11 +237,9 @@ class SportsEngine:
             return lines, best_pick
 
         # FUTEBOL
-        # 1. INSERE CARTÕES, CANTOS OU JOGADORES (Garantido pelo Gerador Nativo)
         prop = get_native_props(game['home'], game['away'], game['is_vip'])
         lines.append(prop)
 
-        # 2. INSERE GOLS OU VENCEDOR
         oh, oa, od = game["odds_1x2"]["home"], game["odds_1x2"]["away"], game["odds_1x2"]["draw"]
         odds_over = game["odds_over_25"]
         possible_picks = []
@@ -224,7 +255,6 @@ class SportsEngine:
             lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{oa})")
             possible_picks.append({"pick": game['away'], "odd": oa})
 
-        # 3. SE FOR JOGO TRUNCADO (Sem vencedor claro ou over gols)
         if not possible_picks:
             if odds_over > 2.0 or od < 3.10:
                 lines.append(f"🛑 <b>Mercado:</b> Under 2.5 Gols")
@@ -258,8 +288,8 @@ class SportsEngine:
             
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
         
-        # Puxa os estaduais via IA (1 única requisição, sem travar)
-        estaduais = await get_estaduais_via_ai()
+        # CHAMA OS ESTADUAIS BLINDADOS
+        estaduais = await get_estaduais_br()
         
         if all_games:
             self.soccer_cache = all_games
@@ -320,7 +350,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V164</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V165</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -351,17 +381,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V164 ONLINE</b>\nMotor de Cantos/Cartões blindado e Estaduais garantidos.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V165 ONLINE</b>\nPlano B dos Estaduais e Respiro de IA ativados.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V164</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V165</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Gerando a grade completa com Cantos/Cartões e Estaduais...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Puxando a Grade de Futebol e Caçando os Estaduais...</b>", parse_mode=ParseMode.HTML)
         sucesso = await daily_soccer_job(context)
         if sucesso: await q.message.reply_text("✅ Feito.")
         else: await q.message.reply_text("❌ <b>Nenhum jogo encontrado agora.</b>", parse_mode=ParseMode.HTML)
@@ -392,7 +422,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V164 RODANDO (BLINDADO)...")
+    print("BOT V165 RODANDO (BLINDADO)...")
     app.run_polling()
 
 if __name__ == "__main__":
