@@ -2,7 +2,6 @@ import os
 import sys
 import logging
 import asyncio
-import feedparser
 import httpx
 import threading
 import unicodedata
@@ -13,6 +12,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from gtts import gTTS 
 import google.generativeai as genai
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -29,11 +32,7 @@ PORT = int(os.getenv("PORT", 10000))
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY") 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY") 
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
-# CONFIGURA A IA 
+# CONFIGURA A IA
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
@@ -48,8 +47,6 @@ except Exception as e:
 
 AFFILIATE_LINKS = ["https://www.bet365.com", "https://br.betano.com", "https://stake.com"]
 def get_random_link(): return random.choice(AFFILIATE_LINKS)
-
-SENT_LINKS = set()
 
 TIER_S_TEAMS = ["FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO", "REAL MADRID", "BARCELONA", "LIVERPOOL", "MANCHESTER CITY", "ARSENAL", "PSG", "BAYERN MUNICH", "INTER MIAMI", "CHELSEA", "MANCHESTER UNITED", "BENFICA", "PORTO", "SPORTING", "JUVENTUS", "INTER MILAN", "AC MILAN"]
 TIER_A_TEAMS = ["TOTTENHAM", "NEWCASTLE", "WEST HAM", "ASTON VILLA", "EVERTON", "NAPOLI", "ATLETICO MADRID", "DORTMUND", "LEVERKUSEN", "BOCA JUNIORS", "RIVER PLATE"]
@@ -74,7 +71,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V165 - ESTADUAIS BLINDADOS")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V166 - AI TEIMOSA E ESTADUAIS")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -98,57 +95,41 @@ def get_native_props(home, away, is_vip):
         ]
     return random.choice(props)
 
-# --- SISTEMA BLINDADO DO BRASIL (IA + PLANO B) ---
+# --- NOVO SISTEMA DE ESTADUAIS: LOOP DE TEIMOSIA DA IA ---
 async def get_estaduais_br():
-    texto_final = "\n\n🔰 <b>GIRO DOS ESTADUAIS NO BRASIL</b> 🔰\n\n"
+    if not model: return "\n\n⚠️ <i>IA Desconectada. Impossível buscar Estaduais.</i>"
     
-    # TENTATIVA 1: IA (Com Respiro de segurança)
-    if model:
+    br_tz = timezone(timedelta(hours=-3))
+    data_hoje = datetime.now(br_tz).strftime("%d/%m/%Y")
+    
+    prompt = f"""
+    Hoje é dia {data_hoje}. 
+    Atue como um Tipster profissional de futebol brasileiro.
+    Liste os 3 melhores jogos dos Campeonatos Estaduais que vão acontecer EXATAMENTE HOJE ({data_hoje}) no Brasil (Paulistão, Carioca, Gaúcho, Mineiro, etc).
+    Se não houver jogos hoje, diga apenas: "Sem grandes jogos estaduais hoje".
+    Para cada jogo encontrado, dê uma dica clara de aposta (Vencedor, Gols ou Ambas).
+    Formato obrigatório:
+    🇧🇷 [Campeonato]: [Casa] x [Fora]
+    🎯 Palpite: [Sua Dica]
+    """
+    
+    # O Bot vai tentar até 3 vezes se o Google bloquear por limite de uso
+    for tentativa in range(1, 4):
         try:
-            await asyncio.sleep(4.0) # Espera 4 segs pro Google não bloquear
-            prompt = """
-            Você é um tipster brasileiro. Liste os 3 melhores jogos dos Campeonatos Estaduais de hoje (Paulistão, Carioca, Mineiro, Gaúcho).
-            Dê o jogo e o palpite (Ex: Vencedor ou Gols).
-            Formato:
-            🇧🇷 [Campeonato]: [Casa] x [Fora]
-            🎯 Palpite: [Sua Dica]
-            """
+            print(f"📡 Buscando Estaduais com IA (Tentativa {tentativa}/3)...")
+            await asyncio.sleep(3.0) # Pausa pra respirar
             response = await asyncio.to_thread(model.generate_content, prompt)
-            if response.text:
-                return texto_final + response.text.strip()
-        except Exception as e:
-            print(f"[Aviso] IA falhou nos estaduais (Rate Limit). Acionando Plano B: {e}")
-            pass # Cai pro Plano B silenciosamente
             
-    # TENTATIVA 2: PLANO B (Radar Globo Esporte)
-    try:
-        def get_ge(): return feedparser.parse("https://ge.globo.com/rss/ge/")
-        feed = await asyncio.get_running_loop().run_in_executor(None, get_ge)
-        
-        dicas_ge = []
-        # Palavras-chave dos campeonatos e times
-        palavras_chave = ["paulista", "carioca", "gaúcho", "mineiro", "flamengo", "corinthians", "palmeiras", "são paulo", "vasco", "botafogo", "grêmio", "inter"]
-        
-        for entry in feed.entries:
-            titulo = entry.title.lower()
-            if any(p in titulo for p in palavras_chave):
-                # Tenta achar qual time foi citado para criar a dica
-                time_citado = "Favorito"
-                for p in palavras_chave[4:]: 
-                    if p in titulo: 
-                        time_citado = p.title()
-                        break
+            if response.text and "Sem grandes jogos" not in response.text:
+                return "\n\n🔰 <b>GIRO DOS ESTADUAIS (Radar IA)</b> 🔰\n\n" + response.text.strip()
+            elif "Sem grandes jogos" in response.text:
+                return "\n\n🔰 <b>GIRO DOS ESTADUAIS</b> 🔰\n\n⚠️ <i>Nenhum jogo de destaque nos Estaduais hoje.</i>"
                 
-                dicas_ge.append(f"🇧🇷 <b>Radar Brasil:</b> {entry.title}\n💡 <b>Dica de Valor:</b> Olho em {time_citado} (Vencedor ou Over Gols)\n")
-                if len(dicas_ge) >= 3: break # Pega as 3 principais
-        
-        if dicas_ge:
-            return texto_final + "\n".join(dicas_ge) + "\n*(Análise Baseada no Radar Esportivo)*"
-    except Exception as e:
-        print(f"[Aviso] Plano B falhou: {e}")
-        pass
-    
-    return texto_final + "⚠️ <i>Jogos Estaduais em andamento. Consulte os mercados Ao Vivo nas plataformas!</i>"
+        except Exception as e:
+            print(f"❌ Falha na IA (Tentativa {tentativa}): {e}")
+            await asyncio.sleep(8.0) # Se deu erro de limite, espera 8 segundos e tenta de novo
+            
+    return "\n\n🔰 <b>GIRO DOS ESTADUAIS</b> 🔰\n\n⚠️ <i>O radar falhou em buscar os jogos de hoje. Consulte as casas de aposta.</i>"
 
 class SportsEngine:
     def __init__(self): 
@@ -160,7 +141,7 @@ class SportsEngine:
         self.estaduais_cache = ""
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V165</b>\n"
+        report = "📊 <b>STATUS V166</b>\n"
         if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
         if model: report += "✅ Gemini AI: OK\n"
         return report
@@ -288,7 +269,7 @@ class SportsEngine:
             
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
         
-        # CHAMA OS ESTADUAIS BLINDADOS
+        # BUSCA DE ESTADUAIS COM TENTATIVAS REPETIDAS
         estaduais = await get_estaduais_br()
         
         if all_games:
@@ -350,7 +331,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V165</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V166</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -381,17 +362,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V165 ONLINE</b>\nPlano B dos Estaduais e Respiro de IA ativados.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V166 ONLINE</b>\nO loop de teimosia para buscar Estaduais está ligado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V165</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V166</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Puxando a Grade de Futebol e Caçando os Estaduais...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Varrendo Grade e Caçando Estaduais (A IA vai insistir se o Google travar)...</b>", parse_mode=ParseMode.HTML)
         sucesso = await daily_soccer_job(context)
         if sucesso: await q.message.reply_text("✅ Feito.")
         else: await q.message.reply_text("❌ <b>Nenhum jogo encontrado agora.</b>", parse_mode=ParseMode.HTML)
@@ -406,7 +387,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         engine.nba_cache = []
         engine.estaduais_cache = ""
         engine.soccer_last_update = None
-        await q.message.reply_text("🔄 <b>Cache Limpo!</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("🔄 <b>Cache Limpo!</b> O bot vai pesquisar tudo do zero no próximo clique.", parse_mode=ParseMode.HTML)
         
     elif q.data == "status":
         rep = await engine.test_all_connections()
@@ -422,7 +403,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V165 RODANDO (BLINDADO)...")
+    print("BOT V166 RODANDO (RETRY LOOP)...")
     app.run_polling()
 
 if __name__ == "__main__":
