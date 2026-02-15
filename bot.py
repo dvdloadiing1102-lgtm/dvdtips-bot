@@ -14,10 +14,6 @@ from dotenv import load_dotenv
 from gtts import gTTS 
 import google.generativeai as genai
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-
 # --- LOGS ---
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,16 +26,19 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# USAMOS APENAS A THE ODDS API AGORA (Para tudo)
 THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY") 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY") 
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # CONFIGURA A IA
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ GEMINI AI: ATIVADO")
+        print("✅ GEMINI AI: ATIVADO (Foco em Cartões/Cantos/Props)")
     else:
         model = None
         print("⚠️ GEMINI AI: Chave ausente")
@@ -58,23 +57,22 @@ TIER_S_TEAMS = [
     "FLAMENGO", "PALMEIRAS", "CORINTHIANS", "SAO PAULO", "VASCO", "BOTAFOGO",
     "REAL MADRID", "BARCELONA", "LIVERPOOL", "MANCHESTER CITY", "ARSENAL", 
     "PSG", "BAYERN MUNICH", "INTER MIAMI", "AL NASSR", "CHELSEA", "MANCHESTER UNITED",
-    "BENFICA", "PORTO", "SPORTING", "AJAX"
+    "BENFICA", "PORTO", "SPORTING", "AJAX", "JUVENTUS", "INTER MILAN", "AC MILAN"
 ]
-TIER_A_TEAMS = [
-    "TOTTENHAM", "NEWCASTLE", "WEST HAM", "LEEDS", "ASTON VILLA", "EVERTON",
-    "JUVENTUS", "INTER MILAN", "AC MILAN", "NAPOLI", "ATLETICO MADRID", 
-    "DORTMUND", "LEVERKUSEN", "BOCA JUNIORS", "RIVER PLATE", "PSV", "FEYENOORD"
-]
-NBA_VIP_TEAMS = ["LAKERS", "CELTICS", "WARRIORS", "BUCKS", "SUNS", "NUGGETS", "HEAT", "MAVERICKS", "KNICKS", "76ERS"]
 
-# LIGAS RESTRITAS (Para economizar a cota mensal da The Odds API)
+# MAPA COMPLETO DE LIGAS DA THE ODDS API
 SOCCER_LEAGUES = [
     {"key": "soccer_uefa_champs_league", "name": "CHAMPIONS LEAGUE", "score": 100},
     {"key": "soccer_conmebol_libertadores", "name": "LIBERTADORES", "score": 100},
     {"key": "soccer_epl", "name": "PREMIER LEAGUE", "score": 100},
-    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO A", "score": 100},
     {"key": "soccer_spain_la_liga", "name": "LA LIGA", "score": 90},
-    {"key": "soccer_italy_serie_a", "name": "SERIE A", "score": 90}
+    {"key": "soccer_italy_serie_a", "name": "SERIE A", "score": 90},
+    {"key": "soccer_germany_bundesliga", "name": "BUNDESLIGA", "score": 90},
+    {"key": "soccer_france_ligue_one", "name": "LIGUE 1", "score": 90},
+    {"key": "soccer_portugal_primeira_liga", "name": "LIGA PORTUGAL", "score": 85},
+    {"key": "soccer_netherlands_eredivisie", "name": "EREDIVISIE", "score": 85},
+    {"key": "soccer_england_fa_cup", "name": "FA CUP", "score": 80},
+    {"key": "soccer_brazil_campeonato", "name": "BRASILEIRÃO", "score": 100}
 ]
 
 def normalize_name(name):
@@ -83,7 +81,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V159 - THE ODDS API UNLEASHED")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V160 - FULL PRO MARKETS")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -91,11 +89,20 @@ def run_web_server():
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception:", exc_info=context.error)
 
-# --- IA PROPS ---
+# --- IA PROPS (ORDEM EXPRESSA PRA CARTÕES/CANTOS/JOGADOR) ---
 async def get_ai_soccer_props(match_name):
     if not model: return ""
     try:
-        prompt = f"Analise {match_name}. Dê UM palpite de JOGADOR (Gol/Assist) OU uma linha de Cartões/Cantos. Formato: 🎯 Mercado: [Palpite]"
+        prompt = f"""
+        Como analista profissional de apostas, analise o jogo {match_name}.
+        Eu NÃO QUERO saber de vencedor ou gols. Quero uma estatística avançada.
+        Escolha APENAS UMA dessas 3 opções, a que tiver mais valor estatístico:
+        1. Cartões (Ex: 🟨 Over 5.5 Cartões - Árbitro rigoroso)
+        2. Escanteios (Ex: 🚩 Over 10.5 Cantos - Times de ponta)
+        3. Jogador (Ex: 🎯 [Nome do Jogador] p/ Marcar - Em grande fase)
+        
+        Responda APENAS com a dica e uma mini justificativa, sem textos longos.
+        """
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip()
     except: return ""
@@ -103,7 +110,7 @@ async def get_ai_soccer_props(match_name):
 async def get_ai_nba_props(match_name):
     if not model: return ""
     try:
-        prompt = f"NBA: {match_name}. Dê 2 Props de Jogador. Formato: 🏀 Player: [Nome] [Linha]"
+        prompt = f"NBA: {match_name}. Dê 2 Props de Jogador (Pontos/Rebotes). Formato: 🏀 [Nome]: [Linha]"
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip()
     except: return ""
@@ -114,7 +121,7 @@ async def auto_news_job(context: ContextTypes.DEFAULT_TYPE):
     try:
         def get_feed(): return feedparser.parse("https://ge.globo.com/rss/ge/")
         feed = await asyncio.get_running_loop().run_in_executor(None, get_feed)
-        whitelist = ["lesão", "vetado", "fora", "contratado", "escalação", "desfalque", "dúvida", "titular", "suspenso"]
+        whitelist = ["lesão", "vetado", "fora", "escalação", "desfalque", "dúvida", "suspenso"]
         blacklist = ["bbb", "festa", "namorada", "reality"]
         if feed.entries: LATEST_HEADLINES = [entry.title for entry in feed.entries[:30]]
         c = 0
@@ -139,18 +146,15 @@ class SportsEngine:
         self.nba_last_update = None
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V159 (THE ODDS API)</b>\n"
-        if THE_ODDS_API_KEY: report += "✅ The Odds API (Futebol & NBA): OK\n"
+        report = "📊 <b>STATUS V160 (PRO MARKETS)</b>\n"
+        if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
         else: report += "❌ The Odds API: Faltando Chave\n"
         if model: report += "✅ Gemini AI: OK\n"
         else: report += "❌ Gemini AI: Off\n"
-        if self.soccer_last_update:
-            report += f"🕒 Cache Futebol: {self.soccer_last_update.strftime('%H:%M')}\n"
         return report
 
     async def fetch_odds(self, sport_key, display_name, league_score=0, is_nba=False):
         if not THE_ODDS_API_KEY: return []
-        # O SEGREDO AQUI: markets=h2h,totals (Pega Vencedor E Gols)
         url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds?regions=us&oddsFormat=decimal&markets=h2h,totals&apiKey={THE_ODDS_API_KEY}"
         async with httpx.AsyncClient(timeout=25) as client:
             try:
@@ -176,7 +180,7 @@ class SportsEngine:
                         match_score = league_score
                         is_vip = False
                         if is_nba:
-                            if any(t in h_norm or t in a_norm for t in NBA_VIP_TEAMS): match_score += 1000; is_vip = True
+                            match_score += 1000
                         else:
                             if any(t in h_norm or t in a_norm for t in TIER_S_TEAMS): match_score += 1000; is_vip = True
                             elif any(t in h_norm or t in a_norm for t in TIER_A_TEAMS): match_score += 500
@@ -224,43 +228,58 @@ class SportsEngine:
                 lines.append(f"🔥 <b>ML:</b> {game['away']} (@{oa})")
                 best_pick = {"pick": game['away'], "odd": oa, "match": game['match']}
             else:
-                lines.append("⚖️ <b>Jogo Parelho</b>")
+                lines.append("⚖️ <b>ML Arriscado (Foque nos Players)</b>")
             return lines, best_pick
 
-        # --- FUTEBOL ---
+        # --- FUTEBOL (NOVO MOTOR MATEMÁTICO SEM SPAM DE DNB) ---
         ai_props = ""
-        if game['is_vip'] and model: ai_props = await get_ai_soccer_props(game['match'])
-        if ai_props: lines.append(ai_props)
+        # Agora o Gemini SEMPRE tenta dar um pitaco de jogador/canto/cartão se for jogo VIP
+        if game['is_vip'] and model: 
+            ai_props = await get_ai_soccer_props(game['match'])
+            if ai_props: lines.append(f"💡 <b>Dica de Analista:</b>\n{ai_props}")
 
-        odds_1x2 = game["odds_1x2"]
+        oh, oa, od = game["odds_1x2"]["home"], game["odds_1x2"]["away"], game["odds_1x2"]["draw"]
         odds_over = game["odds_over_25"]
         possible_picks = []
 
-        # Tenta pegar Over Gols direto da The Odds API
-        if 1.40 <= odds_over <= 1.95:
-            lines.append(f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{odds_over})")
-            possible_picks.append({"pick": "Over 2.5 Gols", "odd": odds_over, "desc": "Gols"})
-
-        # Tenta pegar Vencedor
-        oh, oa, od = odds_1x2["home"], odds_1x2["away"], odds_1x2["draw"]
-        if 1.20 <= oh <= 1.65:
-            lines.append(f"💰 <b>Vencedor:</b> {game['home']} (@{oh})")
-            possible_picks.append({"pick": game['home'], "odd": oh, "desc": "Vencedor"})
-        elif 1.20 <= oa <= 1.65:
-            lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{oa})")
-            possible_picks.append({"pick": game['away'], "odd": oa, "desc": "Vencedor"})
-
-        # Se não tiver Gols nem Favorito claro, vai de DNB
-        if not possible_picks:
-            if oh < oa:
-                dnb = round(oh * 0.75, 2)
-                lines.append(f"🛡️ <b>Proteção:</b> {game['home']} DNB (@{dnb})")
-                best_pick = {"pick": f"DNB {game['home']}", "odd": dnb, "match": game['match']}
+        # 1. MERCADO DE GOLS (Cálculo dinâmico 1.5 e 2.5)
+        if odds_over > 0:
+            if odds_over <= 1.70:
+                lines.append(f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{odds_over})")
+                possible_picks.append({"pick": "Over 2.5 Gols", "odd": odds_over})
             else:
-                dnb = round(oa * 0.75, 2)
-                lines.append(f"🛡️ <b>Proteção:</b> {game['away']} DNB (@{dnb})")
-                best_pick = {"pick": f"DNB {game['away']}", "odd": dnb, "match": game['match']}
-        else:
+                # Se o Over 2.5 tá alto, o Over 1.5 é a jogada de valor
+                odd_15 = round(odds_over * 0.65, 2)
+                if 1.25 <= odd_15 <= 1.60:
+                    lines.append(f"🥅 <b>Mercado:</b> Over 1.5 Gols (@{odd_15})")
+                    possible_picks.append({"pick": "Over 1.5 Gols", "odd": odd_15})
+
+        # 2. VENCEDORES (Apenas se houver clareza)
+        if 1.20 <= oh <= 1.75:
+            lines.append(f"💰 <b>Vencedor:</b> {game['home']} (@{oh})")
+            possible_picks.append({"pick": game['home'], "odd": oh})
+        elif 1.20 <= oa <= 1.75:
+            lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{oa})")
+            possible_picks.append({"pick": game['away'], "odd": oa})
+
+        # 3. JOGO PARELHO (Ambas Marcam / Dupla Chance)
+        if 1.80 <= oh <= 2.80 and 1.80 <= oa <= 2.80:
+            # Aproxima a odd do Ambas baseada no equilíbrio
+            lines.append(f"⚔️ <b>Mercado:</b> Ambas Marcam Sim (@1.80+)")
+            possible_picks.append({"pick": "Ambas Marcam", "odd": 1.80})
+            
+            # Dupla Chance real baseada em matemática
+            if oh < oa:
+                dc = round(1 / (1/oh + 1/od), 2)
+                lines.append(f"🛡️ <b>Dupla Chance:</b> 1X (@{dc})")
+                possible_picks.append({"pick": f"1X ({game['home']}/Empate)", "odd": dc})
+            else:
+                dc = round(1 / (1/oa + 1/od), 2)
+                lines.append(f"🛡️ <b>Dupla Chance:</b> X2 (@{dc})")
+                possible_picks.append({"pick": f"X2 ({game['away']}/Empate)", "odd": dc})
+
+        # Escolhe aleatoriamente UM dos mercados matemáticos para compor a múltipla
+        if possible_picks:
             escolha = random.choice(possible_picks)
             best_pick = {"pick": escolha["pick"], "odd": escolha["odd"], "match": game['match']}
 
@@ -268,10 +287,8 @@ class SportsEngine:
 
     async def get_soccer_grade(self):
         now = datetime.now()
-        # CACHE DE 8 HORAS (Pra The Odds API não estourar)
         if self.soccer_cache and self.soccer_last_update:
             if (now - self.soccer_last_update) < timedelta(hours=8):
-                print("♻️ Usando dados salvos no CACHE (Futebol).")
                 return self.soccer_cache
 
         print("📡 Buscando novos dados na API (Futebol)...")
@@ -285,14 +302,12 @@ class SportsEngine:
                 g['report'] = report
                 if pick: self.daily_accumulator.append(pick)
                 all_games.append(g)
-            await asyncio.sleep(0.2) # Pausa leve
+            await asyncio.sleep(0.2)
             
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
-        
         if all_games:
             self.soccer_cache = all_games
             self.soccer_last_update = now
-            
         return all_games
 
     async def get_nba_games(self):
@@ -328,17 +343,15 @@ def gerar_bilhete(palpites):
             if total_odd * p['odd'] > 25.0: continue
             selected.append(p)
             total_odd *= p['odd']
-            if 8.0 <= total_odd <= 25.0:
-                txt = f"\n🎟️ <b>MÚLTIPLA SNIPER (ODD {total_odd:.2f})</b> 🎯\n"
+            if 6.0 <= total_odd <= 30.0: # Range ajustado pra facilitar a criação
+                txt = f"\n🎟️ <b>MÚLTIPLA DIVERSIFICADA (ODD {total_odd:.2f})</b> 🎯\n"
                 for s in selected: txt += f"🔹 {s['match']}: {s['pick']} (@{s['odd']})\n"
                 txt += "⚠️ <i>Aposte com responsabilidade.</i>\n"
                 return txt
-    return "\n⚠️ <i>Sem múltipla de alto valor hoje.</i>"
+    return "\n⚠️ <i>Sem jogos de valor para múltipla hoje.</i>"
 
 async def enviar_audio(context, game):
-    text = f"Destaque: {game['match']}."
-    bet = game['report'][0].replace("<b>","").replace("</b>","").replace("🔥","").replace("🛡️","").replace("♻️","").replace("📉","").replace("🎯","").replace("⚔️","").replace("🥅","")
-    text += f" Palpite: {bet[:80]}."
+    text = f"Jogão da {game['league']}. {game['match']}."
     try:
         tts = gTTS(text=text, lang='pt'); tts.save("audio.mp3")
         with open("audio.mp3", "rb") as f: await context.bot.send_voice(chat_id=CHANNEL_ID, voice=f)
@@ -356,7 +369,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     if not games: return False 
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V159</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V160 (MÚLTIPLOS MERCADOS)</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -380,17 +393,17 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("⚽ Futebol (The Odds API)", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
+        [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V159 ONLINE</b>\nMercado de Gols desbloqueado sem API-Football.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V160 ONLINE</b>\nMulti-mercados ativados: Cantos, Cartões, Gols e 1x2.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏓 <b>PONG!</b> Bot rodando 100%.", parse_mode=ParseMode.HTML)
 
 async def post_init(application: Application):
     if CHANNEL_ID:
-        try: await application.bot.send_message(chat_id=CHANNEL_ID, text="🚀 <b>SISTEMA V159 INICIADO!</b>\nOperando exclusivamente com The Odds API (Gols + Vencedor).", parse_mode=ParseMode.HTML)
+        try: await application.bot.send_message(chat_id=CHANNEL_ID, text="🚀 <b>SISTEMA V160 INICIADO!</b>", parse_mode=ParseMode.HTML)
         except: pass
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -398,10 +411,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V159</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V160</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Buscando jogos e odds de Gols...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Buscando múltiplas e palpites da IA...</b>", parse_mode=ParseMode.HTML)
         sucesso = await daily_soccer_job(context)
         if sucesso: await q.message.reply_text("✅ Feito.")
         else: await q.message.reply_text("❌ <b>ERRO:</b> Sem jogos na The Odds API hoje.", parse_mode=ParseMode.HTML)
@@ -434,7 +447,7 @@ def main():
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V159 RODANDO (API-FOOTBALL REMOVIDA)...")
+    print("BOT V160 RODANDO...")
     app.run_polling()
 
 if __name__ == "__main__":
