@@ -30,16 +30,16 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_ID = os.getenv("ADMIN_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY") # Usado para NBA
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY") # NOVO: Usado para Futebol
-GEMINI_KEY = os.getenv("GEMINI_API_KEY") # Usado para Player Props
+THE_ODDS_API_KEY = os.getenv("THE_ODDS_API_KEY") 
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY") 
+GEMINI_KEY = os.getenv("GEMINI_API_KEY") 
 
 # CONFIGURA A IA
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ GEMINI AI V155: ATIVADO")
+        print("✅ GEMINI AI: ATIVADO")
     else:
         model = None
         print("⚠️ GEMINI AI: Chave ausente")
@@ -66,7 +66,6 @@ TIER_A_TEAMS = [
     "DORTMUND", "LEVERKUSEN", "BOCA JUNIORS", "RIVER PLATE", "PSV", "FEYENOORD"
 ]
 
-# NOVO MAPA DE LIGAS (IDs Oficiais da API-Football)
 SOCCER_LEAGUES = {
     2: {"name": "CHAMPIONS LEAGUE", "score": 100},
     13: {"name": "LIBERTADORES", "score": 100},
@@ -91,7 +90,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V155 - MULTI MARKETS API")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V156 - ANTI GHOSTING")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -103,12 +102,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def get_ai_soccer_props(match_name):
     if not model: return ""
     try:
-        prompt = f"""
-        Analise o jogo: {match_name} (2025/26).
-        Me dê APENAS UM palpite de JOGADOR (Gol ou Assistência).
-        Responda EXATAMENTE assim:
-        🎯 Player: [Nome] p/ Marcar ou Assistência
-        """
+        prompt = f"Analise {match_name}. Dê UM palpite de JOGADOR (Gol/Assist). Formato: 🎯 Player: [Nome] p/ [Ação]"
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip()
     except: return ""
@@ -116,12 +110,7 @@ async def get_ai_soccer_props(match_name):
 async def get_ai_nba_props(match_name):
     if not model: return ""
     try:
-        prompt = f"""
-        NBA: {match_name}. Me dê 2 Props de Jogador.
-        Responda assim:
-        🏀 Player: [Nome] [Linha]
-        🏀 Player: [Nome] [Linha]
-        """
+        prompt = f"NBA: {match_name}. Dê 2 Props de Jogador. Formato: 🏀 Player: [Nome] [Linha]"
         response = await asyncio.to_thread(model.generate_content, prompt)
         return response.text.strip()
     except: return ""
@@ -152,14 +141,15 @@ class SportsEngine:
     def __init__(self): self.daily_accumulator = []
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V155</b>\n"
-        if API_FOOTBALL_KEY: report += "✅ API-Football (Soccer): OK\n"
+        report = "📊 <b>STATUS V156</b>\n"
+        if API_FOOTBALL_KEY: report += "✅ API-Football: OK\n"
         else: report += "❌ API-Football: Faltando Chave\n"
-        if THE_ODDS_API_KEY: report += "✅ The Odds API (NBA): OK\n"
+        if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
+        else: report += "❌ The Odds API: Faltando Chave\n"
         if model: report += "✅ Gemini AI: OK\n"
+        else: report += "❌ Gemini AI: Off\n"
         return report
 
-    # MOTOR NBA (Continua na The Odds API)
     async def fetch_nba_odds(self):
         if not THE_ODDS_API_KEY: return []
         url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds?regions=us&oddsFormat=decimal&markets=h2h&apiKey={THE_ODDS_API_KEY}"
@@ -169,27 +159,18 @@ class SportsEngine:
                 data = r.json()
                 if not isinstance(data, list): return []
                 games = []
-                now_utc = datetime.now(timezone.utc)
                 br_tz = timezone(timedelta(hours=-3))
-                today_date = now_utc.astimezone(br_tz).date()
+                today_date = datetime.now(timezone.utc).astimezone(br_tz).date()
 
                 for event in data:
                     try:
-                        evt_time_utc = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00'))
-                        evt_time_br = evt_time_utc.astimezone(br_tz)
-                        
+                        evt_time_br = datetime.fromisoformat(event['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
                         tomorrow = today_date + timedelta(days=1)
-                        is_valid = (evt_time_br.date() == today_date) or (evt_time_br.date() == tomorrow and evt_time_br.hour < 5)
-                        if not is_valid: continue
+                        if not ((evt_time_br.date() == today_date) or (evt_time_br.date() == tomorrow and evt_time_br.hour < 5)): continue
                         
-                        time_str = evt_time_br.strftime("%H:%M")
                         h, a = event['home_team'], event['away_team']
-                        h_norm = normalize_name(h); a_norm = normalize_name(a)
-                        
-                        match_score = 50
-                        is_vip = False
-                        if any(t in h_norm or t in a_norm for t in NBA_VIP_TEAMS):
-                            match_score += 1000; is_vip = True
+                        h_norm, a_norm = normalize_name(h), normalize_name(a)
+                        is_vip = any(t in h_norm or t in a_norm for t in NBA_VIP_TEAMS)
                             
                         odds_h, odds_a = 0, 0
                         for book in event['bookmakers']:
@@ -200,15 +181,11 @@ class SportsEngine:
                                         if o['name'] == a: odds_a = max(odds_a, o['price'])
                         
                         if odds_h > 1.01 and odds_a > 1.01:
-                            games.append({
-                                "match": f"{h} x {a}", "league": "NBA", "time": time_str, "datetime": evt_time_br, 
-                                "odd_h": odds_h, "odd_a": odds_a, "home": h, "away": a, "is_vip": is_vip, "match_score": match_score
-                            })
+                            games.append({"match": f"{h} x {a}", "league": "NBA", "time": evt_time_br.strftime("%H:%M"), "datetime": evt_time_br, "odd_h": odds_h, "odd_a": odds_a, "home": h, "away": a, "is_vip": is_vip, "match_score": 1050 if is_vip else 50})
                     except: continue
                 return games
             except: return []
 
-    # NOVO MOTOR DE FUTEBOL (API-FOOTBALL)
     async def fetch_soccer_odds_api_football(self):
         if not API_FOOTBALL_KEY: return []
         headers = {"x-apisports-key": API_FOOTBALL_KEY}
@@ -218,9 +195,9 @@ class SportsEngine:
         games = []
         async with httpx.AsyncClient(timeout=30) as client:
             try:
-                # Busca páginas 1 e 2 para garantir que pega os jogos principais sem estourar o limite (2 reqs de 100)
+                # REMOVIDO o filtro bookmaker=8 para parar de vir lista vazia!
                 for page in range(1, 3):
-                    url = f"https://v3.football.api-sports.io/odds?date={today_str}&bookmaker=8&page={page}"
+                    url = f"https://v3.football.api-sports.io/odds?date={today_str}&page={page}"
                     r = await client.get(url, headers=headers)
                     data = r.json()
                     
@@ -230,43 +207,41 @@ class SportsEngine:
                         league_id = item["league"]["id"]
                         if league_id in SOCCER_LEAGUES:
                             fixture = item["fixture"]
-                            evt_time_utc = datetime.fromisoformat(fixture['date'])
-                            evt_time_br = evt_time_utc.astimezone(br_tz)
+                            evt_time_br = datetime.fromisoformat(fixture['date']).astimezone(br_tz)
                             
-                            h = item["match"]["home"]
-                            a = item["match"]["away"]
-                            league_name = SOCCER_LEAGUES[league_id]["name"]
+                            h, a = item["match"]["home"], item["match"]["away"]
+                            h_norm, a_norm = normalize_name(h), normalize_name(a)
+                            
                             match_score = SOCCER_LEAGUES[league_id]["score"]
-                            
-                            h_norm = normalize_name(h); a_norm = normalize_name(a)
                             is_vip = False
                             if any(t in h_norm or t in a_norm for t in TIER_S_TEAMS): match_score += 1000; is_vip = True
                             elif any(t in h_norm or t in a_norm for t in TIER_A_TEAMS): match_score += 500
                             
-                            # Extraindo TODOS os mercados reais
+                            # Pega a primeira casa de apostas que vier
+                            if not item.get("bookmakers"): continue
                             bets = item["bookmakers"][0]["bets"]
+                            
                             odds_1x2 = {"home": 0, "draw": 0, "away": 0}
-                            odds_goals = 0 # Over 2.5
-                            odds_btts = 0 # Yes
+                            odds_goals = 0 
+                            odds_btts = 0 
                             
                             for bet in bets:
-                                if bet["id"] == 1: # Match Winner
+                                if bet["name"] == "Match Winner":
                                     for val in bet["values"]:
                                         if val["value"] == "Home": odds_1x2["home"] = float(val["odd"])
                                         elif val["value"] == "Draw": odds_1x2["draw"] = float(val["odd"])
                                         elif val["value"] == "Away": odds_1x2["away"] = float(val["odd"])
-                                elif bet["id"] == 5: # Over/Under
+                                elif bet["name"] == "Goals Over/Under":
                                     for val in bet["values"]:
                                         if val["value"] == "Over 2.5": odds_goals = float(val["odd"])
-                                elif bet["id"] == 8: # BTTS
+                                elif bet["name"] == "Both Teams Score":
                                     for val in bet["values"]:
                                         if val["value"] == "Yes": odds_btts = float(val["odd"])
                             
                             if odds_1x2["home"] > 1.01:
                                 games.append({
-                                    "match": f"{h} x {a}", "league": league_name, "time": evt_time_br.strftime("%H:%M"), "datetime": evt_time_br,
-                                    "home": h, "away": a, "is_vip": is_vip, "match_score": match_score,
-                                    "odds_1x2": odds_1x2, "odds_goals": odds_goals, "odds_btts": odds_btts
+                                    "match": f"{h} x {a}", "league": SOCCER_LEAGUES[league_id]["name"], "time": evt_time_br.strftime("%H:%M"), "datetime": evt_time_br,
+                                    "home": h, "away": a, "is_vip": is_vip, "match_score": match_score, "odds_1x2": odds_1x2, "odds_goals": odds_goals, "odds_btts": odds_btts
                                 })
                 return games
             except Exception as e:
@@ -277,20 +252,15 @@ class SportsEngine:
         lines = []
         best_pick = None
         
-        # Chama a IA para Props
         ai_props = ""
-        if game['is_vip'] and model:
-            ai_props = await get_ai_soccer_props(game['match'])
+        if game['is_vip'] and model: ai_props = await get_ai_soccer_props(game['match'])
         if ai_props: lines.append(ai_props)
 
-        # Lógica de Mercados Variados (Adeus apenas DNB!)
         odds_1x2 = game["odds_1x2"]
         odds_goals = game["odds_goals"]
         odds_btts = game["odds_btts"]
-        
         possible_picks = []
 
-        # Analisa Vitória Seca
         if 1.20 <= odds_1x2["home"] <= 1.65:
             lines.append(f"💰 <b>Vencedor:</b> {game['home']} (@{odds_1x2['home']})")
             possible_picks.append({"pick": game['home'], "odd": odds_1x2['home'], "desc": "Vencedor"})
@@ -298,20 +268,17 @@ class SportsEngine:
             lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{odds_1x2['away']})")
             possible_picks.append({"pick": game['away'], "odd": odds_1x2['away'], "desc": "Vencedor"})
             
-        # Analisa Over Gols (Se tiver odd disponível)
         if 1.40 <= odds_goals <= 1.90:
             lines.append(f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{odds_goals})")
             possible_picks.append({"pick": "Over 2.5 Gols", "odd": odds_goals, "desc": "Gols"})
             
-        # Analisa Ambas Marcam (BTTS)
         if 1.50 <= odds_btts <= 1.95:
             lines.append(f"⚔️ <b>Mercado:</b> Ambas Marcam Sim (@{odds_btts})")
             possible_picks.append({"pick": "Ambas Marcam", "odd": odds_btts, "desc": "BTTS"})
 
-        # Se nenhum mercado principal for bom, protege com DNB
         if not possible_picks:
             if odds_1x2["home"] < odds_1x2["away"]:
-                dnb = round(odds_1x2["home"] * 0.75, 2) # Estima DNB
+                dnb = round(odds_1x2["home"] * 0.75, 2)
                 lines.append(f"🛡️ <b>Proteção:</b> {game['home']} DNB (@{dnb})")
                 best_pick = {"pick": f"DNB {game['home']}", "odd": dnb, "match": game['match']}
             else:
@@ -319,7 +286,6 @@ class SportsEngine:
                 lines.append(f"🛡️ <b>Proteção:</b> {game['away']} DNB (@{dnb})")
                 best_pick = {"pick": f"DNB {game['away']}", "odd": dnb, "match": game['match']}
         else:
-            # Sorteia um dos mercados bons para dar variedade na Múltipla!
             escolha = random.choice(possible_picks)
             best_pick = {"pick": escolha["pick"], "odd": escolha["odd"], "match": game['match']}
 
@@ -335,10 +301,10 @@ class SportsEngine:
         if ai_props: lines.append(ai_props)
 
         if oh < 1.50:
-            lines.append(f"🔥 <b>Moneyline:</b> {game['home']} (@{oh})")
+            lines.append(f"🔥 <b>ML:</b> {game['home']} (@{oh})")
             best_pick = {"pick": game['home'], "odd": oh, "match": game['match']}
         elif oa < 1.50:
-            lines.append(f"🔥 <b>Moneyline:</b> {game['away']} (@{oa})")
+            lines.append(f"🔥 <b>ML:</b> {game['away']} (@{oa})")
             best_pick = {"pick": game['away'], "odd": oa, "match": game['match']}
         else:
             lines.append("⚖️ <b>Jogo Parelho (Foque nos Jogadores)</b>")
@@ -347,7 +313,6 @@ class SportsEngine:
     async def get_soccer_grade(self):
         all_games = []
         self.daily_accumulator = []
-        
         games = await self.fetch_soccer_odds_api_football()
         for g in games:
             report, pick = await self.analyze_soccer_game(g)
@@ -355,7 +320,6 @@ class SportsEngine:
             if pick: self.daily_accumulator.append(pick)
             all_games.append(g)
             await asyncio.sleep(0.1)
-            
         all_games.sort(key=lambda x: (-x['match_score'], x['datetime']))
         return all_games
 
@@ -371,24 +335,19 @@ class SportsEngine:
 
 engine = SportsEngine()
 
-# --- MÚLTIPLA VARIADA ---
 def gerar_bilhete(palpites):
     if len(palpites) < 3: return ""
     for _ in range(500):
         random.shuffle(palpites)
-        # Prioriza jogos VIP na multipla
         palpites.sort(key=lambda x: 1 if any(t in x['match'].upper() for t in TIER_S_TEAMS + TIER_A_TEAMS) else 0, reverse=True)
         selected = []; total_odd = 1.0
-        
         for p in palpites:
-            if p['odd'] < 1.25: continue # Só odds de valor
+            if p['odd'] < 1.25: continue
             if total_odd * p['odd'] > 25.0: continue
             selected.append(p)
             total_odd *= p['odd']
-            
-            # Alvo de Múltipla entre 8.0 e 25.0
             if 8.0 <= total_odd <= 25.0:
-                txt = f"\n🎟️ <b>MÚLTIPLA SNIPER V155 (ODD {total_odd:.2f})</b> 🎯\n"
+                txt = f"\n🎟️ <b>MÚLTIPLA SNIPER (ODD {total_odd:.2f})</b> 🎯\n"
                 for s in selected: txt += f"🔹 {s['match']}: {s['pick']} (@{s['odd']})\n"
                 txt += "⚠️ <i>Aposte com responsabilidade.</i>\n"
                 return txt
@@ -409,13 +368,13 @@ async def enviar_post(context, text, bilhete=""):
     try: await context.bot.send_message(chat_id=CHANNEL_ID, text=text+bilhete, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e: logger.error(f"Erro envio: {e}")
 
-# --- JOBS & START ---
+# --- JOBS (COM AVISO DE ERRO) ---
 async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_soccer_grade()
-    if not games: return
+    if not games: return False # Agora retorna False se falhar
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V155 (MÚLTIPLOS MERCADOS)</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V156</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -424,30 +383,32 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
             msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
         bilhete = gerar_bilhete(engine.daily_accumulator) if i == len(chunks)-1 else ""
         await enviar_post(context, msg, bilhete)
+    return True
 
 async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
     games = await engine.get_nba_games()
-    if not games: return
+    if not games: return False
     msg = "🏀 <b>NBA - PLAYER PROPS</b> 🏀\n\n"
     for g in games[:8]:
         icon = "⭐" if g['is_vip'] else "🏀"
         reports = "\n".join(g['report'])
         msg += f"{icon} <b>{g['league']}</b> | ⏰ <b>{g['time']}</b>\n⚔️ {g['match']}\n{reports}\n━━━━━━━━━━━━━━━━\n"
     await enviar_post(context, msg)
+    return True
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
         [InlineKeyboardButton("⚽ Futebol (API Nova)", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V155 ONLINE</b>\nAPI-Football Ativada. Mercados REAIS desbloqueados.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V156 ONLINE</b>\nFiltro Bet365 removido para evitar lista vazia.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏓 <b>PONG!</b> Bot rodando 100%.", parse_mode=ParseMode.HTML)
 
 async def post_init(application: Application):
     if CHANNEL_ID:
-        try: await application.bot.send_message(chat_id=CHANNEL_ID, text="🚀 <b>SISTEMA V155 INICIADO!</b>\nNovo motor de busca com Ambas Marcam e Over Gols ligado.", parse_mode=ParseMode.HTML)
+        try: await application.bot.send_message(chat_id=CHANNEL_ID, text="🚀 <b>SISTEMA V156 INICIADO!</b>", parse_mode=ParseMode.HTML)
         except: pass
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -455,20 +416,27 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Forçar Update", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V155</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V156</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Buscando mercados (Gols, BTTS, Vitória)...</b>", parse_mode=ParseMode.HTML)
-        await daily_soccer_job(context)
-        await q.message.reply_text("✅ Feito.")
+        await q.message.reply_text("⏳ <b>Buscando mercados...</b>", parse_mode=ParseMode.HTML)
+        sucesso = await daily_soccer_job(context)
+        if sucesso: await q.message.reply_text("✅ Feito.")
+        else: await q.message.reply_text("❌ <b>ERRO:</b> A API-Football não encontrou jogos hoje. Clique em STATUS para verificar sua chave.", parse_mode=ParseMode.HTML)
+    
     elif q.data == "nba":
         await q.message.reply_text("🏀 <b>Analisando NBA...</b>", parse_mode=ParseMode.HTML)
-        await daily_nba_job(context)
-        await q.message.reply_text("✅ Feito.")
+        sucesso = await daily_nba_job(context)
+        if sucesso: await q.message.reply_text("✅ Feito.")
+        else: await q.message.reply_text("❌ <b>ERRO:</b> Nenhum jogo da NBA encontrado (Pode ser o All-Star Break!).", parse_mode=ParseMode.HTML)
+    
     elif q.data == "force":
         await q.message.reply_text("🔄 <b>Atualizando Tudo...</b>", parse_mode=ParseMode.HTML)
-        await daily_soccer_job(context)
-        await daily_nba_job(context)
-        await q.message.reply_text("✅ Feito.")
+        fut = await daily_soccer_job(context)
+        nba = await daily_nba_job(context)
+        if fut or nba: await q.message.reply_text("✅ Feito.")
+        else: await q.message.reply_text("❌ <b>Nenhum jogo encontrado nas APIs hoje! Verifique as chaves em STATUS.</b>", parse_mode=ParseMode.HTML)
+        
     elif q.data == "status":
         rep = await engine.test_all_connections()
         await q.edit_message_text(rep, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data="menu")]]), parse_mode=ParseMode.HTML)
@@ -485,7 +453,7 @@ def main():
         app.job_queue.run_repeating(auto_news_job, interval=1800, first=10)
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V155 RODANDO...")
+    print("BOT V156 RODANDO...")
     app.run_polling()
 
 if __name__ == "__main__":
