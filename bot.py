@@ -37,7 +37,7 @@ try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ GEMINI AI: ATIVADO (Modo Investigativo de Elencos)")
+        print("✅ GEMINI AI: ATIVADO (Motor Imparável)")
     else:
         model = None
         print("⚠️ GEMINI AI: Chave ausente")
@@ -71,7 +71,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V167 - PRO TIPSTER")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V168 - AI RETRY LOOP")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -79,29 +79,36 @@ def run_web_server():
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception:", exc_info=context.error)
 
-# --- IA PROPS (A BUSCA EXATA QUE VOCÊ PEDIU) ---
+# --- IA PROPS (AGORA COM LOOP DE TEIMOSIA) ---
 async def get_ai_soccer_props(match_name):
     if not model: return ""
     
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
     
-    try:
-        # A instrução investigativa para evitar lesionados
-        prompt = f"""
-        Estamos em {data_hoje}. O jogo é {match_name}.
-        Faça uma pesquisa interna rápida sobre os elencos atuais destas equipes.
-        Encontre o nome de um jogador de linha de frente que é TITULAR e está em BOA FASE (certifique-se de que ele não está lesionado).
-        Me dê APENAS UM palpite direto focado nele.
-        Formato obrigatório:
-        🎯 Player Prop: [NOME DO JOGADOR] - [Mercado de Finalização ou Gol]
-        """
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text.strip()
-    except Exception as e:
-        return ""
+    prompt = f"""
+    Mês atual: {data_hoje}. Jogo: {match_name}.
+    Pesquise informações atualizadas sobre os elencos e titularidade.
+    Me dê APENAS O NOME de um jogador de ataque que está em boa fase e APTO para jogar.
+    Responda EXATAMENTE neste formato curto:
+    🎯 Player Prop: [NOME DO JOGADOR] p/ Marcar ou Finalizar Over 1.5
+    """
+    
+    # Tenta 3 vezes antes de desistir e ir pros Escanteios
+    for tentativa in range(1, 4):
+        try:
+            await asyncio.sleep(4.0) # Pausa de segurança pro Google
+            print(f"📡 Buscando jogador para {match_name} (Tentativa {tentativa}/3)...")
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            txt = response.text.strip()
+            if "🎯" in txt: return txt
+            return f"🎯 {txt}" # Caso a IA esqueça o emoji
+        except Exception as e:
+            print(f"❌ Falha ao buscar jogador (Tentativa {tentativa}): {e}")
+            await asyncio.sleep(6.0) # Espera mais tempo se tomou block
+            
+    return "" # Só retorna vazio se esgotar as 3 tentativas
 
-# Gerador Nativo de fallback seguro (Sem nomes falsos)
 def get_native_props(is_vip):
     props = [
         f"🚩 <b>Mercado:</b> Over 8.5 Escanteios",
@@ -119,7 +126,7 @@ class SportsEngine:
         self.nba_last_update = None
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V167</b>\n"
+        report = "📊 <b>STATUS V168</b>\n"
         if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
         if model: report += "✅ Gemini AI: OK\n"
         return report
@@ -155,8 +162,6 @@ class SportsEngine:
                         elif any(t in h_norm or t in a_norm for t in TIER_A_TEAMS): match_score += 500
                             
                         odds_1x2 = {"home": 0, "draw": 0, "away": 0}
-                        
-                        # O NOVO MOTOR DE GOLS: Coleta todas as linhas
                         odds_goals = {"1.5": 0, "2.5": 0, "3.5": 0}
                         
                         for book in event['bookmakers']:
@@ -199,10 +204,9 @@ class SportsEngine:
                 lines.append("⚖️ <b>ML Parelho</b>")
             return lines, best_pick
 
-        # FUTEBOL - BUSCA DE JOGADORES REAIS PARA VIPs
+        # FUTEBOL - BUSCA BLINDADA
         ai_props = ""
         if game['is_vip'] and model:
-            await asyncio.sleep(2.0) # Respiro para a IA não bloquear
             ai_props = await get_ai_soccer_props(game['match'])
             
         if ai_props:
@@ -210,12 +214,11 @@ class SportsEngine:
         else:
             lines.append(get_native_props(game['is_vip']))
 
-        # FUTEBOL - O NOVO MOTOR DE GOLS DINÂMICO
+        # FUTEBOL - MOTOR DE GOLS E VENCEDOR
         oh, oa, od = game["odds_1x2"]["home"], game["odds_1x2"]["away"], game["odds_1x2"]["draw"]
         gols = game["odds_goals"]
         possible_picks = []
 
-        # A lógica caça a linha de gols mais segura e com melhor valor
         if 1.40 <= gols["2.5"] <= 1.95:
             lines.append(f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{gols['2.5']})")
             possible_picks.append({"pick": "Over 2.5 Gols", "odd": gols['2.5']})
@@ -226,7 +229,6 @@ class SportsEngine:
             lines.append(f"🔥 <b>Mercado:</b> Over 3.5 Gols (@{gols['3.5']})")
             possible_picks.append({"pick": "Over 3.5 Gols", "odd": gols['3.5']})
 
-        # Adiciona a Vitória se houver favorito
         if 1.15 <= oh <= 1.85:
             lines.append(f"💰 <b>Vencedor:</b> {game['home']} (@{oh})")
             possible_picks.append({"pick": game['home'], "odd": oh})
@@ -234,7 +236,6 @@ class SportsEngine:
             lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{oa})")
             possible_picks.append({"pick": game['away'], "odd": oa})
 
-        # Se for truncado, Ambas Marcam ou Under
         if not possible_picks:
             if gols["2.5"] > 2.0 or od < 3.10:
                 lines.append(f"🛑 <b>Mercado:</b> Under 2.5 Gols")
@@ -325,7 +326,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V167</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V168</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -356,17 +357,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V167 ONLINE</b>\nMotor de Gols Dinâmico e Nomes de Jogadores Reais.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V168 ONLINE</b>\nForçando a IA a entregar os nomes dos jogadores.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "menu":
         kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V167</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V168</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Analisando Elencos, Lesões e Motor de Gols...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Analisando Elencos e Lesões... Vai demorar cerca de 1 minuto para carregar tudo com precisão!</b>", parse_mode=ParseMode.HTML)
         sucesso = await daily_soccer_job(context)
         if sucesso: await q.message.reply_text("✅ Feito.")
         else: await q.message.reply_text("❌ <b>Nenhum jogo encontrado agora.</b>", parse_mode=ParseMode.HTML)
@@ -396,7 +397,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V167 RODANDO (PRO TIPSTER)...")
+    print("BOT V168 RODANDO (PRO TIPSTER)...")
     app.run_polling()
 
 if __name__ == "__main__":
