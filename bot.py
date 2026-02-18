@@ -1,10 +1,9 @@
-# ================= BOT V198 (FILTROS DESLIGADOS + REGRA DE PESQUISA) =================
+# ================= BOT V199 (SEM MÁSCARAS E MOTOR ESTÁVEL) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
-import random
 import feedparser
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -26,17 +25,10 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    # Voltando ao modelo oficial e estável
+    model = genai.GenerativeModel("gemini-1.5-flash")
 else:
     model = None
-
-# O SEGREDO PARA A API NÃO FALHAR: Desligar a censura do Google contra termos de apostas
-SAFETY_SETTINGS = [
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"}
-]
 
 # ================= NOTÍCIAS (RSS FEED) =================
 NEWS_FEEDS = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml"]
@@ -57,53 +49,42 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= IA - TIPSTER (SEM CENSURA E COM DADOS REAIS) =================
+# ================= IA - TIPSTER (DIRETO E SEM MÁSCARAS) =================
 async def get_ai_analysis_for_match(home_team, away_team):
     if not model: 
-        return {"jogador": "ERRO_CHAVE", "mercado": "Mais de 8.5 Escanteios"}
+        return {"jogador": "ERRO: SEM CHAVE GEMINI", "mercado": "N/A"}
 
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
-    # A sua instrução literal está de volta, travando o mês atual e proibindo aposentados.
     prompt = f"""
     Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
+    Analise de forma direta o confronto: {home_team} x {away_team}.
+    Não escreva introduções, avisos ou desculpas.
     
-    Analise o confronto: {home_team} x {away_team}.
-    Aja como analista. É expressamente PROIBIDO listar jogadores aposentados, antigos ou lesionados (ex: Giuseppe Rossi).
+    Responda EXATAMENTE E APENAS com duas informações separadas por uma barra vertical (|):
+    1: Nome do artilheiro atual do confronto.
+    2: Escolha o melhor mercado lógico (Escolha apenas UMA: Vitória do {home_team}, Vitória do {away_team}, Mais de 8.5 Escanteios, Mais de 4.5 Cartões, Over 2.5 Gols).
     
-    Responda APENAS com duas informações separadas por uma barra vertical (|).
-    
-    1: Nome do artilheiro titular absoluto no mês atual.
-    2: O melhor mercado lógico para este jogo. Escolha apenas UMA destas opções exatas:
-    - Vitória do {home_team}
-    - Vitória do {away_team}
-    - Mais de 8.5 Escanteios
-    - Mais de 4.5 Cartões
-    - Over 2.5 Gols
-    
-    Exemplo: Bukayo Saka | Mais de 8.5 Escanteios
+    Exemplo de resposta obrigatório: Bukayo Saka | Mais de 8.5 Escanteios
     """
     
-    for tentativa in range(2):
-        try:
-            # Enviando com os filtros de segurança zerados
-            response = await model.generate_content_async(prompt, safety_settings=SAFETY_SETTINGS)
-            if not response.parts:
-                await asyncio.sleep(2)
-                continue
-                
-            linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
-            if "|" in linha:
-                parts = linha.split("|")
-                return {"jogador": parts[0].strip(), "mercado": parts[1].strip()}
-                
-        except Exception as e:
-            logging.error(f"Erro IA: {e}")
-            await asyncio.sleep(3) 
+    try:
+        # Usando thread em vez de client async nativo para evitar timeouts da biblioteca
+        response = await asyncio.to_thread(model.generate_content, prompt)
+        linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
+        
+        logging.info(f"🧠 RESPOSTA IA: {linha}")
+        
+        if "|" in linha:
+            parts = linha.split("|")
+            return {"jogador": parts[0].strip(), "mercado": parts[1].strip()}
+        else:
+            return {"jogador": f"FALHA DE FORMATO IA: {linha[:25]}", "mercado": "Over 2.5 Gols"}
             
-    mercados_reserva = ["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols"]
-    return {"jogador": "FALHA_API", "mercado": random.choice(mercados_reserva)}
+    except Exception as e:
+        # Se explodir, ele manda o erro real para o Telegram, sem esconder
+        return {"jogador": f"ERRO GOOGLE: {str(e)[:25]}", "mercado": "Over 2.5 Gols"}
 
 # ================= ODDS FUTEBOL =================
 async def fetch_games():
@@ -152,10 +133,11 @@ async def fetch_games():
 
 def format_game_analysis(game, ai_data):
     jogador = ai_data.get("jogador", "Indisponível")
-    mercado_ia = ai_data.get("mercado", "Mais de 8.5 Escanteios")
+    mercado_ia = ai_data.get("mercado", "Over 2.5 Gols")
     
-    if "FALHA" in jogador or "ERRO" in jogador or jogador == "Indisponível":
-        prop = "⚠️ <b>Aviso:</b> Artilheiro não confirmado para hoje."
+    # O Fim das Máscaras: Se der erro, ele mostra exatamente o que falhou
+    if "ERRO" in jogador or "FALHA" in jogador:
+        prop = f"⚠️ <b>Erro Exposto:</b> {jogador}"
     else:
         prop = f"🎯 <b>Player Prop:</b> {jogador} p/ marcar"
 
@@ -202,7 +184,7 @@ async def fetch_nba_games():
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V198")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V199")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
@@ -213,7 +195,7 @@ def get_main_menu():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V198 ONLINE (Censura Desligada)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V199 ONLINE (Sem máscaras)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -232,10 +214,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         total_jogos = len(jogos)
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Extraindo dados reais (Filtros OFF)...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Extraindo dados reais da IA...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             dados_ia = await get_ai_analysis_for_match(g['home'], g['away'])
             texto_final += format_game_analysis(g, dados_ia) + "━━━━━━━━━━━━━━━━\n"
-            if i < total_jogos: await asyncio.sleep(6) 
+            if i < total_jogos: await asyncio.sleep(4) 
 
         await status_msg.edit_text("✅ <b>Futebol postado no canal!</b>", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
