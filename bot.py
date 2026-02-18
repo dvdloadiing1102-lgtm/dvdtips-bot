@@ -1,4 +1,4 @@
-# ================= BOT V189 (MOTOR GEMINI-PRO UNIVERSAL) =================
+# ================= BOT V190 (MOTOR GEMINI 2.5 ATUALIZADO) =================
 import os
 import logging
 import asyncio
@@ -24,12 +24,12 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # A SOLUÇÃO: Usar o nome de modelo clássico que nunca dá erro 404
-    model = genai.GenerativeModel("gemini-pro")
+    # A SOLUÇÃO DEFINITIVA: Usando o motor ativo e atualizado
+    model = genai.GenerativeModel("gemini-2.5-flash")
 else:
     model = None
 
-# ================= IA - EXTRATOR (COM EXPOSIÇÃO DE ERROS) =================
+# ================= IA - EXTRATOR =================
 async def get_player_for_single_match(home_team, away_team):
     if not model: 
         return "ERRO: Chave GEMINI_API_KEY faltando no Render!"
@@ -109,14 +109,14 @@ def format_game_analysis(game, player_star):
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V189")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V190")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V189 ONLINE (Motor Universal)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V190 ONLINE (Motor Gemini 2.5)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
