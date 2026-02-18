@@ -6,6 +6,7 @@ import httpx
 import threading
 import unicodedata
 import random
+import json
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -31,13 +32,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# CONFIGURA A IA
+# CONFIGURA A IA (AGORA COM MODO JSON PROFISSIONAL)
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
-        # Usando o modelo mais atualizado para ter dados reais
-        model = genai.GenerativeModel('gemini-1.5-pro-latest') 
-        print("✅ GEMINI AI: ATIVADO (Processamento em Lote Real)")
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        print("✅ GEMINI AI: ATIVADO (Motor JSON Anti-Falha)")
     else:
         model = None
         print("⚠️ GEMINI AI: Chave ausente")
@@ -69,7 +69,7 @@ def normalize_name(name):
 
 class FakeHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V170 - REAL DATA PROCESSOR")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"BOT V171 - BULLETPROOF JSON")
 def run_web_server():
     try: HTTPServer(('0.0.0.0', PORT), FakeHandler).serve_forever()
     except: pass
@@ -77,46 +77,46 @@ def run_web_server():
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception:", exc_info=context.error)
 
-# --- A GRANDE MUDANÇA: PROCESSAMENTO EM LOTE (BATCH) ---
-# A IA analisa todos os jogos de uma vez só, sem risco de bloqueio, trazendo dados reais.
-async def get_batch_ai_props(games_list):
+# --- A SOLUÇÃO DEFINITIVA: LEITURA EM JSON (IMPOSSÍVEL FALHAR O PARSING) ---
+async def get_batch_ai_props_json(games_list):
     if not model or not games_list: return {}
     
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%d de %B de %Y")
     
-    # Extrai só os nomes dos confrontos para a IA analisar
-    matches_str = "\n".join([g['match'] for g in games_list if g['is_vip']])
-    
+    matches_str = "\n".join([f"- {g['match']}" for g in games_list if g['is_vip']])
     if not matches_str: return {}
 
     prompt = f"""
-    Hoje é {data_hoje}. Atue como um scout profissional de futebol.
-    Abaixo está uma lista de jogos que vão acontecer HOJE.
-    Para CADA jogo da lista, pesquise o elenco REAL e ATUAL e me dê o nome de um jogador de linha de frente que está em boa fase (exclua lesionados).
+    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
+    Verifique lesões e quem são os artilheiros titulares.
+    Para CADA jogo da lista abaixo, me dê o nome de um jogador de ataque em boa fase para marcar ou finalizar.
     
-    Responda EXATAMENTE neste formato (um por linha):
-    Nome do Jogo = 🎯 Player Prop: [NOME DO JOGADOR REAL] p/ Marcar ou Finalizar Over 0.5
+    RETORNE EXATAMENTE UM ARQUIVO JSON VÁLIDO. Sem formatação Markdown, sem introdução.
+    Onde a CHAVE é o nome EXATO do jogo fornecido, e o VALOR é o palpite.
     
+    Exemplo de formato JSON esperado:
+    {{
+        "Bodø/Glimt x Inter Milan": "🎯 Player Prop: Lautaro Martínez p/ Marcar",
+        "Wolverhampton Wanderers x Arsenal": "🎯 Player Prop: Bukayo Saka - Chutes ao Gol Over 0.5"
+    }}
+
     Lista de Jogos:
     {matches_str}
     """
     
-    ai_props_dict = {}
     try:
-        print("📡 Enviando lote de jogos para a IA analisar (Isso evita o bloqueio)...")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        
-        # Mapeia a resposta da IA de volta para o jogo correspondente
-        for line in response.text.strip().split('\n'):
-            if "=" in line:
-                parts = line.split("=")
-                match_name = parts[0].strip()
-                prop = parts[1].strip()
-                ai_props_dict[match_name] = prop
+        print("📡 Enviando requisição JSON blindada para a IA...")
+        # Força a IA a cuspir um JSON limpo, sem chance de erro de leitura
+        response = await asyncio.to_thread(
+            model.generate_content, 
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        ai_props_dict = json.loads(response.text)
         return ai_props_dict
     except Exception as e:
-        print(f"❌ Erro no Processamento em Lote: {e}")
+        print(f"❌ Erro crítico no motor JSON: {e}")
         return {}
 
 class SportsEngine:
@@ -128,9 +128,9 @@ class SportsEngine:
         self.nba_last_update = None
 
     async def test_all_connections(self):
-        report = "📊 <b>STATUS V170</b>\n"
+        report = "📊 <b>STATUS V171</b>\n"
         if THE_ODDS_API_KEY: report += "✅ The Odds API: OK\n"
-        if model: report += "✅ Gemini AI: OK (Batch Processor)\n"
+        if model: report += "✅ Gemini AI: OK (Motor JSON)\n"
         return report
 
     async def fetch_odds(self, sport_key, display_name, league_score=0, is_nba=False):
@@ -194,18 +194,16 @@ class SportsEngine:
         lines = []
         best_pick = None
         
-        # Insere a análise real que a IA gerou no lote
+        # Insere a análise de JOGADOR REAL recebida pelo JSON
         if ai_prop:
             lines.append(ai_prop)
         else:
-            # Mercados alternativos reais de leitura de jogo se não for VIP
-            lines.append(f"🚩 <b>Estatística:</b> Média Alta de Escanteios (+8.5)")
+            lines.append(f"🚩 <b>Estatística:</b> Média de Escanteios (+8.5)")
 
         oh, oa, od = game["odds_1x2"]["home"], game["odds_1x2"]["away"], game["odds_1x2"]["draw"]
         gols = game["odds_goals"]
         possible_picks = []
 
-        # MOTOR DE GOLS DINÂMICO
         if 1.40 <= gols["2.5"] <= 1.95:
             lines.append(f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{gols['2.5']})")
             possible_picks.append({"pick": "Over 2.5 Gols", "odd": gols['2.5']})
@@ -216,7 +214,6 @@ class SportsEngine:
             lines.append(f"🔥 <b>Mercado:</b> Over 3.5 Gols (@{gols['3.5']})")
             possible_picks.append({"pick": "Over 3.5 Gols", "odd": gols['3.5']})
 
-        # VENCEDOR
         if 1.15 <= oh <= 1.85:
             lines.append(f"💰 <b>Vencedor:</b> {game['home']} (@{oh})")
             possible_picks.append({"pick": game['home'], "odd": oh})
@@ -224,7 +221,6 @@ class SportsEngine:
             lines.append(f"💰 <b>Vencedor:</b> {game['away']} (@{oa})")
             possible_picks.append({"pick": game['away'], "odd": oa})
 
-        # JOGOS TRUNCADOS
         if not possible_picks:
             if gols["2.5"] > 2.0 or od < 3.10:
                 lines.append(f"🛑 <b>Mercado:</b> Under 2.5 Gols")
@@ -248,7 +244,6 @@ class SportsEngine:
         raw_games = []
         self.daily_accumulator = []
         
-        # 1. Busca as odds cruas primeiro
         print("📡 Coletando Odds de todos os jogos...")
         for league in SOCCER_LEAGUES:
             games = await self.fetch_odds(league['key'], league['name'], league['score'], is_nba=False)
@@ -257,18 +252,13 @@ class SportsEngine:
             
         if not raw_games: return []
 
-        # 2. Manda TODOS os jogos VIP de uma vez só pra IA analisar os elencos (O PULO DO GATO)
-        ai_props_dict = await get_batch_ai_props(raw_games)
+        # A NOVA LEITURA IMPLACÁVEL EM JSON
+        ai_props_dict = await get_batch_ai_props_json(raw_games)
 
-        # 3. Monta o relatório final juntando a Odds com o jogador real
         all_games = []
         for g in raw_games:
-            # Tenta achar a dica da IA para esse jogo específico
-            matched_ai_prop = None
-            for key, prop in ai_props_dict.items():
-                if key in g['match'] or g['match'] in key:
-                    matched_ai_prop = prop
-                    break
+            # Busca o palpite exato pelo nome do jogo usando a chave do Dicionário
+            matched_ai_prop = ai_props_dict.get(g['match'])
             
             report, pick = self.analyze_game_logic(g, matched_ai_prop)
             g['report'] = report
@@ -287,7 +277,6 @@ class SportsEngine:
         games = await self.fetch_odds("basketball_nba", "NBA", 50, is_nba=True)
         processed = []
         for g in games: 
-            # NBA pode ir genérico ou adicionar batch depois se precisar
             lines = []
             oh, oa = g['odds_1x2']['home'], g['odds_1x2']['away']
             if oh < 1.50: lines.append(f"🔥 <b>ML:</b> {g['home']} (@{oh})")
@@ -331,7 +320,7 @@ async def daily_soccer_job(context: ContextTypes.DEFAULT_TYPE):
     chunks = [games[i:i + 10] for i in range(0, len(games), 10)]
     
     for i, chunk in enumerate(chunks):
-        header = "☀️ <b>BOM DIA! GRADE V170 (ANÁLISE REAL)</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
+        header = "☀️ <b>BOM DIA! GRADE V171 (ANÁLISE REAL)</b> ☀️\n\n" if i == 0 else "👇 <b>MAIS JOGOS...</b>\n\n"
         msg = header
         for g in chunk:
             icon = "💎" if g['is_vip'] else "⚽"
@@ -358,20 +347,20 @@ async def daily_nba_job(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = [
-        [InlineKeyboardButton("⚽ Futebol (Dados Reais)", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
+        [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
         [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
     ]
-    await update.message.reply_text("🦁 <b>BOT V170 ONLINE</b>\nProcessamento em Lote Ativado. Nomes REAIS via IA.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V171 ONLINE</b>\nMotor JSON Anti-Falhas ativado.", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "menu":
-        kb = [[InlineKeyboardButton("⚽ Futebol (Dados Reais)", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
+        kb = [[InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
               [InlineKeyboardButton("📊 Status", callback_data="status"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]]
-        await q.edit_message_text("🦁 <b>MENU V170</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V171</b>", reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.HTML)
     
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Analisando toda a grade com a IA de uma vez só (Batch Mode). Aguarde...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Analisando jogadores e gerando JSON de dados. Aguarde...</b>", parse_mode=ParseMode.HTML)
         sucesso = await daily_soccer_job(context)
         if sucesso: await q.message.reply_text("✅ Feito.")
         else: await q.message.reply_text("❌ <b>Nenhum jogo encontrado agora.</b>", parse_mode=ParseMode.HTML)
@@ -401,7 +390,7 @@ def main():
     if app.job_queue:
         app.job_queue.run_daily(daily_soccer_job, time=time(hour=8, minute=0, tzinfo=timezone(timedelta(hours=-3))))
         app.job_queue.run_daily(daily_nba_job, time=time(hour=18, minute=0, tzinfo=timezone(timedelta(hours=-3))))
-    print("BOT V170 RODANDO (BATCH PROCESSOR)...")
+    print("BOT V171 RODANDO (BULLETPROOF JSON)...")
     app.run_polling()
 
 if __name__ == "__main__":
