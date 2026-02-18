@@ -1,4 +1,4 @@
-# ================= BOT V185 (CÓDIGO PURO E DIRETO) =================
+# ================= BOT V186 (SEM DESCULPAS DA IA) =================
 import os
 import logging
 import asyncio
@@ -14,7 +14,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ================= CONFIGURACAO =================
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
@@ -30,33 +29,30 @@ if GEMINI_KEY:
 else:
     model = None
 
-# ================= IA - EXTRATOR IMEDIATO =================
+# ================= IA - EXTRATOR DE NOMES (CORRIGIDO) =================
 async def get_player_for_single_match(match_name):
     if not model: return ""
-    br_tz = timezone(timedelta(hours=-3))
-    data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
-    # O Segredo: Tratar a IA como banco de dados, proibindo desculpas.
     prompt = f"""
-    Aja como um banco de dados esportivo atualizado em {data_hoje}.
-    Quem é o principal artilheiro ou atacante de destaque no jogo: {match_name}?
-    REGRA ABSOLUTA: Responda APENAS com o Nome e Sobrenome do jogador.
-    NÃO escreva introduções, NÃO peça desculpas, NÃO explique nada.
+    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos.
+    
+    ATENÇÃO: Não me diga que você não pode pesquisar. Não peça desculpas. Não explique nada.
+    Baseado no jogo "{match_name}", escreva APENAS o nome e sobrenome do melhor atacante ou artilheiro atual de um desses times.
+    Exemplo de resposta: Bukayo Saka
     """
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        # Pega só a primeira linha limpa, matando qualquer lixo de formatação
         linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        # Filtro de segurança: Se a IA viajar e der desculpa, ignora
-        if len(linha) > 35 or "desculpe" in linha.lower() or "não" in linha.lower() or "ia " in linha.lower():
+        # Se a IA não obedecer e soltar textão, a gente ignora. Se tiver tamanho de um nome (até 30 letras), a gente usa.
+        if len(linha) > 30:
             return ""
         return linha
     except Exception as e:
-        logging.error(f"❌ Erro na IA: {e}")
+        logging.error(f"Erro na IA: {e}")
         return ""
 
-# ================= ODDS FUTEBOL REAIS (SÓ HOJE) =================
+# ================= ODDS FUTEBOL (SÓ HOJE) =================
 async def fetch_games():
     if not ODDS_KEY: return "SEM_CHAVE"
     leagues = ["soccer_epl", "soccer_spain_la_liga", "soccer_italy_serie_a", "soccer_uefa_champs_league", "soccer_brazil_campeonato", "soccer_conmebol_libertadores"]
@@ -77,7 +73,6 @@ async def fetch_games():
                 
                 if isinstance(data, list):
                     for g in data:
-                        # TRAVA ABSOLUTA: SÓ HOJE
                         game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
                         if game_time.date() != hoje: continue 
                             
@@ -95,14 +90,13 @@ async def fetch_games():
                             "odd_over_25": odds_over_25, "odd_over_15": odds_over_15, "time": game_time.strftime("%H:%M")
                         })
             except Exception as e:
-                logging.error(f"Erro na API Odds: {e}")
+                logging.error(f"Erro Odds: {e}")
     return jogos
 
 def format_game_analysis(game, player_star):
     if player_star:
         prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar ou marcar"
     else:
-        # Fallback limpo, sem o vício do "+8.5 Escanteios" repetido
         prop = "📊 <b>Análise:</b> Foco em cantos asiáticos ou cartões"
 
     if game["odd_over_25"] > 0 and 1.40 <= game["odd_over_25"] <= 1.95:
@@ -114,17 +108,17 @@ def format_game_analysis(game, player_star):
 
     return f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n{gols_text}\n"
 
-# ================= SERVER E TELEGRAM =================
+# ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V185")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V186")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V185 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V186 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -149,7 +143,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             craque = await get_player_for_single_match(g['match'])
             texto_final += format_game_analysis(g, craque) + "━━━━━━━━━━━━━━━━\n"
             
-            if i < total_jogos: await asyncio.sleep(5) # Respira pra não bloquear a IA
+            if i < total_jogos: await asyncio.sleep(5)
 
         await status_msg.edit_text("✅ <b>Análise Concluída!</b> Postando...", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
