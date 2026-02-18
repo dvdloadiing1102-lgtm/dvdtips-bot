@@ -1,11 +1,9 @@
-# ================= BOT V184 (EXTRATOR AGRESSIVO DE NOMES) =================
+# ================= BOT V185 (CÓDIGO PURO E DIRETO) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
-import unicodedata
-import random
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -32,39 +30,30 @@ if GEMINI_KEY:
 else:
     model = None
 
-# ================= IA - DEEP SCAN + EXTRATOR AGRESSIVO =================
+# ================= IA - EXTRATOR IMEDIATO =================
 async def get_player_for_single_match(match_name):
     if not model: return ""
-
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
-    # Mantemos sua instrução, mas forçamos a IA a não dar desculpas textuais
+    # O Segredo: Tratar a IA como banco de dados, proibindo desculpas.
     prompt = f"""
-    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
-    O jogo de hoje é: {match_name}.
-    
-    REGRA ABSOLUTA: Mesmo que não possa acessar a internet, me dê o nome do principal atacante ou artilheiro em boa fase com base no seu conhecimento mais recente.
-    NÃO escreva introduções. NÃO peça desculpas. Escreva APENAS o Nome e Sobrenome.
-    Exemplo: Bukayo Saka
+    Aja como um banco de dados esportivo atualizado em {data_hoje}.
+    Quem é o principal artilheiro ou atacante de destaque no jogo: {match_name}?
+    REGRA ABSOLUTA: Responda APENAS com o Nome e Sobrenome do jogador.
+    NÃO escreva introduções, NÃO peça desculpas, NÃO explique nada.
     """
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        texto = response.text.strip().replace('*', '').replace('`', '').replace('"', '')
+        # Pega só a primeira linha limpa, matando qualquer lixo de formatação
+        linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        # O FILTRO IMPLACÁVEL: Procura linha por linha o nome do jogador ignorando as "desculpas" da IA
-        for linha in texto.split('\n'):
-            linha = linha.strip()
-            # Um nome de jogador tem entre 3 e 30 letras e não é uma frase da IA
-            if 3 <= len(linha) <= 30 and "desculpe" not in linha.lower() and "google" not in linha.lower() and "ia" not in linha.lower():
-                # Remove o nome do time se a IA colocar entre parênteses
-                if "(" in linha:
-                    linha = linha.split("(")[0].strip()
-                return linha
-                
-        return "" # Se não achou nenhum nome válido
+        # Filtro de segurança: Se a IA viajar e der desculpa, ignora
+        if len(linha) > 35 or "desculpe" in linha.lower() or "não" in linha.lower() or "ia " in linha.lower():
+            return ""
+        return linha
     except Exception as e:
-        logging.error(f"❌ Erro na IA para {match_name}: {e}")
+        logging.error(f"❌ Erro na IA: {e}")
         return ""
 
 # ================= ODDS FUTEBOL REAIS (SÓ HOJE) =================
@@ -88,13 +77,11 @@ async def fetch_games():
                 
                 if isinstance(data, list):
                     for g in data:
-                        # TRAVA ABSOLUTA: EXATAMENTE HOJE
+                        # TRAVA ABSOLUTA: SÓ HOJE
                         game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
-                        if game_time.date() != hoje:
-                            continue 
+                        if game_time.date() != hoje: continue 
                             
-                        odds_over_25 = 0
-                        odds_over_15 = 0
+                        odds_over_25 = 0; odds_over_15 = 0
                         
                         for book in g.get('bookmakers', []):
                             for m in book.get('markets', []):
@@ -107,17 +94,16 @@ async def fetch_games():
                             "match": f"{g['home_team']} x {g['away_team']}",
                             "odd_over_25": odds_over_25, "odd_over_15": odds_over_15, "time": game_time.strftime("%H:%M")
                         })
-                        
             except Exception as e:
                 logging.error(f"Erro na API Odds: {e}")
     return jogos
 
 def format_game_analysis(game, player_star):
     if player_star:
-        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar no alvo ou marcar"
+        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar ou marcar"
     else:
-        # Se falhar 100%, manda a estatística original para não quebrar a grade
-        prop = "📊 <b>Estatística:</b> Média Alta de Escanteios (+8.5)"
+        # Fallback limpo, sem o vício do "+8.5 Escanteios" repetido
+        prop = "📊 <b>Análise:</b> Foco em cantos asiáticos ou cartões"
 
     if game["odd_over_25"] > 0 and 1.40 <= game["odd_over_25"] <= 1.95:
         gols_text = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
@@ -128,47 +114,20 @@ def format_game_analysis(game, player_star):
 
     return f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n{gols_text}\n"
 
-# ================= ODDS NBA (SÓ HOJE) =================
-async def fetch_nba_games():
-    if not ODDS_KEY: return "SEM_CHAVE"
-    url = f"https://api.the-odds-api.com/v4/sports/basketball_nba/odds/?regions=us&markets=h2h&apiKey={ODDS_KEY}"
-    jogos = []
-    br_tz = timezone(timedelta(hours=-3))
-    hoje = datetime.now(br_tz).date()
-    async with httpx.AsyncClient(timeout=15) as client:
-        try:
-            r = await client.get(url)
-            data = r.json()
-            if isinstance(data, dict) and data.get("message"):
-                if "quota" in data["message"].lower(): return "COTA_EXCEDIDA"
-            if isinstance(data, list):
-                for g in data:
-                    game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
-                    if game_time.date() != hoje: continue
-                    jogos.append({"match": f"{g['home_team']} x {g['away_team']}"})
-        except Exception as e:
-            logging.error(f"Erro NBA: {e}")
-    return jogos
-
-# ================= SERVER =================
+# ================= SERVER E TELEGRAM =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V184")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V185")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
-# ================= TELEGRAM E MENU =================
 def get_main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ Futebol (Análise Profunda)", callback_data="fut_deep")],
-        [InlineKeyboardButton("🏀 NBA (Só Hoje)", callback_data="nba")]
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V184 ONLINE (Extrator Agressivo)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V185 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    q = update.callback_query; await q.answer()
 
     if q.data == "fut_deep":
         status_msg = await q.message.reply_text("🔎 <b>Coletando grade do dia...</b>", parse_mode=ParseMode.HTML)
@@ -178,38 +137,21 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API sem limite.")
             return
         if not jogos:
-            await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE nas ligas configuradas.")
+            await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE.")
             return
 
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         
         total_jogos = len(jogos)
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Análise Profunda em andamento...</b>\n\nPesquisando jogador atualizado para o jogo {i} de {total_jogos}:\n👉 <i>{g['match']}</i>\n\n(Pausa de segurança ativada para não bloquear a API)", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Extraindo dados...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
             craque = await get_player_for_single_match(g['match'])
-            msg = format_game_analysis(g, craque)
-            texto_final += msg + "━━━━━━━━━━━━━━━━\n"
+            texto_final += format_game_analysis(g, craque) + "━━━━━━━━━━━━━━━━\n"
             
-            if i < total_jogos:
-                await asyncio.sleep(8) # Baixei de 10 pra 8 segundos pra ser mais rápido, ainda dentro do limite.
+            if i < total_jogos: await asyncio.sleep(5) # Respira pra não bloquear a IA
 
-        await status_msg.edit_text("✅ <b>Análise Profunda Concluída!</b> Postando no canal...", parse_mode=ParseMode.HTML)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
-
-    elif q.data == "nba":
-        await q.message.reply_text("🏀 <b>Buscando NBA (Só Hoje)...</b>", parse_mode=ParseMode.HTML)
-        jogos = await fetch_nba_games()
-        if jogos == "COTA_EXCEDIDA":
-            await q.message.reply_text("❌ <b>ERRO FATAL:</b> Limite da API acabou.")
-            return
-        if not jogos:
-            await q.message.reply_text("❌ Nenhum jogo da NBA programado para HOJE.")
-            return
-            
-        texto_final = "🏀 <b>NBA - JOGOS (SÓ HOJE)</b> 🏀\n\n"
-        for g in jogos:
-            texto_final += f"⚔️ <b>{g['match']}</b>\n🔥 ML Parelho (Foco em Props)\n━━━━━━━━━━━━━━━━\n"
+        await status_msg.edit_text("✅ <b>Análise Concluída!</b> Postando...", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
 
 def main():
