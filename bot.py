@@ -1,9 +1,10 @@
-# ================= BOT V200 (MOTOR 2.5 RESTAURADO + SEM DESCULPAS) =================
+# ================= BOT V202 (ANTI-VÍCIO E EMBARALHADOR DE MERCADOS) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
+import random
 import feedparser
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -25,7 +26,6 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # O CONSERTO DA MINHA BURRICE: Motor 2.5 de volta (O 1.5 estava dando 404)
     model = genai.GenerativeModel("gemini-2.5-flash")
 else:
     model = None
@@ -49,13 +49,18 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= IA - TIPSTER (DIRETO E MOTOR NOVO) =================
+# ================= IA - TIPSTER (COM EMBARALHADOR ANTI-VÍCIO) =================
 async def get_ai_analysis_for_match(home_team, away_team):
     if not model: 
         return {"jogador": "ERRO: SEM CHAVE GEMINI", "mercado": "N/A"}
 
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
+
+    # Embaralha as opções para a IA não viciar em dar sempre a mesma resposta
+    opcoes_mercado = [f"Vitória do {home_team}", f"Vitória do {away_team}", "Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols", "Ambas Marcam Sim"]
+    random.shuffle(opcoes_mercado)
+    lista_opcoes = ", ".join(opcoes_mercado)
 
     prompt = f"""
     Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
@@ -65,9 +70,10 @@ async def get_ai_analysis_for_match(home_team, away_team):
     
     Responda EXATAMENTE E APENAS com duas informações separadas por uma barra vertical (|):
     1: Nome do artilheiro atual do confronto.
-    2: Escolha o melhor mercado lógico (Escolha apenas UMA: Vitória do {home_team}, Vitória do {away_team}, Mais de 8.5 Escanteios, Mais de 4.5 Cartões, Over 2.5 Gols).
+    2: Escolha o melhor mercado lógico para o estilo das equipes. (Vá além dos gols, foque em cantos e cartões se for o caso). 
+    Escolha APENAS UMA destas opções: {lista_opcoes}.
     
-    Exemplo de resposta obrigatório: Bukayo Saka | Mais de 8.5 Escanteios
+    Exemplo de resposta obrigatório: Bukayo Saka | Mais de 4.5 Cartões
     """
     
     try:
@@ -80,10 +86,15 @@ async def get_ai_analysis_for_match(home_team, away_team):
             parts = linha.split("|")
             return {"jogador": parts[0].strip(), "mercado": parts[1].strip()}
         else:
-            return {"jogador": f"FALHA DE FORMATO: {linha[:20]}", "mercado": "Over 2.5 Gols"}
+            # Rota de fuga inteligente, sem o vício do 2.5 gols
+            return {"jogador": f"FALHA DE FORMATO IA", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
             
     except Exception as e:
-        return {"jogador": f"ERRO GOOGLE: {str(e)[:25]}", "mercado": "Over 2.5 Gols"}
+        erro_str = str(e)
+        if "429" in erro_str or "quota" in erro_str.lower():
+            return {"jogador": "COTA_EXCEDIDA", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
+            
+        return {"jogador": f"ERRO GOOGLE: {erro_str[:25]}", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
 
 # ================= ODDS FUTEBOL =================
 async def fetch_games():
@@ -132,9 +143,11 @@ async def fetch_games():
 
 def format_game_analysis(game, ai_data):
     jogador = ai_data.get("jogador", "Indisponível")
-    mercado_ia = ai_data.get("mercado", "Over 2.5 Gols")
+    mercado_ia = ai_data.get("mercado", "Mais de 8.5 Escanteios")
     
-    if "ERRO" in jogador or "FALHA" in jogador:
+    if "COTA_EXCEDIDA" in jogador:
+        prop = f"⚠️ <b>Aviso:</b> Limite gratuito da IA atingido hoje."
+    elif "ERRO" in jogador or "FALHA" in jogador:
         prop = f"⚠️ <b>Erro Exposto:</b> {jogador}"
     else:
         prop = f"🎯 <b>Player Prop:</b> {jogador} p/ marcar"
@@ -147,6 +160,8 @@ def format_game_analysis(game, ai_data):
         mercado_final = f"💰 <b>Vencedor:</b> {game['away']} (@{game['odd_away']})"
     elif "Over 2.5" in mercado_ia and game['odd_over_25'] > 0:
         mercado_final = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
+    elif "Ambas" in mercado_ia:
+        mercado_final = f"⚔️ <b>Mercado:</b> Ambas Marcam Sim"
     elif "Escanteios" in mercado_ia:
         mercado_final = f"🚩 <b>Estatística:</b> Média Alta de Escanteios (+8.5)"
     elif "Cartões" in mercado_ia:
@@ -182,7 +197,7 @@ async def fetch_nba_games():
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V200")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V202")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
@@ -193,7 +208,7 @@ def get_main_menu():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V200 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V202 ONLINE (Anti-Vício Ativado)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -203,7 +218,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         jogos = await fetch_games()
         
         if jogos == "COTA_EXCEDIDA":
-            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API esgotada.")
+            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API das Odds esgotada.")
             return
         if not jogos:
             await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE.")
@@ -212,10 +227,11 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         total_jogos = len(jogos)
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Extraindo dados da IA V2.5...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Extraindo dados da IA (Nova Chave)...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             dados_ia = await get_ai_analysis_for_match(g['home'], g['away'])
             texto_final += format_game_analysis(g, dados_ia) + "━━━━━━━━━━━━━━━━\n"
-            if i < total_jogos: await asyncio.sleep(4) 
+            
+            if i < total_jogos: await asyncio.sleep(6) 
 
         await status_msg.edit_text("✅ <b>Futebol postado no canal!</b>", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
