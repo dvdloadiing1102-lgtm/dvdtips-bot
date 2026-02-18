@@ -1,4 +1,4 @@
-# ================= BOT V202 (ANTI-VÍCIO E EMBARALHADOR DE MERCADOS) =================
+# ================= BOT V203 (ARQUITETURA EM LOTE - FIM DO ERRO 429) =================
 import os
 import logging
 import asyncio
@@ -49,52 +49,56 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= IA - TIPSTER (COM EMBARALHADOR ANTI-VÍCIO) =================
-async def get_ai_analysis_for_match(home_team, away_team):
-    if not model: 
-        return {"jogador": "ERRO: SEM CHAVE GEMINI", "mercado": "N/A"}
+# ================= IA - TIPSTER EM LOTE (1 REQUISIÇÃO = SEM BLOQUEIOS) =================
+async def get_bulk_ai_analysis(jogos):
+    if not model or not jogos: 
+        return [{"jogador": "ERRO_CHAVE", "mercado": "Mais de 8.5 Escanteios"} for _ in jogos]
 
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
-    # Embaralha as opções para a IA não viciar em dar sempre a mesma resposta
-    opcoes_mercado = [f"Vitória do {home_team}", f"Vitória do {away_team}", "Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols", "Ambas Marcam Sim"]
-    random.shuffle(opcoes_mercado)
-    lista_opcoes = ", ".join(opcoes_mercado)
+    # Prepara a lista de jogos num texto só
+    jogos_texto = "\n".join([f"{i+1}. {g['home']} x {g['away']}" for i, g in enumerate(jogos)])
 
     prompt = f"""
-    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
+    Você é um tipster VIP. Estamos em {data_hoje}.
+    Analise a seguinte lista de {len(jogos)} jogos de futebol de hoje:
     
-    Analise de forma direta o confronto: {home_team} x {away_team}.
-    NÃO escreva introduções, NÃO diga que não pode pesquisar e NÃO dê desculpas de que é uma IA.
+    {jogos_texto}
     
-    Responda EXATAMENTE E APENAS com duas informações separadas por uma barra vertical (|):
-    1: Nome do artilheiro atual do confronto.
-    2: Escolha o melhor mercado lógico para o estilo das equipes. (Vá além dos gols, foque em cantos e cartões se for o caso). 
-    Escolha APENAS UMA destas opções: {lista_opcoes}.
+    Responda COM EXATAMENTE {len(jogos)} LINHAS. Uma para cada jogo, mantendo a mesma ordem da lista.
+    NÃO escreva introduções. NÃO pule linhas.
     
-    Exemplo de resposta obrigatório: Bukayo Saka | Mais de 4.5 Cartões
+    Formato OBRIGATÓRIO para cada linha: Nome do Jogador | Mercado Lógico
+    
+    Regras:
+    1. Jogador: Artilheiro atual (NÃO liste aposentados).
+    2. Mercado Lógico: Escolha APENAS UMA entre (Vitória do Mandante, Vitória do Visitante, Mais de 8.5 Escanteios, Mais de 4.5 Cartões, Over 2.5 Gols, Ambas Marcam Sim). Varie as opções entre os jogos.
+    
+    Exemplo:
+    Bukayo Saka | Mais de 8.5 Escanteios
+    Rafael Leão | Over 2.5 Gols
     """
     
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
+        linhas = response.text.strip().replace('*', '').replace('`', '').split('\n')
         
-        logging.info(f"🧠 RESPOSTA IA: {linha}")
+        resultados = []
+        for linha in linhas:
+            if "|" in linha:
+                parts = linha.split("|")
+                resultados.append({"jogador": parts[0].strip(), "mercado": parts[1].strip()})
         
-        if "|" in linha:
-            parts = linha.split("|")
-            return {"jogador": parts[0].strip(), "mercado": parts[1].strip()}
-        else:
-            # Rota de fuga inteligente, sem o vício do 2.5 gols
-            return {"jogador": f"FALHA DE FORMATO IA", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
+        # Se a IA engolir alguma linha, preenchemos o que faltou para não quebrar o código
+        while len(resultados) < len(jogos):
+            resultados.append({"jogador": "FALHA_FORMATO", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])})
             
+        return resultados
     except Exception as e:
-        erro_str = str(e)
-        if "429" in erro_str or "quota" in erro_str.lower():
-            return {"jogador": "COTA_EXCEDIDA", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
-            
-        return {"jogador": f"ERRO GOOGLE: {erro_str[:25]}", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])}
+        logging.error(f"Erro no Bulk IA: {e}")
+        # Retorno de segurança se a requisição falhar de vez
+        return [{"jogador": "FALHA_CONEXÃO", "mercado": random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões"])} for _ in jogos]
 
 # ================= ODDS FUTEBOL =================
 async def fetch_games():
@@ -145,10 +149,8 @@ def format_game_analysis(game, ai_data):
     jogador = ai_data.get("jogador", "Indisponível")
     mercado_ia = ai_data.get("mercado", "Mais de 8.5 Escanteios")
     
-    if "COTA_EXCEDIDA" in jogador:
-        prop = f"⚠️ <b>Aviso:</b> Limite gratuito da IA atingido hoje."
-    elif "ERRO" in jogador or "FALHA" in jogador:
-        prop = f"⚠️ <b>Erro Exposto:</b> {jogador}"
+    if "COTA" in jogador or "FALHA" in jogador or "ERRO" in jogador:
+        prop = f"⚠️ <b>Aviso:</b> Falha na conexão da IA."
     else:
         prop = f"🎯 <b>Player Prop:</b> {jogador} p/ marcar"
 
@@ -197,18 +199,18 @@ async def fetch_nba_games():
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V202")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V203")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ Futebol (Análise VIP)", callback_data="fut_deep")],
+        [InlineKeyboardButton("⚽ Futebol (Análise em Lote)", callback_data="fut_deep")],
         [InlineKeyboardButton("🏀 NBA (Só Hoje)", callback_data="nba")],
         [InlineKeyboardButton("📰 Notícias", callback_data="news")]
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V202 ONLINE (Anti-Vício Ativado)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V203 ONLINE (Sistema Anti-Bloqueio)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -224,14 +226,15 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE.")
             return
 
+        await status_msg.edit_text("⏳ <b>A processar todos os jogos numa única requisição...</b>", parse_mode=ParseMode.HTML)
+        
+        # A MÁGICA ACONTECE AQUI: Uma única chamada para a IA com a lista inteira
+        dados_ia_lista = await get_bulk_ai_analysis(jogos)
+        
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
-        total_jogos = len(jogos)
-        for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Extraindo dados da IA (Nova Chave)...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
-            dados_ia = await get_ai_analysis_for_match(g['home'], g['away'])
-            texto_final += format_game_analysis(g, dados_ia) + "━━━━━━━━━━━━━━━━\n"
-            
-            if i < total_jogos: await asyncio.sleep(6) 
+        for i, g in enumerate(jogos):
+            dados = dados_ia_lista[i] if i < len(dados_ia_lista) else {"jogador": "FALHA", "mercado": "Mais de 8.5 Escanteios"}
+            texto_final += format_game_analysis(g, dados) + "━━━━━━━━━━━━━━━━\n"
 
         await status_msg.edit_text("✅ <b>Futebol postado no canal!</b>", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
