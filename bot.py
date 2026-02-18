@@ -1,4 +1,4 @@
-# ================= BOT V186 (SEM DESCULPAS DA IA) =================
+# ================= BOT V187 (PROMPT NU E CRU) =================
 import os
 import logging
 import asyncio
@@ -29,27 +29,31 @@ if GEMINI_KEY:
 else:
     model = None
 
-# ================= IA - EXTRATOR DE NOMES (CORRIGIDO) =================
+# ================= IA - EXTRATOR (SEM GATILHOS DE BLOQUEIO) =================
 async def get_player_for_single_match(match_name):
     if not model: return ""
 
+    # FIM DA PALAVRA "GOOGLE". FIM DO GATILHO DE ERRO.
     prompt = f"""
-    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos.
-    
-    ATENÇÃO: Não me diga que você não pode pesquisar. Não peça desculpas. Não explique nada.
-    Baseado no jogo "{match_name}", escreva APENAS o nome e sobrenome do melhor atacante ou artilheiro atual de um desses times.
-    Exemplo de resposta: Bukayo Saka
+    Qual é o nome do principal artilheiro ou atacante de destaque do jogo {match_name} atualmente?
+    Responda EXCLUSIVAMENTE com o nome e sobrenome do jogador. Nenhuma outra palavra.
+    Exemplo: Bukayo Saka
     """
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
         linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        # Se a IA não obedecer e soltar textão, a gente ignora. Se tiver tamanho de um nome (até 30 letras), a gente usa.
-        if len(linha) > 30:
+        # Isso vai imprimir no Log do Render o que diabos a IA está respondendo
+        logging.info(f"🧠 RESPOSTA DA IA PARA {match_name}: {linha}")
+        
+        # Filtro de segurança contra textões
+        if len(linha) > 35 or "modelo" in linha.lower() or "desculp" in linha.lower() or "não tenho" in linha.lower():
+            logging.error(f"❌ Resposta inválida da IA: {linha}")
             return ""
+            
         return linha
     except Exception as e:
-        logging.error(f"Erro na IA: {e}")
+        logging.error(f"❌ Erro na API do Gemini: {e}")
         return ""
 
 # ================= ODDS FUTEBOL (SÓ HOJE) =================
@@ -111,14 +115,14 @@ def format_game_analysis(game, player_star):
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V186")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V187")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V186 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V187 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
