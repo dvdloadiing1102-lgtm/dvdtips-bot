@@ -1,4 +1,4 @@
-# ================= BOT V188 (PAINEL DE VIDRO - SEM ESCONDER ERROS) =================
+# ================= BOT V189 (MOTOR GEMINI-PRO UNIVERSAL) =================
 import os
 import logging
 import asyncio
@@ -24,7 +24,8 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    # A SOLUÇÃO: Usar o nome de modelo clássico que nunca dá erro 404
+    model = genai.GenerativeModel("gemini-pro")
 else:
     model = None
 
@@ -33,18 +34,15 @@ async def get_player_for_single_match(home_team, away_team):
     if not model: 
         return "ERRO: Chave GEMINI_API_KEY faltando no Render!"
 
-    # Comando seco e direto, sem a palavra "atualmente" para não acionar a trava da IA
     prompt = f"""
     Identifique apenas um atacante ou artilheiro famoso que joga no {home_team} ou no {away_team} na temporada atual.
     Responda EXCLUSIVAMENTE com o nome e sobrenome do jogador. 
     NÃO escreva introduções, NÃO escreva ponto final, NÃO peça desculpas. Apenas o nome.
     """
     try:
-        # Usando a função assíncrona nativa para não dar timeout
         response = await model.generate_content_async(prompt)
         linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        # Se a IA soltar textão de desculpa, o bot te mostra exatamente o que ela falou
         if len(linha) > 35 or "modelo" in linha.lower() or "desculp" in linha.lower() or "não tenho" in linha.lower():
             return f"ERRO IA: {linha[:40]}..."
             
@@ -94,7 +92,6 @@ async def fetch_games():
     return jogos
 
 def format_game_analysis(game, player_star):
-    # O PAINEL DE VIDRO: Mostra o erro real se a IA falhar
     if player_star.startswith("ERRO"):
         prop = f"⚠️ <b>Falha na Pesquisa:</b> {player_star}"
     else:
@@ -112,14 +109,14 @@ def format_game_analysis(game, player_star):
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V188")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V189")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V188 ONLINE (Painel de Vidro Ativado)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V189 ONLINE (Motor Universal)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -141,11 +138,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, g in enumerate(jogos, 1):
             await status_msg.edit_text(f"⏳ <b>Extraindo artilheiro...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            # Passa os nomes separados para a IA entender melhor
             craque = await get_player_for_single_match(g['home'], g['away'])
             texto_final += format_game_analysis(g, craque) + "━━━━━━━━━━━━━━━━\n"
             
-            if i < total_jogos: await asyncio.sleep(4) # Pausa de 4s para evitar bloqueio do Google
+            if i < total_jogos: await asyncio.sleep(4) 
 
         await status_msg.edit_text("✅ <b>Análise Concluída!</b> Postando...", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
