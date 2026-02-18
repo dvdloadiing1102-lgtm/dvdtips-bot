@@ -1,13 +1,12 @@
-# ================= BOT V187 (PROMPT NU E CRU) =================
+# ================= BOT V188 (PAINEL DE VIDRO - SEM ESCONDER ERROS) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
-from datetime import datetime, timezone, timedelta, time
+from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
-import feedparser
 import google.generativeai as genai
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -29,32 +28,29 @@ if GEMINI_KEY:
 else:
     model = None
 
-# ================= IA - EXTRATOR (SEM GATILHOS DE BLOQUEIO) =================
-async def get_player_for_single_match(match_name):
-    if not model: return ""
+# ================= IA - EXTRATOR (COM EXPOSIÇÃO DE ERROS) =================
+async def get_player_for_single_match(home_team, away_team):
+    if not model: 
+        return "ERRO: Chave GEMINI_API_KEY faltando no Render!"
 
-    # FIM DA PALAVRA "GOOGLE". FIM DO GATILHO DE ERRO.
+    # Comando seco e direto, sem a palavra "atualmente" para não acionar a trava da IA
     prompt = f"""
-    Qual é o nome do principal artilheiro ou atacante de destaque do jogo {match_name} atualmente?
-    Responda EXCLUSIVAMENTE com o nome e sobrenome do jogador. Nenhuma outra palavra.
-    Exemplo: Bukayo Saka
+    Identifique apenas um atacante ou artilheiro famoso que joga no {home_team} ou no {away_team} na temporada atual.
+    Responda EXCLUSIVAMENTE com o nome e sobrenome do jogador. 
+    NÃO escreva introduções, NÃO escreva ponto final, NÃO peça desculpas. Apenas o nome.
     """
     try:
-        response = await asyncio.to_thread(model.generate_content, prompt)
+        # Usando a função assíncrona nativa para não dar timeout
+        response = await model.generate_content_async(prompt)
         linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        # Isso vai imprimir no Log do Render o que diabos a IA está respondendo
-        logging.info(f"🧠 RESPOSTA DA IA PARA {match_name}: {linha}")
-        
-        # Filtro de segurança contra textões
+        # Se a IA soltar textão de desculpa, o bot te mostra exatamente o que ela falou
         if len(linha) > 35 or "modelo" in linha.lower() or "desculp" in linha.lower() or "não tenho" in linha.lower():
-            logging.error(f"❌ Resposta inválida da IA: {linha}")
-            return ""
+            return f"ERRO IA: {linha[:40]}..."
             
         return linha
     except Exception as e:
-        logging.error(f"❌ Erro na API do Gemini: {e}")
-        return ""
+        return f"ERRO API DO GOOGLE: {str(e)[:30]}"
 
 # ================= ODDS FUTEBOL (SÓ HOJE) =================
 async def fetch_games():
@@ -90,7 +86,7 @@ async def fetch_games():
                                         if o['name'] == 'Over' and o.get('point') == 1.5: odds_over_15 = max(odds_over_15, o['price'])
 
                         jogos.append({
-                            "match": f"{g['home_team']} x {g['away_team']}",
+                            "home": g['home_team'], "away": g['away_team'], "match": f"{g['home_team']} x {g['away_team']}",
                             "odd_over_25": odds_over_25, "odd_over_15": odds_over_15, "time": game_time.strftime("%H:%M")
                         })
             except Exception as e:
@@ -98,10 +94,11 @@ async def fetch_games():
     return jogos
 
 def format_game_analysis(game, player_star):
-    if player_star:
-        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar ou marcar"
+    # O PAINEL DE VIDRO: Mostra o erro real se a IA falhar
+    if player_star.startswith("ERRO"):
+        prop = f"⚠️ <b>Falha na Pesquisa:</b> {player_star}"
     else:
-        prop = "📊 <b>Análise:</b> Foco em cantos asiáticos ou cartões"
+        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar ou marcar"
 
     if game["odd_over_25"] > 0 and 1.40 <= game["odd_over_25"] <= 1.95:
         gols_text = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
@@ -115,14 +112,14 @@ def format_game_analysis(game, player_star):
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V187")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V188")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
     return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V187 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V188 ONLINE (Painel de Vidro Ativado)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
@@ -132,7 +129,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         jogos = await fetch_games()
         
         if jogos == "COTA_EXCEDIDA":
-            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API sem limite.")
+            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API de Odds sem limite.")
             return
         if not jogos:
             await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE.")
@@ -142,12 +139,13 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         total_jogos = len(jogos)
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Extraindo dados...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Extraindo artilheiro...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            craque = await get_player_for_single_match(g['match'])
+            # Passa os nomes separados para a IA entender melhor
+            craque = await get_player_for_single_match(g['home'], g['away'])
             texto_final += format_game_analysis(g, craque) + "━━━━━━━━━━━━━━━━\n"
             
-            if i < total_jogos: await asyncio.sleep(5)
+            if i < total_jogos: await asyncio.sleep(4) # Pausa de 4s para evitar bloqueio do Google
 
         await status_msg.edit_text("✅ <b>Análise Concluída!</b> Postando...", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
