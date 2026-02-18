@@ -1,7 +1,5 @@
 python-telegram-bot[job-queue]==20.8
-feedparser==6.0.10
 python-dotenv==1.0.0
 httpx==0.26.0
-psutil
-gTTS
-google-generativeai
+feedparser==6.0.10
+google-generativeai>=0.7.0
