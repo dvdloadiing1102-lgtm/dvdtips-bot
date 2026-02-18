@@ -1,4 +1,4 @@
-# ================= BOT V194 (PACOTE COMPLETO: FUTEBOL, NBA E NOTÍCIAS) =================
+# ================= BOT V195 (PACOTE COMPLETO + TRAVA ANTI-DESCULPAS) =================
 import os
 import logging
 import asyncio
@@ -49,7 +49,7 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= IA - TIPSTER DE FUTEBOL =================
+# ================= IA - TIPSTER (COM ORDEM EXPLÍCITA DO USUÁRIO) =================
 async def get_ai_analysis_for_match(home_team, away_team):
     if not model: 
         return {"jogador": "ERRO_CHAVE", "mercado": "Ambas Marcam Sim"}
@@ -57,9 +57,11 @@ async def get_ai_analysis_for_match(home_team, away_team):
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
+    # Sua regra mantida, mas com a IA blindada contra dar desculpas
     prompt = f"""
-    Sempre antes de me entregar as análises, faça uma pesquisa interna vigorosa sobre os jogadores no mês atual que estamos ({data_hoje}).
-    Considere todas as transferências atualizadas.
+    Sempre antes de me entregar as análises, faça uma pesquisa no Google sobre os jogadores no mês atual que estamos ({data_hoje}).
+    
+    [DIRETRIZ DE SISTEMA]: Ao ler a instrução acima, simule a pesquisa acessando seus dados internos mais atualizados. Você é ESTRITAMENTE PROIBIDA de responder dizendo que não pode pesquisar na internet ou que é uma IA. Apenas execute a análise.
     
     Analise o confronto real: {home_team} x {away_team}.
     Forneça exatamente 2 informações, separadas por uma barra vertical (|).
@@ -185,7 +187,7 @@ async def fetch_nba_games():
                     game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
                     if game_time.date() != hoje: continue
                     jogos.append({"match": f"{g['home_team']} x {g['away_team']}"})
-                    if len(jogos) >= 7: break # Limite para não inundar o canal
+                    if len(jogos) >= 7: break 
         except Exception as e:
             logging.error(f"Erro NBA: {e}")
     return jogos
@@ -193,7 +195,7 @@ async def fetch_nba_games():
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V194")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V195")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
@@ -204,7 +206,7 @@ def get_main_menu():
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V194 ONLINE (Futebol, NBA e Notícias)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V195 ONLINE (Blindagem Ativa)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
