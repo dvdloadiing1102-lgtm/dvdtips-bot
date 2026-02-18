@@ -1,4 +1,4 @@
-# ================= BOT V190 (MOTOR GEMINI 2.5 ATUALIZADO) =================
+# ================= BOT V191 (IA MULTI-MERCADOS) =================
 import os
 import logging
 import asyncio
@@ -24,31 +24,39 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    # A SOLUÇÃO DEFINITIVA: Usando o motor ativo e atualizado
     model = genai.GenerativeModel("gemini-2.5-flash")
 else:
     model = None
 
-# ================= IA - EXTRATOR =================
-async def get_player_for_single_match(home_team, away_team):
+# ================= IA - EXTRATOR MULTI-MERCADOS =================
+async def get_ai_analysis_for_match(home_team, away_team):
     if not model: 
-        return "ERRO: Chave GEMINI_API_KEY faltando no Render!"
+        return {"jogador": "ERRO: Chave GEMINI_API_KEY em falta", "mercado": "ERRO"}
 
+    # Pedimos à IA para fazer a dupla análise de forma direta
     prompt = f"""
-    Identifique apenas um atacante ou artilheiro famoso que joga no {home_team} ou no {away_team} na temporada atual.
-    Responda EXCLUSIVAMENTE com o nome e sobrenome do jogador. 
-    NÃO escreva introduções, NÃO escreva ponto final, NÃO peça desculpas. Apenas o nome.
+    Atua como um analista de apostas desportivas. Analisa o confronto: {home_team} vs {away_team}.
+    Fornece exatamente DUAS informações, separadas por uma barra vertical (|).
+    1: O nome e apelido do principal avançado ou melhor marcador atual de uma das equipas.
+    2: O mercado estatístico com maior probabilidade de bater para este estilo de jogo. (Escolhe APENAS UMA opção: "Mais de 8.5 Cantos", "Mais de 4.5 Cartões", "Menos de 2.5 Golos", "Mais de 2.5 Golos" ou "Ambas Marcam Sim").
+    
+    NÃO escrevas introduções. Responde APENAS no formato: Jogador | Mercado
+    Exemplo: Bukayo Saka | Mais de 8.5 Cantos
     """
     try:
         response = await model.generate_content_async(prompt)
         linha = response.text.strip().replace('*', '').replace('`', '').replace('"', '').split('\n')[0]
         
-        if len(linha) > 35 or "modelo" in linha.lower() or "desculp" in linha.lower() or "não tenho" in linha.lower():
-            return f"ERRO IA: {linha[:40]}..."
+        logging.info(f"🧠 RESPOSTA IA ({home_team}): {linha}")
+        
+        if "|" in linha:
+            parts = linha.split("|")
+            return {"jogador": parts[0].strip(), "mercado": parts[1].strip()}
+        else:
+            return {"jogador": linha[:30], "mercado": "Mais de 8.5 Cantos"}
             
-        return linha
     except Exception as e:
-        return f"ERRO API DO GOOGLE: {str(e)[:30]}"
+        return {"jogador": f"ERRO API: {str(e)[:20]}", "mercado": "Indisponível"}
 
 # ================= ODDS FUTEBOL (SÓ HOJE) =================
 async def fetch_games():
@@ -74,76 +82,79 @@ async def fetch_games():
                         game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
                         if game_time.date() != hoje: continue 
                             
-                        odds_over_25 = 0; odds_over_15 = 0
+                        odds_over_25 = 0
                         
                         for book in g.get('bookmakers', []):
                             for m in book.get('markets', []):
                                 if m['key'] == 'totals':
                                     for o in m['outcomes']:
                                         if o['name'] == 'Over' and o.get('point') == 2.5: odds_over_25 = max(odds_over_25, o['price'])
-                                        if o['name'] == 'Over' and o.get('point') == 1.5: odds_over_15 = max(odds_over_15, o['price'])
 
                         jogos.append({
                             "home": g['home_team'], "away": g['away_team'], "match": f"{g['home_team']} x {g['away_team']}",
-                            "odd_over_25": odds_over_25, "odd_over_15": odds_over_15, "time": game_time.strftime("%H:%M")
+                            "odd_over_25": odds_over_25, "time": game_time.strftime("%H:%M")
                         })
             except Exception as e:
                 logging.error(f"Erro Odds: {e}")
     return jogos
 
-def format_game_analysis(game, player_star):
-    if player_star.startswith("ERRO"):
-        prop = f"⚠️ <b>Falha na Pesquisa:</b> {player_star}"
+def format_game_analysis(game, ai_data):
+    jogador = ai_data.get("jogador", "Desconhecido")
+    mercado_ia = ai_data.get("mercado", "Mercado Indisponível")
+    
+    if jogador.startswith("ERRO"):
+        prop = f"⚠️ <b>Falha na Pesquisa:</b> {jogador}"
+        mercado_texto = f"📊 <b>Análise:</b> Erro de IA"
     else:
-        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar ou marcar"
+        prop = f"🎯 <b>Player Prop:</b> {jogador} p/ finalizar ou marcar"
+        mercado_texto = f"📊 <b>Tendência do Jogo:</b> {mercado_ia}"
 
-    if game["odd_over_25"] > 0 and 1.40 <= game["odd_over_25"] <= 1.95:
-        gols_text = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
-    elif game["odd_over_15"] > 0 and 1.25 <= game["odd_over_15"] <= 1.55:
-        gols_text = f"🥅 <b>Mercado:</b> Over 1.5 Gols (@{game['odd_over_15']})"
-    else:
-        gols_text = "⚔️ <b>Mercado:</b> Ambas Marcam Sim"
+    # Adiciona a Odd real se a IA tiver escolhido golos e a casa de apostas tiver valor
+    odd_info = ""
+    if "Mais de 2.5 Golos" in mercado_ia and game["odd_over_25"] > 0:
+        odd_info = f" (@{game['odd_over_25']})"
 
-    return f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n{gols_text}\n"
+    return f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n{mercado_texto}{odd_info}\n"
 
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V190")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V191")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (Deep Scan)", callback_data="fut_deep")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade (IA Multi-Mercados)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V190 ONLINE (Motor Gemini 2.5)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V191 ONLINE (Análise Dinâmica de Mercados)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
 
     if q.data == "fut_deep":
-        status_msg = await q.message.reply_text("🔎 <b>Coletando grade do dia...</b>", parse_mode=ParseMode.HTML)
+        status_msg = await q.message.reply_text("🔎 <b>A compilar a grelha de hoje...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_games()
         
         if jogos == "COTA_EXCEDIDA":
-            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API de Odds sem limite.")
+            await status_msg.edit_text("❌ <b>ERRO FATAL:</b> Chave da API de Odds esgotada.")
             return
         if not jogos:
-            await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE.")
+            await status_msg.edit_text("❌ Nenhum jogo oficial programado para HOJE nas ligas ativas.")
             return
 
-        texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
+        texto_final = "🔥 <b>GRELHA DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         
         total_jogos = len(jogos)
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Extraindo artilheiro...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>IA a analisar características e mercados...</b> ({i}/{total_jogos})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            craque = await get_player_for_single_match(g['home'], g['away'])
-            texto_final += format_game_analysis(g, craque) + "━━━━━━━━━━━━━━━━\n"
+            # Passa a responsabilidade do mercado para a IA
+            dados_ia = await get_ai_analysis_for_match(g['home'], g['away'])
+            texto_final += format_game_analysis(g, dados_ia) + "━━━━━━━━━━━━━━━━\n"
             
             if i < total_jogos: await asyncio.sleep(4) 
 
-        await status_msg.edit_text("✅ <b>Análise Concluída!</b> Postando...", parse_mode=ParseMode.HTML)
+        await status_msg.edit_text("✅ <b>Análise Concluída!</b> A postar no canal...", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
 
 def main():
