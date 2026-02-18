@@ -1,4 +1,4 @@
-# ================= BOT V176 (MOTOR HÍBRIDO DEFINITIVO) =================
+# ================= BOT V177 (MOTOR JSON IMPLACÁVEL) =================
 import os
 import logging
 import asyncio
@@ -6,6 +6,7 @@ import httpx
 import threading
 import unicodedata
 import random
+import json
 from datetime import datetime, timezone, timedelta, time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -32,39 +33,42 @@ if GEMINI_KEY:
 else:
     model = None
 
-# ================= CACHE DINÂMICO INTELIGENTE (BATCH) =================
-dynamic_players_cache = {}
+# ================= IA JSON (O FIM DO ERRO DE NOME) =================
+async def get_players_for_matches(jogos_list):
+    """Manda a grade inteira e exige um JSON com as chaves idênticas aos jogos."""
+    if not model or not jogos_list: return {}
 
-async def update_players_cache_batch(teams_list):
-    """Pega todos os times de uma vez e faz UMA ÚNICA pergunta para a IA não bloquear."""
-    if not model: return
-    
-    missing_teams = [t for t in teams_list if t not in dynamic_players_cache]
-    if not missing_teams: return
-
+    matches_str = "\n".join([f'- "{g["match"]}"' for g in jogos_list])
     br_tz = timezone(timedelta(hours=-3))
     data_hoje = datetime.now(br_tz).strftime("%B de %Y")
 
     prompt = f"""
-    Estamos em {data_hoje}. Atue como scout. 
-    Abaixo está uma lista de times. Me devolva o nome do principal atacante ou artilheiro atual de cada time que não esteja lesionado.
-    Responda EXATAMENTE neste formato e nada mais (um por linha):
-    NomeDoTime=NomeDoJogador
+    Mês atual: {data_hoje}.
+    Retorne EXATAMENTE UM ARQUIVO JSON VÁLIDO. 
+    As chaves do JSON devem ser EXATAMENTE os nomes dos confrontos fornecidos abaixo.
+    O valor deve ser APENAS o nome e sobrenome do melhor jogador de ataque ou artilheiro em boa fase (de qualquer um dos dois times). Não me dê jogadores lesionados.
 
-    Lista de times:
-    {chr(10).join(missing_teams)}
+    Exemplo de saída:
+    {{
+        "Aston Villa x Leeds United": "Ollie Watkins",
+        "AC Milan x Como": "Rafael Leão"
+    }}
+
+    Confrontos de hoje:
+    {matches_str}
     """
     try:
-        logging.info("📡 Consultando IA em Lote (Livre de bloqueios)...")
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        lines = response.text.strip().split('\n')
-        
-        for line in lines:
-            if '=' in line:
-                team, player = line.split('=', 1)
-                dynamic_players_cache[team.strip()] = player.strip()
+        logging.info("📡 Consultando IA em modo JSON (Blindado)...")
+        response = await asyncio.to_thread(
+            model.generate_content, 
+            prompt,
+            generation_config={"response_mime_type": "application/json"}
+        )
+        dados = json.loads(response.text)
+        return dados
     except Exception as e:
-        logging.error(f"❌ Erro na IA Batch: {e}")
+        logging.error(f"❌ Erro crítico no JSON da IA: {e}")
+        return {}
 
 # ================= NOTÍCIAS =================
 NEWS_FEEDS = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml"]
@@ -104,7 +108,6 @@ async def fetch_games():
                 
                 if isinstance(data, list):
                     for g in data[:3]: 
-                        # Extrai odds reais de Gols
                         odds_over_25 = 0
                         odds_over_15 = 0
                         
@@ -126,16 +129,13 @@ async def fetch_games():
                 logging.error(f"Erro na API Odds: {e}")
     return jogos
 
-def analyze_game(game):
-    # Pega o jogador do Cache
-    star = dynamic_players_cache.get(game["home"]) or dynamic_players_cache.get(game["away"])
-    
-    if star:
-        prop = f"🎯 <b>Player Prop:</b> {star} p/ finalizar no alvo ou marcar"
+def analyze_game(game, player_star):
+    if player_star:
+        prop = f"🎯 <b>Player Prop:</b> {player_star} p/ finalizar no alvo ou marcar"
     else:
         prop = "📊 <b>Tendência:</b> Foco no mercado de Escanteios (+8.5)"
 
-    # Lógica MATEMÁTICA de Gols (Fim do texto genérico)
+    # Lógica MATEMÁTICA de Gols
     if game["odd_over_25"] > 0 and 1.40 <= game["odd_over_25"] <= 1.95:
         gols_text = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
     elif game["odd_over_15"] > 0 and 1.25 <= game["odd_over_15"] <= 1.55:
@@ -168,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"ONLINE - DVD TIPS V176")
+        self.wfile.write(b"ONLINE - DVD TIPS V177")
 
 def run_server():
     HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
@@ -177,40 +177,38 @@ def run_server():
 def get_main_menu():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⚽ Futebol", callback_data="fut"), InlineKeyboardButton("🏀 NBA", callback_data="nba")],
-        [InlineKeyboardButton("📰 Notícias", callback_data="news"), InlineKeyboardButton("🔄 Limpar Cache", callback_data="force")]
+        [InlineKeyboardButton("📰 Notícias", callback_data="news")]
     ])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V176 ONLINE</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V177 ONLINE (Motor JSON)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     if q.data == "menu":
-        await q.edit_message_text("🦁 <b>MENU V176</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+        await q.edit_message_text("🦁 <b>MENU V177</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
     elif q.data == "fut":
-        await q.message.reply_text("⏳ <b>Analisando jogos e artilheiros...</b>", parse_mode=ParseMode.HTML)
+        await q.message.reply_text("⏳ <b>Analisando jogos e cruzando elencos na IA...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_games()
         
         if jogos == "COTA_EXCEDIDA":
-            await q.message.reply_text("❌ <b>ERRO FATAL:</b> Chave da The Odds API sem limite mensal.")
+            await q.message.reply_text("❌ <b>ERRO FATAL:</b> Chave da The Odds API estourou.")
             return
         if not jogos:
             await q.message.reply_text("❌ Nenhum jogo de futebol encontrado.")
             return
             
-        # Pega todos os times da lista e atualiza o cache da IA de UMA SÓ VEZ
-        todos_os_times = []
-        for g in jogos:
-            todos_os_times.extend([g["home"], g["away"]])
-        
-        await update_players_cache_batch(list(set(todos_os_times)))
+        # Busca TODOS os jogadores em 1 segundo num formato à prova de falhas
+        jogadores_dict = await get_players_for_matches(jogos)
 
         texto_final = "🔥 <b>GRADE DE FUTEBOL DO DIA</b> 🔥\n\n"
         for g in jogos:
-            msg = analyze_game(g)
+            # Associa perfeitamente o nome do jogo ao jogador retornado
+            craque = jogadores_dict.get(g["match"])
+            msg = analyze_game(g, craque)
             texto_final += msg + "━━━━━━━━━━━━━━━━\n"
             
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
@@ -219,7 +217,7 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("🏀 <b>Buscando NBA...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_nba_games()
         if jogos == "COTA_EXCEDIDA":
-            await q.message.reply_text("❌ <b>ERRO FATAL:</b> Limite da The Odds API acabou.")
+            await q.message.reply_text("❌ <b>ERRO:</b> Limite da API acabou.")
             return
         if not jogos:
             await q.message.reply_text("❌ Nenhum jogo da NBA.")
@@ -235,11 +233,6 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if news:
             msg = "📰 <b>NOTÍCIAS</b>\n\n" + "\n\n".join(news)
             await context.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
-
-    elif q.data == "force":
-        dynamic_players_cache.clear()
-        sent_news.clear()
-        await q.message.reply_text("🔄 <b>Cache Limpo!</b>", parse_mode=ParseMode.HTML)
 
 def main():
     threading.Thread(target=run_server, daemon=True).start()
