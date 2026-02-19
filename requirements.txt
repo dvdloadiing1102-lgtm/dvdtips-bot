@@ -3,3 +3,4 @@ python-dotenv==1.0.0
 httpx==0.26.0
 feedparser==6.0.10
 google-generativeai>=0.7.0
+beautifulsoup4
