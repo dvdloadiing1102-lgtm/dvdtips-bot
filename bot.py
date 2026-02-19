@@ -1,10 +1,11 @@
-# ================= BOT V215 (API + SITE GE: A REDUNDÂNCIA MÁXIMA) =================
+# ================= BOT V216 (NOVO SCRAPER PLACAR + IA JSON) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
 import random
+import json
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
@@ -27,11 +28,12 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    # Flash é rápido, mas Pro é mais obediente com JSON. Vamos de Flash com prompt reforçado.
+    model = genai.GenerativeModel("gemini-1.5-flash")
 else:
     model = None
 
-# ================= FONTE 1: API (ESTRUTURADA) =================
+# ================= FONTE 1: API (DADOS ESTRUTURADOS) =================
 async def fetch_api_schedule():
     if not FOOTBALL_DATA_KEY: return []
     headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
@@ -52,7 +54,7 @@ async def fetch_api_schedule():
                     
                     home = m['homeTeam']['name']
                     away = m['awayTeam']['name']
-                    # Correção API
+                    # Correção nomes
                     if home == "CA Paranaense": home = "Athletico-PR"
                     if away == "CA Paranaense": away = "Athletico-PR"
                     
@@ -60,7 +62,7 @@ async def fetch_api_schedule():
                     if dt.date() != datetime.now(br_tz).date(): continue
 
                     jogos.append({
-                        "id": f"{home}x{away}".replace(" ", "").lower(), # ID único pra deduplicar
+                        "id": f"{home}x{away}".replace(" ", "").lower(),
                         "match": f"{home} x {away}",
                         "home": home,
                         "away": away,
@@ -70,38 +72,44 @@ async def fetch_api_schedule():
         except: pass
     return jogos
 
-# ================= FONTE 2: SITE GE (RASPAGEM) =================
-async def fetch_ge_scraper():
-    url = "https://ge.globo.com/agenda/"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+# ================= FONTE 2: NOVO SCRAPER (PLACAR DE FUTEBOL) =================
+async def fetch_placar_scraper():
+    """
+    Raspa o site placardefutebol.com.br (Mais leve que o GE)
+    """
+    url = "https://www.placardefutebol.com.br/jogos-de-hoje"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     jogos = []
     
     try:
         r = await asyncio.to_thread(requests.get, url, headers=headers)
         if r.status_code == 200:
             soup = BeautifulSoup(r.text, 'html.parser')
-            # Busca cards de jogos
-            cards = soup.find_all('div', class_='b-game-card')
-            if not cards: cards = soup.find_all('li', class_='b-game-card')
             
-            for card in cards[:15]: # Limite de segurança
-                if "Encerrado" in card.text: continue # Pula jogos acabados
-                
+            # O site organiza em containers de jogos
+            container_jogos = soup.find_all('div', class_='match-card')
+            
+            for card in container_jogos[:20]: # Pega até 20 jogos
                 try:
-                    hora_elem = card.find('span', class_='b-game-card__time')
+                    # Status (Pega só o que não acabou)
+                    status = card.find('span', class_='status-name')
+                    if status and "ENCERRADO" in status.text.upper(): continue
+
+                    # Horário
+                    hora_elem = card.find('span', class_='match-time')
                     hora = hora_elem.text.strip() if hora_elem else "Hoje"
                     
-                    # Times (tenta imagem alt, se falhar tenta texto)
-                    imgs = card.find_all('img', class_='b-game-card__team-image')
-                    if len(imgs) >= 2:
-                        home = imgs[0].get('alt')
-                        away = imgs[1].get('alt')
-                    else:
-                        names = card.find_all('span', class_='b-game-card__team-name')
-                        if len(names) >= 2:
-                            home = names[0].text.strip()
-                            away = names[1].text.strip()
-                        else: continue
+                    # Times
+                    times = card.find_all('span', class_='team-name')
+                    if len(times) >= 2:
+                        home = times[0].text.strip()
+                        away = times[1].text.strip()
+                    else: continue
+                    
+                    # Filtro de qualidade (ignora sub-20, feminino se quiser, etc)
+                    if "Sub-" in home or "Feminino" in home: continue
 
                     jogos.append({
                         "id": f"{home}x{away}".replace(" ", "").lower(),
@@ -109,102 +117,106 @@ async def fetch_ge_scraper():
                         "home": home,
                         "away": away,
                         "time": hora,
-                        "source": "GE"
+                        "source": "WEB"
                     })
                 except: continue
-    except: pass
+    except Exception as e:
+        logging.error(f"Erro Scraper: {e}")
+        
     return jogos
 
-# ================= UNIFICADOR (O GESTOR) =================
+# ================= UNIFICADOR =================
 async def get_hybrid_schedule():
-    # Roda os dois ao mesmo tempo (Paralelismo)
     task1 = fetch_api_schedule()
-    task2 = fetch_ge_scraper()
+    task2 = fetch_placar_scraper()
     results = await asyncio.gather(task1, task2)
     
     lista_api = results[0]
-    lista_ge = results[1]
+    lista_web = results[1]
     
-    # DEDUPLICAÇÃO (Prioriza GE porque costuma ser mais atualizado no horário BR)
+    # DEDUPLICAÇÃO (Prioriza WEB pois tem mais chance de ter a grade completa visual)
     agenda_final = {}
     
-    # Adiciona API primeiro
-    for j in lista_api:
-        agenda_final[j['id']] = j
-        
-    # Adiciona GE (sobrescreve ou adiciona novos)
-    for j in lista_ge:
-        # Se já existe, atualizamos só se a fonte anterior não era GE (GE tem prioridade visual)
-        agenda_final[j['id']] = j
+    for j in lista_api: agenda_final[j['id']] = j
+    for j in lista_web: agenda_final[j['id']] = j # Web sobrescreve API se duplicar
             
-    # Converte de volta para lista
     lista_limpa = list(agenda_final.values())
     
-    # Ordena por horário (se possível)
-    lista_limpa.sort(key=lambda x: x['time'])
+    # Ordena por horário (gambiarra pra lidar com "Hoje" e "19:00")
+    def sort_key(x):
+        return x['time'] if ":" in x['time'] else "23:59"
     
-    return lista_limpa[:15] # Manda os 15 primeiros jogos do dia
+    lista_limpa.sort(key=sort_key)
+    
+    return lista_limpa[:15]
 
-# ================= IA - ANÁLISE BLINDADA (2026) =================
-async def analyze_match(home, away):
-    if not model: return {"player": "Destaque", "market": "Over 2.5 Gols"}
+# ================= IA - MODO JSON ESTRITO (SEM DESCULPAS) =================
+async def analyze_match_json(home, away):
+    if not model: return {"player": "Artilheiro", "market": "Over 2.5 Gols"}
     
     prompt = f"""
-    Data: 19 de Fevereiro de 2026.
-    Jogo: {home} x {away}.
+    Analyze the football match: {home} x {away} (Date: Feb 2026).
     
-    Tarefa 1: Nome do ATACANTE TITULAR do {home} HOJE.
-    (Cuidado: Mastriani saiu do Athletico. Pablo saiu. Use dados de 2026. Se for Athletico, pense em Canobbio ou o 9 atual).
+    Return a JSON object with exactly two keys:
+    1. "player": The name of the BEST striker for {home}. (NO SENTENCES. JUST THE NAME).
+       - If unsure, name the most famous forward in the squad history.
+       - If Athletico-PR, use "Canobbio" or "Pablo" (if returned).
+    2. "market": The best statistical market (Choose one: "Vitória do Mandante", "Over 2.5 Gols", "Mais de 8.5 Escanteios", "Ambas Marcam").
     
-    Tarefa 2: Mercado Estatístico (Apenas 1):
-    [Vitória Casa, Vitória Fora, +8.5 Escanteios, +4.5 Cartões, Over 2.5 Gols, Ambas Marcam].
-    
-    Responda: JOGADOR | MERCADO
+    Output format example:
+    {{
+        "player": "Vinicius Jr",
+        "market": "Over 2.5 Gols"
+    }}
     """
+    
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        text = response.text.strip().replace('*', '')
-        if "|" in text:
-            p = text.split("|")
-            return {"player": p[0].strip(), "market": p[1].strip()}
-        return {"player": "Camisa 9", "market": "Over 2.5 Gols"}
+        text = response.text.strip()
+        # Limpa formatação markdown se a IA colocar
+        if text.startswith("```json"): text = text.replace("```json", "").replace("```", "")
+        
+        data = json.loads(text)
+        return data
     except:
-        return {"player": "Destaque", "market": "Over 2.5 Gols"}
+        # Fallback manual se o JSON falhar
+        p = "Canobbio" if "Athletico" in home else "Camisa 9"
+        return {"player": p, "market": "Over 2.5 Gols"}
 
 def format_game(game, analysis):
-    icon = "🌐" if game['source'] == "GE" else "📡"
+    icon = "🌐" if game['source'] == "WEB" else "📡"
     return (
         f"{icon} <b>Fonte: {game['source']}</b>\n"
         f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n"
-        f"🎯 <b>Prop:</b> {analysis['player']} p/ marcar\n"
-        f"📊 <b>Tendência:</b> {analysis['market']}\n"
+        f"🎯 <b>Prop:</b> {analysis.get('player', 'Destaque')} p/ marcar\n"
+        f"📊 <b>Tendência:</b> {analysis.get('market', 'Over 2.5 Gols')}\n"
     )
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V215 HIBRIDO")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V216 JSON")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
-def get_menu(): return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Grade Híbrida (Site + API)", callback_data="fut_deep")]])
+def get_menu(): return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Grade V216 (Web + API)", callback_data="fut_deep")]])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>BOT V215 ONLINE</b>\nO Híbrido: API + Site do Globo Esporte juntos.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>BOT V216 ONLINE</b>\nScraper novo e IA formatada.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     if q.data == "fut_deep":
-        msg = await q.message.reply_text("🔎 <b>Acessando API e Site do GE...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Buscando grade completa...</b>", parse_mode=ParseMode.HTML)
         
         jogos = await get_hybrid_schedule()
         
         if not jogos:
-            await msg.edit_text("❌ <b>Grade vazia em AMBAS as fontes.</b>\n(Verifique se há jogos hoje ou se o site mudou).")
+            await msg.edit_text("❌ <b>Grade Vazia.</b> (Nem API nem Site retornaram jogos).")
             return
 
         txt = f"🔥 <b>JOGOS ENCONTRADOS ({len(jogos)})</b> 🔥\n\n"
         for i, g in enumerate(jogos, 1):
             await msg.edit_text(f"⏳ <b>Analisando {i}/{len(jogos)}...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            analysis = await analyze_match(g['home'], g['away'])
+            analysis = await analyze_match_json(g['home'], g['away'])
             txt += format_game(g, analysis) + "━━━━━━━━━━━━━━━━\n"
             await asyncio.sleep(2)
 
