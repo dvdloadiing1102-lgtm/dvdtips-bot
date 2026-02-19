@@ -1,11 +1,10 @@
-# ================= BOT V206 (CORRETOR DE NOMES + SISTEMA HÍBRIDO) =================
+# ================= BOT V207 (FILTRO GEOGRÁFICO INTELIGENTE) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
 import random
-import difflib # O SEGREDO: Biblioteca para achar nomes parecidos
 import feedparser
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -28,7 +27,8 @@ logging.basicConfig(level=logging.INFO)
 
 if GEMINI_KEY:
     genai.configure(api_key=GEMINI_KEY)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    # Voltando ao 1.5 Flash que é mais estável para evitar alucinações de formato
+    model = genai.GenerativeModel("gemini-1.5-flash")
 else:
     model = None
 
@@ -51,81 +51,80 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= FOOTBALL-DATA.ORG (CORRETOR INTELIGENTE) =================
+# ================= FOOTBALL-DATA.ORG (SÓ PARA EUROPA) =================
 TEAM_CACHE = {} 
-LIGAS_IDS = [2021, 2014, 2019, 2002, 2015, 2001, 2013] # Inclui Brasileirão (2013)
+# Ligas da Europa (ONDE A API É BOA)
+LIGAS_EUROPA = [2021, 2014, 2019, 2002, 2015, 2001] 
+# Ligas do Brasil (ONDE A API É RUIM - REMOVIDAS DA LISTA DE CARGA)
 
 async def mapear_times_startup():
     if not FOOTBALL_DATA_KEY: return
     headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
     
     async with httpx.AsyncClient(timeout=20) as client:
-        for liga_id in LIGAS_IDS:
+        # Só mapeia Europa. Brasil deixa pra IA.
+        for liga_id in LIGAS_EUROPA:
             try:
                 url = f"http://api.football-data.org/v4/competitions/{liga_id}/teams"
                 r = await client.get(url, headers=headers)
                 if r.status_code == 200:
                     data = r.json()
                     for time in data.get('teams', []):
-                        # Guarda o nome oficial e o ID
                         TEAM_CACHE[time['name']] = time['id']
-                await asyncio.sleep(6) # Respeita o limite da API
+                await asyncio.sleep(6)
             except Exception:
                 pass
 
-def encontrar_id_aproximado(nome_busca):
-    """Usa lógica difusa para achar 'Athletico-PR' quando busca 'Atletico Paranaense'"""
-    if not TEAM_CACHE: return None
+async def get_player_strategy(team_name, league_code):
+    """
+    CÉREBRO DO BOT:
+    - Se for Europa: Usa API (Precisa e Rápida).
+    - Se for Brasil/Outros: Usa IA (Atualizada, evita API velha).
+    """
     
-    # 1. Tenta busca exata
-    if nome_busca in TEAM_CACHE: return TEAM_CACHE[nome_busca]
+    # 1. ESTRATÉGIA EUROPA (API)
+    # Verifica se a liga é europeia (soccer_epl, soccer_spain, etc)
+    is_europe = any(x in league_code for x in ['epl', 'la_liga', 'serie_a', 'bundesliga', 'champs_league'])
     
-    # 2. Tenta achar o nome mais parecido na lista (Cutoff 0.6 = 60% de semelhança)
-    nomes_disponiveis = list(TEAM_CACHE.keys())
-    matches = difflib.get_close_matches(nome_busca, nomes_disponiveis, n=1, cutoff=0.5)
-    
-    if matches:
-        match_name = matches[0]
-        logging.info(f"✅ Correção de Nome: '{nome_busca}' -> '{match_name}'")
-        return TEAM_CACHE[match_name]
-    
-    return None
-
-async def get_hybrid_player(team_name):
-    """Tenta API Oficial. Se falhar, usa IA como backup (Híbrido)."""
-    
-    # --- TENTATIVA 1: API OFICIAL ---
-    if FOOTBALL_DATA_KEY and TEAM_CACHE:
-        team_id = encontrar_id_aproximado(team_name)
+    if is_europe and FOOTBALL_DATA_KEY and team_name in TEAM_CACHE:
+        team_id = TEAM_CACHE[team_name]
+        headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+        url = f"http://api.football-data.org/v4/teams/{team_id}"
         
-        if team_id:
-            headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-            url = f"http://api.football-data.org/v4/teams/{team_id}"
-            async with httpx.AsyncClient(timeout=10) as client:
-                try:
-                    r = await client.get(url, headers=headers)
-                    if r.status_code == 200:
-                        data = r.json()
-                        squad = data.get('squad', [])
-                        atacantes = [p['name'] for p in squad if p.get('position') in ['Offence', 'Forward', 'Attacker']]
-                        if not atacantes: atacantes = [p['name'] for p in squad if p.get('position') == 'Midfield']
-                        
-                        if atacantes: return atacantes[0] # Sucesso API
-                except:
-                    pass
-    
-    # --- TENTATIVA 2: IA (BACKUP) ---
-    # Só entra aqui se a API falhar ou não achar o time.
-    # Garante que não venha "Elenco Indisponível".
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                r = await client.get(url, headers=headers)
+                if r.status_code == 200:
+                    data = r.json()
+                    squad = data.get('squad', [])
+                    atacantes = [p['name'] for p in squad if p.get('position') in ['Offence', 'Forward', 'Attacker']]
+                    if not atacantes: atacantes = [p['name'] for p in squad if p.get('position') == 'Midfield']
+                    
+                    if atacantes: return atacantes[0] # Retorna API
+            except:
+                pass
+
+    # 2. ESTRATÉGIA BRASIL/RESTO (IA PURA BLINDADA)
     if model:
         try:
-            prompt = f"Quem é o principal artilheiro titular do {team_name} hoje em 2026? Responda APENAS o nome."
+            br_tz = timezone(timedelta(hours=-3))
+            data_hoje = datetime.now(br_tz).strftime("%B de %Y")
+            
+            prompt = f"""
+            Você é um especialista em transferências atualizado em {data_hoje}.
+            Diga o nome do principal ARTILHEIRO TITULAR do time: {team_name}.
+            
+            ATENÇÃO CRÍTICA:
+            - Muitos jogadores mudaram de time recentemente no Brasil.
+            - Verifique se o jogador NÃO foi transferido (Ex: Mastriani saiu do Athletico, não cite ele).
+            - Responda APENAS o nome do jogador atual.
+            """
             response = await asyncio.to_thread(model.generate_content, prompt)
             return response.text.strip().replace('*', '')
         except:
-            return "Destaque do Time" # Último recurso
+            return "Destaque do Time"
             
-    return "Craque do Time"
+    return "Craque da Equipe"
 
 # ================= IA - MERCADO ESTATÍSTICO =================
 async def get_market_analysis(home_team, away_team):
@@ -158,14 +157,10 @@ async def fetch_games():
                 if isinstance(data, dict) and "quota" in str(data): return "COTA_EXCEDIDA"
                 if isinstance(data, list):
                     for g in data:
-                        # Ajuste Fuso Horário
                         game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
                         
-                        # FILTRO DE DATA: Mostra jogos de hoje E da madrugada de amanhã (até 04:00)
-                        # Isso resolve o problema de você achar que o jogo é "amanhã"
-                        if game_time.date() == hoje:
-                            pass
-                        else:
+                        # Filtra apenas jogos de HOJE (ou madrugada de hoje para amanhã cedo)
+                        if game_time.date() != hoje:
                             continue
                             
                         odd_home = 0; odd_away = 0; odd_over_25 = 0
@@ -181,6 +176,7 @@ async def fetch_games():
 
                         jogos.append({
                             "home": g['home_team'], "away": g['away_team'], "match": f"{g['home_team']} x {g['away_team']}",
+                            "league_code": league, # Passamos o código da liga para saber se é BR ou Europa
                             "odd_home": round(odd_home, 2), "odd_away": round(odd_away, 2), "odd_over_25": round(odd_over_25, 2),
                             "time": game_time.strftime("%H:%M")
                         })
@@ -202,39 +198,35 @@ def format_game_analysis(game, jogador_real, mercado_ia):
 
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V206")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V207")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Futebol (Corretor Auto)", callback_data="fut_deep")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Futebol (Híbrido)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(mapear_times_startup())
-    await update.message.reply_text("🦁 <b>BOT V206 ONLINE (Corretor de Nomes Ativo)</b>\nAguarde 40s para o mapeamento.", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V207 ONLINE (Brasil via IA / Europa via API)</b>", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "fut_deep":
-        if not TEAM_CACHE:
-            await q.message.reply_text("⚠️ <b>Mapeando ligas...</b> Tente em 30 segundos.")
-            return
-
         status_msg = await q.message.reply_text("🔎 <b>Analisando grade...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_games()
         
         if not jogos:
-            await status_msg.edit_text("❌ Grade vazia ou erro de API.")
+            await status_msg.edit_text("❌ Grade vazia.")
             return
 
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Conferindo elenco ({i}/{len(jogos)})...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Analisando ({i}/{len(jogos)})...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            # Puxa jogador (Híbrido: API ou IA)
-            jogador = await get_hybrid_player(g['home'])
+            # Aqui está o segredo: passamos o código da liga
+            jogador = await get_player_strategy(g['home'], g['league_code'])
             mercado = await get_market_analysis(g['home'], g['away'])
             texto_final += format_game_analysis(g, jogador, mercado) + "━━━━━━━━━━━━━━━━\n"
-            await asyncio.sleep(5)
+            await asyncio.sleep(4)
 
         await status_msg.edit_text("✅ <b>Postado!</b>", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
