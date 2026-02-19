@@ -1,10 +1,12 @@
-# ================= BOT V212 (SEM FILTROS DE LIGA + CORREÇÃO CAP) =================
+# ================= BOT V215 (API + SITE GE: A REDUNDÂNCIA MÁXIMA) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
 import random
+import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -29,137 +31,185 @@ if GEMINI_KEY:
 else:
     model = None
 
-async def fetch_schedule_football_data():
-    if not FOOTBALL_DATA_KEY: return "SEM_CHAVE"
-    
+# ================= FONTE 1: API (ESTRUTURADA) =================
+async def fetch_api_schedule():
+    if not FOOTBALL_DATA_KEY: return []
     headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
     br_tz = timezone(timedelta(hours=-3))
-    
     hoje = datetime.now(br_tz).strftime("%Y-%m-%d")
     amanha = (datetime.now(br_tz) + timedelta(days=1)).strftime("%Y-%m-%d")
     
     url = f"http://api.football-data.org/v4/matches?dateFrom={hoje}&dateTo={amanha}"
+    jogos = []
     
-    jogos_formatados = []
-    
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         try:
             r = await client.get(url, headers=headers)
-            if r.status_code != 200: return []
-            
-            data = r.json()
-            matches = data.get('matches', [])
-            
-            for m in matches:
-                # === REMOVIDO FILTRO DE ID DE LIGA ===
-                # Agora aceitamos TUDO que a API mandar
-                
-                status = m['status']
-                # Aceita jogos agendados ou rolando
-                if status not in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']: continue
-                
-                home_name = m['homeTeam']['name']
-                away_name = m['awayTeam']['name']
-                comp_name = m['competition']['name'] # Nome da liga para exibir
-                
-                # CORREÇÃO DO NOME FEIO DA API
-                if home_name == "CA Paranaense": home_name = "Athletico-PR"
-                if away_name == "CA Paranaense": away_name = "Athletico-PR"
-                
-                match_time_utc = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                match_time_br = match_time_utc.astimezone(br_tz)
-                
-                # Filtra apenas jogos de HOJE no horário BR
-                if match_time_br.date() != datetime.now(br_tz).date(): continue
-                
-                jogos_formatados.append({
-                    "match": f"{home_name} x {away_name}",
-                    "league": comp_name,
-                    "home": home_name,
-                    "away": away_name,
-                    "time": match_time_br.strftime("%H:%M")
-                })
-        except:
-            return []
-            
-    return jogos_formatados[:15] # Aumentei o limite pra caber tudo
+            if r.status_code == 200:
+                matches = r.json().get('matches', [])
+                for m in matches:
+                    if m['status'] not in ['SCHEDULED', 'TIMED', 'IN_PLAY', 'PAUSED']: continue
+                    
+                    home = m['homeTeam']['name']
+                    away = m['awayTeam']['name']
+                    # Correção API
+                    if home == "CA Paranaense": home = "Athletico-PR"
+                    if away == "CA Paranaense": away = "Athletico-PR"
+                    
+                    dt = datetime.strptime(m['utcDate'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                    if dt.date() != datetime.now(br_tz).date(): continue
 
-async def get_player_smart(team_name):
-    """
-    Usa IA para tudo agora, já que a API provou ter nomes velhos (Mastriani).
-    Prompt reforçado para 2026.
-    """
-    if not model: return "Destaque"
+                    jogos.append({
+                        "id": f"{home}x{away}".replace(" ", "").lower(), # ID único pra deduplicar
+                        "match": f"{home} x {away}",
+                        "home": home,
+                        "away": away,
+                        "time": dt.strftime("%H:%M"),
+                        "source": "API"
+                    })
+        except: pass
+    return jogos
 
-    br_tz = timezone(timedelta(hours=-3))
-    data_hoje = datetime.now(br_tz).strftime("%B de %Y")
-
-    prompt = f"""
-    Estamos em {data_hoje}. Você é um scout de futebol atualizado.
-    Diga o nome do principal ATACANTE TITULAR do {team_name} HOJE.
+# ================= FONTE 2: SITE GE (RASPAGEM) =================
+async def fetch_ge_scraper():
+    url = "https://ge.globo.com/agenda/"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    jogos = []
     
-    IMPORTANTE:
-    - O Athletico-PR NÃO tem mais Mastriani. O titular é Pablo, Canobbio ou reforço de 2026.
-    - O Corinthians tem Yuri Alberto ou Memphis Depay (se ainda estiver).
-    - Responda APENAS O NOME.
+    try:
+        r = await asyncio.to_thread(requests.get, url, headers=headers)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            # Busca cards de jogos
+            cards = soup.find_all('div', class_='b-game-card')
+            if not cards: cards = soup.find_all('li', class_='b-game-card')
+            
+            for card in cards[:15]: # Limite de segurança
+                if "Encerrado" in card.text: continue # Pula jogos acabados
+                
+                try:
+                    hora_elem = card.find('span', class_='b-game-card__time')
+                    hora = hora_elem.text.strip() if hora_elem else "Hoje"
+                    
+                    # Times (tenta imagem alt, se falhar tenta texto)
+                    imgs = card.find_all('img', class_='b-game-card__team-image')
+                    if len(imgs) >= 2:
+                        home = imgs[0].get('alt')
+                        away = imgs[1].get('alt')
+                    else:
+                        names = card.find_all('span', class_='b-game-card__team-name')
+                        if len(names) >= 2:
+                            home = names[0].text.strip()
+                            away = names[1].text.strip()
+                        else: continue
+
+                    jogos.append({
+                        "id": f"{home}x{away}".replace(" ", "").lower(),
+                        "match": f"{home} x {away}",
+                        "home": home,
+                        "away": away,
+                        "time": hora,
+                        "source": "GE"
+                    })
+                except: continue
+    except: pass
+    return jogos
+
+# ================= UNIFICADOR (O GESTOR) =================
+async def get_hybrid_schedule():
+    # Roda os dois ao mesmo tempo (Paralelismo)
+    task1 = fetch_api_schedule()
+    task2 = fetch_ge_scraper()
+    results = await asyncio.gather(task1, task2)
+    
+    lista_api = results[0]
+    lista_ge = results[1]
+    
+    # DEDUPLICAÇÃO (Prioriza GE porque costuma ser mais atualizado no horário BR)
+    agenda_final = {}
+    
+    # Adiciona API primeiro
+    for j in lista_api:
+        agenda_final[j['id']] = j
+        
+    # Adiciona GE (sobrescreve ou adiciona novos)
+    for j in lista_ge:
+        # Se já existe, atualizamos só se a fonte anterior não era GE (GE tem prioridade visual)
+        agenda_final[j['id']] = j
+            
+    # Converte de volta para lista
+    lista_limpa = list(agenda_final.values())
+    
+    # Ordena por horário (se possível)
+    lista_limpa.sort(key=lambda x: x['time'])
+    
+    return lista_limpa[:15] # Manda os 15 primeiros jogos do dia
+
+# ================= IA - ANÁLISE BLINDADA (2026) =================
+async def analyze_match(home, away):
+    if not model: return {"player": "Destaque", "market": "Over 2.5 Gols"}
+    
+    prompt = f"""
+    Data: 19 de Fevereiro de 2026.
+    Jogo: {home} x {away}.
+    
+    Tarefa 1: Nome do ATACANTE TITULAR do {home} HOJE.
+    (Cuidado: Mastriani saiu do Athletico. Pablo saiu. Use dados de 2026. Se for Athletico, pense em Canobbio ou o 9 atual).
+    
+    Tarefa 2: Mercado Estatístico (Apenas 1):
+    [Vitória Casa, Vitória Fora, +8.5 Escanteios, +4.5 Cartões, Over 2.5 Gols, Ambas Marcam].
+    
+    Responda: JOGADOR | MERCADO
     """
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        return response.text.strip().replace('*', '')
+        text = response.text.strip().replace('*', '')
+        if "|" in text:
+            p = text.split("|")
+            return {"player": p[0].strip(), "market": p[1].strip()}
+        return {"player": "Camisa 9", "market": "Over 2.5 Gols"}
     except:
-        if "Athletico" in team_name: return "Canobbio"
-        return "Camisa 9"
+        return {"player": "Destaque", "market": "Over 2.5 Gols"}
 
-async def get_market_analysis(home_team, away_team):
-    if not model: return "Over 2.5 Gols"
-    opcoes = ["Vitória do Mandante", "Vitória do Visitante", "Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols", "Ambas Marcam"]
-    random.shuffle(opcoes)
-    lista = ", ".join(opcoes)
-    prompt = f"Analise {home_team} x {away_team}. Escolha o mercado mais provável. Apenas uma opção: {lista}"
-    try:
-        response = await asyncio.to_thread(model.generate_content, prompt)
-        linha = response.text.strip().replace('*', '')
-        return linha if linha in opcoes else "Over 2.5 Gols"
-    except:
-        return "Over 2.5 Gols"
-
-def format_game_analysis(game, jogador_real, mercado_ia):
-    prop = f"🎯 <b>Player Prop:</b> {jogador_real} p/ marcar"
-    return f"🏆 <b>{game['league']}</b>\n⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n📊 <b>Tendência:</b> {mercado_ia}\n"
+def format_game(game, analysis):
+    icon = "🌐" if game['source'] == "GE" else "📡"
+    return (
+        f"{icon} <b>Fonte: {game['source']}</b>\n"
+        f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n"
+        f"🎯 <b>Prop:</b> {analysis['player']} p/ marcar\n"
+        f"📊 <b>Tendência:</b> {analysis['market']}\n"
+    )
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V212")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V215 HIBRIDO")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
-def get_main_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Ver Grade da API", callback_data="fut_deep")]])
+def get_menu(): return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Grade Híbrida (Site + API)", callback_data="fut_deep")]])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦁 <b>BOT V212 ONLINE</b>\nMostrando TUDO que a API entregar.", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    await u.message.reply_text("🦁 <b>BOT V215 ONLINE</b>\nO Híbrido: API + Site do Globo Esporte juntos.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
-async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query; await q.answer()
+async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
     if q.data == "fut_deep":
-        status_msg = await q.message.reply_text("🔎 <b>Varrendo API sem filtros...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Acessando API e Site do GE...</b>", parse_mode=ParseMode.HTML)
         
-        jogos = await fetch_schedule_football_data()
+        jogos = await get_hybrid_schedule()
         
         if not jogos:
-            await status_msg.edit_text("❌ <b>A API retornou 0 jogos para hoje.</b>\n(Infelizmente sua chave não está cobrindo as ligas de hoje).")
+            await msg.edit_text("❌ <b>Grade vazia em AMBAS as fontes.</b>\n(Verifique se há jogos hoje ou se o site mudou).")
             return
 
-        texto_final = f"🔥 <b>JOGOS ENCONTRADOS ({len(jogos)})</b> 🔥\n\n"
+        txt = f"🔥 <b>JOGOS ENCONTRADOS ({len(jogos)})</b> 🔥\n\n"
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Processando {i}/{len(jogos)}...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"⏳ <b>Analisando {i}/{len(jogos)}...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            jogador = await get_player_smart(g['home'])
-            mercado = await get_market_analysis(g['home'], g['away'])
-            
-            texto_final += format_game_analysis(g, jogador, mercado) + "━━━━━━━━━━━━━━━━\n"
-            await asyncio.sleep(4)
+            analysis = await analyze_match(g['home'], g['away'])
+            txt += format_game(g, analysis) + "━━━━━━━━━━━━━━━━\n"
+            await asyncio.sleep(2)
 
-        await status_msg.edit_text("✅ <b>Postado!</b>", parse_mode=ParseMode.HTML)
-        await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
+        await msg.edit_text("✅ <b>Postado!</b>", parse_mode=ParseMode.HTML)
+        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
 
 def main():
     threading.Thread(target=run_server, daemon=True).start()
