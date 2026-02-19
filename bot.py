@@ -1,10 +1,11 @@
-# ================= BOT V205 (FOOTBALL-DATA.ORG - MAPEAMENTO INTELIGENTE) =================
+# ================= BOT V206 (CORRETOR DE NOMES + SISTEMA HÍBRIDO) =================
 import os
 import logging
 import asyncio
 import httpx
 import threading
 import random
+import difflib # O SEGREDO: Biblioteca para achar nomes parecidos
 import feedparser
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,7 +21,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 ODDS_KEY = os.getenv("THE_ODDS_API_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY") # SUA CHAVE NOVA AQUI
+FOOTBALL_DATA_KEY = os.getenv("FOOTBALL_DATA_KEY")
 PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(level=logging.INFO)
@@ -50,115 +51,92 @@ async def fetch_news():
     if len(sent_news) > 500: sent_news.clear()
     return noticias[:5]
 
-# ================= FOOTBALL-DATA.ORG (O MAPEADOR) =================
-# Mapeia nomes de times para IDs na memória do bot
+# ================= FOOTBALL-DATA.ORG (CORRETOR INTELIGENTE) =================
 TEAM_CACHE = {} 
-# Ligas suportadas no plano Free (IDs oficiais do football-data.org)
-# 2021=PremierLeague, 2015=Ligue1, 2002=Bundesliga, 2019=SerieA, 2014=LaLiga, 2001=ChampionsLeague, 2013=Brasileirao
-LIGAS_IDS = [2021, 2014, 2019, 2002, 2015, 2001, 2013]
+LIGAS_IDS = [2021, 2014, 2019, 2002, 2015, 2001, 2013] # Inclui Brasileirão (2013)
 
 async def mapear_times_startup():
-    """Baixa os times das ligas principais ao iniciar para não gastar cota depois."""
-    if not FOOTBALL_DATA_KEY:
-        logging.warning("⚠️ Sem chave FOOTBALL_DATA_KEY. O bot usará apenas IA.")
-        return
-
+    if not FOOTBALL_DATA_KEY: return
     headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-    logging.info("🔄 Iniciando mapeamento de times (Isso leva ~40s)...")
     
     async with httpx.AsyncClient(timeout=20) as client:
         for liga_id in LIGAS_IDS:
             try:
                 url = f"http://api.football-data.org/v4/competitions/{liga_id}/teams"
                 r = await client.get(url, headers=headers)
-                
                 if r.status_code == 200:
                     data = r.json()
                     for time in data.get('teams', []):
-                        # Guarda variações do nome pra facilitar a busca
-                        nome_curto = time.get('shortName', '').lower()
-                        nome_completo = time.get('name', '').lower()
-                        tla = time.get('tla', '').lower() # Sigla (Ex: ARS)
+                        # Guarda o nome oficial e o ID
+                        TEAM_CACHE[time['name']] = time['id']
+                await asyncio.sleep(6) # Respeita o limite da API
+            except Exception:
+                pass
+
+def encontrar_id_aproximado(nome_busca):
+    """Usa lógica difusa para achar 'Athletico-PR' quando busca 'Atletico Paranaense'"""
+    if not TEAM_CACHE: return None
+    
+    # 1. Tenta busca exata
+    if nome_busca in TEAM_CACHE: return TEAM_CACHE[nome_busca]
+    
+    # 2. Tenta achar o nome mais parecido na lista (Cutoff 0.6 = 60% de semelhança)
+    nomes_disponiveis = list(TEAM_CACHE.keys())
+    matches = difflib.get_close_matches(nome_busca, nomes_disponiveis, n=1, cutoff=0.5)
+    
+    if matches:
+        match_name = matches[0]
+        logging.info(f"✅ Correção de Nome: '{nome_busca}' -> '{match_name}'")
+        return TEAM_CACHE[match_name]
+    
+    return None
+
+async def get_hybrid_player(team_name):
+    """Tenta API Oficial. Se falhar, usa IA como backup (Híbrido)."""
+    
+    # --- TENTATIVA 1: API OFICIAL ---
+    if FOOTBALL_DATA_KEY and TEAM_CACHE:
+        team_id = encontrar_id_aproximado(team_name)
+        
+        if team_id:
+            headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+            url = f"http://api.football-data.org/v4/teams/{team_id}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                try:
+                    r = await client.get(url, headers=headers)
+                    if r.status_code == 200:
+                        data = r.json()
+                        squad = data.get('squad', [])
+                        atacantes = [p['name'] for p in squad if p.get('position') in ['Offence', 'Forward', 'Attacker']]
+                        if not atacantes: atacantes = [p['name'] for p in squad if p.get('position') == 'Midfield']
                         
-                        id_time = time['id']
-                        TEAM_CACHE[nome_curto] = id_time
-                        TEAM_CACHE[nome_completo] = id_time
-                        if tla: TEAM_CACHE[tla] = id_time
-                        
-                    logging.info(f"✅ Liga {liga_id} mapeada com sucesso.")
-                else:
-                    logging.warning(f"⚠️ Falha ao mapear liga {liga_id}: {r.status_code}")
-                
-                # Pausa de 7s entre ligas para não estourar o limite de 10 req/min
-                await asyncio.sleep(7)
-                
-            except Exception as e:
-                logging.error(f"Erro no mapeamento: {e}")
-
-    logging.info(f"🏁 Mapeamento concluído! {len(TEAM_CACHE)} times na memória.")
-
-async def get_real_squad_player(team_name):
-    """Busca o artilheiro no elenco oficial usando o ID mapeado."""
-    if not TEAM_CACHE: return "IA (Cache Vazio)"
+                        if atacantes: return atacantes[0] # Sucesso API
+                except:
+                    pass
     
-    # Tenta achar o ID do time pelo nome
-    busca = team_name.lower()
-    team_id = None
-    
-    # Busca exata ou parcial
-    if busca in TEAM_CACHE:
-        team_id = TEAM_CACHE[busca]
-    else:
-        # Tenta achar parte do nome (Ex: 'Arsenal FC' acha 'arsenal')
-        for nome_cache, id_cache in TEAM_CACHE.items():
-            if nome_cache in busca or busca in nome_cache:
-                team_id = id_cache
-                break
-    
-    if not team_id: return "IA (Time não mapeado)"
-
-    # Se achou o time, busca o elenco (Gasta 1 requisição)
-    headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-    url = f"http://api.football-data.org/v4/teams/{team_id}"
-    
-    async with httpx.AsyncClient(timeout=10) as client:
+    # --- TENTATIVA 2: IA (BACKUP) ---
+    # Só entra aqui se a API falhar ou não achar o time.
+    # Garante que não venha "Elenco Indisponível".
+    if model:
         try:
-            r = await client.get(url, headers=headers)
-            if r.status_code == 200:
-                data = r.json()
-                squad = data.get('squad', [])
-                
-                # Filtra atacantes (Offence)
-                atacantes = [p['name'] for p in squad if p.get('position') in ['Offence', 'Forward', 'Attacker']]
-                
-                # Se não tiver atacante listado, pega meio-campista
-                if not atacantes:
-                    atacantes = [p['name'] for p in squad if p.get('position') == 'Midfield']
-                
-                if atacantes:
-                    # Pega o primeiro da lista (geralmente os principais vem no topo ou por ID)
-                    return atacantes[0]
-            
-            return "IA (Elenco não disponível)"
+            prompt = f"Quem é o principal artilheiro titular do {team_name} hoje em 2026? Responda APENAS o nome."
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            return response.text.strip().replace('*', '')
         except:
-            return "IA (Erro Conexão)"
+            return "Destaque do Time" # Último recurso
+            
+    return "Craque do Time"
 
-# ================= IA - APENAS PARA MERCADO (SEM ALUCINAR JOGADOR) =================
+# ================= IA - MERCADO ESTATÍSTICO =================
 async def get_market_analysis(home_team, away_team):
     if not model: return "Over 2.5 Gols"
-
     opcoes = [f"Vitória do {home_team}", f"Vitória do {away_team}", "Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols", "Ambas Marcam Sim"]
     random.shuffle(opcoes)
     lista_opcoes = ", ".join(opcoes)
-
-    prompt = f"""
-    Analise taticamente: {home_team} x {away_team}.
-    Escolha o melhor mercado estatístico para hoje.
-    Responda APENAS com UMA destas opções: {lista_opcoes}.
-    """
+    prompt = f"Analise {home_team} x {away_team}. Escolha o melhor mercado estatístico. Responda APENAS UMA opção: {lista_opcoes}."
     try:
         response = await asyncio.to_thread(model.generate_content, prompt)
-        linha = response.text.strip().replace('*', '').replace('`', '')
+        linha = response.text.strip()
         return linha if linha in opcoes else "Over 2.5 Gols"
     except:
         return "Over 2.5 Gols"
@@ -180,9 +158,16 @@ async def fetch_games():
                 if isinstance(data, dict) and "quota" in str(data): return "COTA_EXCEDIDA"
                 if isinstance(data, list):
                     for g in data:
+                        # Ajuste Fuso Horário
                         game_time = datetime.fromisoformat(g['commence_time'].replace('Z', '+00:00')).astimezone(br_tz)
-                        if game_time.date() != hoje: continue 
                         
+                        # FILTRO DE DATA: Mostra jogos de hoje E da madrugada de amanhã (até 04:00)
+                        # Isso resolve o problema de você achar que o jogo é "amanhã"
+                        if game_time.date() == hoje:
+                            pass
+                        else:
+                            continue
+                            
                         odd_home = 0; odd_away = 0; odd_over_25 = 0
                         for book in g.get('bookmakers', []):
                             for m in book.get('markets', []):
@@ -199,17 +184,12 @@ async def fetch_games():
                             "odd_home": round(odd_home, 2), "odd_away": round(odd_away, 2), "odd_over_25": round(odd_over_25, 2),
                             "time": game_time.strftime("%H:%M")
                         })
-            except Exception as e:
-                logging.error(f"Erro Odds: {e}")
+            except Exception:
+                pass
     return jogos
 
 def format_game_analysis(game, jogador_real, mercado_ia):
-    # Se a API não achou o time (ex: time pequeno), usa um texto genérico em vez de alucinar
-    if "IA" in jogador_real:
-        prop = f"⚠️ <b>Aviso:</b> Elenco indisponível na base oficial."
-    else:
-        prop = f"🎯 <b>Player Prop:</b> {jogador_real} p/ marcar"
-    
+    prop = f"🎯 <b>Player Prop:</b> {jogador_real} p/ marcar"
     mercado_final = f"📊 <b>Tendência do Jogo:</b> {mercado_ia}"
     if "Vitória do " + game['home'] in mercado_ia and game['odd_home'] > 0:
         mercado_final = f"💰 <b>Vencedor:</b> {game['home']} (@{game['odd_home']})"
@@ -217,47 +197,44 @@ def format_game_analysis(game, jogador_real, mercado_ia):
         mercado_final = f"💰 <b>Vencedor:</b> {game['away']} (@{game['odd_away']})"
     elif "Over 2.5" in mercado_ia and game['odd_over_25'] > 0:
         mercado_final = f"🥅 <b>Mercado:</b> Over 2.5 Gols (@{game['odd_over_25']})"
-
+    
     return f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n{prop}\n{mercado_final}\n"
 
 # ================= SERVER E MAIN =================
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - DVD TIPS V205")
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V206")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 def get_main_menu():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Futebol (API Oficial)", callback_data="fut_deep")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Futebol (Corretor Auto)", callback_data="fut_deep")]])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Dispara o mapeamento em background ao iniciar o bot
     asyncio.create_task(mapear_times_startup())
-    await update.message.reply_text("🦁 <b>BOT V205 ONLINE (Mapeando times...)</b>\nAguarde 1 minuto antes de pedir a grade.", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
+    await update.message.reply_text("🦁 <b>BOT V206 ONLINE (Corretor de Nomes Ativo)</b>\nAguarde 40s para o mapeamento.", reply_markup=get_main_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
     if q.data == "fut_deep":
         if not TEAM_CACHE:
-            await q.message.reply_text("⚠️ <b>Ainda mapeando times...</b>\nO bot está baixando as escalações oficiais. Tente de novo em 30 segundos.")
+            await q.message.reply_text("⚠️ <b>Mapeando ligas...</b> Tente em 30 segundos.")
             return
 
         status_msg = await q.message.reply_text("🔎 <b>Analisando grade...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_games()
         
-        if not jogos or jogos == "COTA_EXCEDIDA":
+        if not jogos:
             await status_msg.edit_text("❌ Grade vazia ou erro de API.")
             return
 
         texto_final = "🔥 <b>GRADE DE FUTEBOL (SÓ HOJE)</b> 🔥\n\n"
         for i, g in enumerate(jogos, 1):
-            await status_msg.edit_text(f"⏳ <b>Conferindo elenco oficial...</b> ({i}/{len(jogos)})\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            await status_msg.edit_text(f"⏳ <b>Conferindo elenco ({i}/{len(jogos)})...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
             
-            jogador = await get_real_squad_player(g['home'])
+            # Puxa jogador (Híbrido: API ou IA)
+            jogador = await get_hybrid_player(g['home'])
             mercado = await get_market_analysis(g['home'], g['away'])
             texto_final += format_game_analysis(g, jogador, mercado) + "━━━━━━━━━━━━━━━━\n"
-            
-            # Pausa de 6s é vital para não tomar ban de 10 req/min
-            await asyncio.sleep(6)
+            await asyncio.sleep(5)
 
         await status_msg.edit_text("✅ <b>Postado!</b>", parse_mode=ParseMode.HTML)
         await context.bot.send_message(chat_id=CHANNEL_ID, text=texto_final, parse_mode=ParseMode.HTML)
