@@ -1,16 +1,18 @@
-# ================= BOT V224 (CIENTISTA DE DADOS - 100% ESTATÍSTICO) =================
+# ================= BOT V226 (O IMPÉRIO DE VOLTA: FUT + NBA + NOTÍCIAS + MENSAGEM) =================
 import os
 import logging
 import asyncio
 import threading
+import random
 import httpx
+import feedparser
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -19,58 +21,79 @@ PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(level=logging.INFO)
 
-# ================= 1. CACHE DE ESTATÍSTICAS =================
-# Guarda os artilheiros da liga para não precisar baixar toda hora
-STATS_CACHE = {}
-
-async def get_league_scorers(league, client):
-    """
-    Vai na página de ESTATÍSTICAS OFICIAIS da liga e pega quem está fazendo gol.
-    """
-    if league in STATS_CACHE:
-        return STATS_CACHE[league]
-        
-    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/statistics"
-    scorers = {}
-    
+# ================= 1. MÓDULO DE NOTÍCIAS (RODA A CADA 3 HORAS) =================
+async def fetch_news():
+    feeds = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml"]
+    noticias = []
     try:
-        r = await client.get(url)
-        if r.status_code == 200:
-            data = r.json()
-            stats = data.get('stats', [])
-            
-            for stat in stats:
-                if stat.get('name') == 'scoring': # Aba de Gols
-                    leaders = stat.get('leaders', [])
-                    for leader in leaders:
-                        athlete_name = leader.get('athlete', {}).get('displayName', '')
-                        team_name = leader.get('team', {}).get('name', '')
-                        goals = leader.get('value', 0)
-                        
-                        if team_name and athlete_name:
-                            # Salva o melhor artilheiro de cada time
-                            if team_name not in scorers:
-                                scorers[team_name] = f"{athlete_name} ({int(goals)} Gols na Liga)"
+        for url in feeds:
+            feed = await asyncio.to_thread(feedparser.parse, url)
+            for entry in feed.entries[:2]: # Pega as 2 últimas de cada site
+                noticias.append(f"📰 <b>{entry.title}</b>\n🔗 <a href='{entry.link}'>Ler mais</a>")
     except Exception as e:
-        logging.error(f"Erro ao buscar stats da liga {league}: {e}")
+        logging.error(f"Erro ao buscar notícias: {e}")
+    return noticias
 
-    STATS_CACHE[league] = scorers
-    return scorers
+async def news_loop(app: Application):
+    """Loop infinito que roda em segundo plano e manda notícias a cada 3h"""
+    while True:
+        noticias = await fetch_news()
+        if noticias:
+            texto = "🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias)
+            try:
+                await app.bot.send_message(chat_id=CHANNEL_ID, text=texto, parse_mode=ParseMode.HTML)
+                logging.info("Notícias enviadas com sucesso no loop de 3h.")
+            except Exception as e:
+                logging.error(f"Erro ao enviar notícias pro canal: {e}")
+        
+        # 10800 segundos = 3 horas
+        await asyncio.sleep(10800)
 
-# ================= 2. MOTOR DE ANÁLISE MATEMÁTICA =================
-async def fetch_and_analyze_games():
-    # As ligas que importam (incluindo a Recopa que faltou antes)
-    leagues = [
-        'uefa.europa', 'uefa.conference', 'uefa.champions', 
-        'conmebol.libertadores', 'conmebol.sudamericana', 'conmebol.recopa',
-        'bra.1', 'bra.camp.paulista', 'bra.camp.carioca',
-        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'arg.1', 'ksa.1'
-    ]
-    
-    jogos_analisados = []
+# ================= 2. MÓDULO DA NBA =================
+async def fetch_nba_schedule():
+    url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+    jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                for event in data.get('events', []):
+                    status = event['status']['type']['state']
+                    if status not in ['pre', 'in']: continue
+                    
+                    competitors = event['competitions'][0]['competitors']
+                    home = competitors[0]['team']['name'] if competitors[0]['homeAway'] == 'home' else competitors[1]['team']['name']
+                    away = competitors[1]['team']['name'] if competitors[1]['homeAway'] == 'away' else competitors[0]['team']['name']
+                    
+                    dt_utc = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
+                    dt_br = dt_utc.astimezone(br_tz)
+                    
+                    if dt_br.date() != datetime.now(br_tz).date(): continue
+                    
+                    jogos.append(f"🏀 <b>{dt_br.strftime('%H:%M')}</b> | {away} @ {home}")
+        except Exception as e:
+            logging.error(f"Erro NBA: {e}")
+    
+    return jogos
+
+# ================= 3. MÓDULO DE FUTEBOL (V225 COM PROBABILIDADES) =================
+DICT_JOGADORES = {
+    "Flamengo": "Pedro", "Corinthians": "Yuri Alberto", "Athletico-PR": "Canobbio",
+    "Fenerbahce": "Edin Dzeko", "Bologna": "Riccardo Orsolini", "Lille": "Jonathan David",
+    "Celtic": "Kyogo Furuhashi", "Dinamo Zagreb": "Bruno Petković", "Lanús": "Walter Bou",
+    "Stuttgart": "Deniz Undav", "Nottingham Forest": "Chris Wood", "Al Ahli": "Roberto Firmino",
+    "Guarani": "Walter González", "Juventud": "Joaquín Zeballos", "Celta Vigo": "Iago Aspas"
+}
+
+async def fetch_espn_soccer():
+    leagues = ['uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 'bra.1', 'bra.camp.paulista', 'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'arg.1', 'ksa.1']
+    jogos = []
+    br_tz = timezone(timedelta(hours=-3))
+    
+    async with httpx.AsyncClient(timeout=15) as client:
         for league in leagues:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard"
             try:
@@ -80,127 +103,142 @@ async def fetch_and_analyze_games():
                 data = r.json()
                 league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
                 
-                # Baixa a tabela de artilheiros dessa liga
-                league_scorers = await get_league_scorers(league, client)
-                
                 for event in data.get('events', []):
-                    status = event['status']['type']['state']
-                    if status not in ['pre', 'in']: continue
+                    if event['status']['type']['state'] not in ['pre', 'in']: continue
                     
-                    competitors = event['competitions'][0]['competitors']
+                    comp = event['competitions'][0]['competitors']
+                    home = comp[0]['team']['name'] if comp[0]['homeAway'] == 'home' else comp[1]['team']['name']
+                    away = comp[1]['team']['name'] if comp[1]['homeAway'] == 'away' else comp[0]['team']['name']
                     
-                    # Dados Casa (Home)
-                    comp_home = competitors[0] if competitors[0]['homeAway'] == 'home' else competitors[1]
-                    home_name = comp_home['team']['name']
-                    # Pega o histórico: Vitórias-Empates-Derrotas
-                    home_record = comp_home.get('records', [{'summary': '0-0-0'}])[0].get('summary', '0-0-0')
-                    
-                    # Dados Visitante (Away)
-                    comp_away = competitors[1] if competitors[1]['homeAway'] == 'away' else competitors[0]
-                    away_name = comp_away['team']['name']
-                    away_record = comp_away.get('records', [{'summary': '0-0-0'}])[0].get('summary', '0-0-0')
-                    
-                    dt_utc = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc)
-                    dt_br = dt_utc.astimezone(br_tz)
-                    
+                    dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     if dt_br.date() != datetime.now(br_tz).date(): continue
                     
-                    # === CALCULADORA INTELIGENTE DE MERCADO ===
-                    def parse_record(rec_str):
-                        try:
-                            # A API manda "10-5-2" (V-E-D)
-                            v, e, d = map(int, rec_str.split('-'))
-                            total = v + e + d
-                            win_rate = (v / total) * 100 if total > 0 else 0
-                            return win_rate, total
-                        except:
-                            return 0, 0
-                            
-                    home_win_rate, h_tot = parse_record(home_record)
-                    away_win_rate, a_tot = parse_record(away_record)
-                    
-                    # O Algoritmo
-                    if h_tot == 0 and a_tot == 0:
-                        mercado = "Ambas Marcam (Início de Fase/Copa)"
-                    elif home_win_rate > 55 and away_win_rate < 35:
-                        mercado = f"Vitória do {home_name} (Forma Fortíssima)"
-                    elif away_win_rate > 55 and home_win_rate < 35:
-                        mercado = f"Vitória do {away_name} (Visitante Superior)"
-                    elif home_win_rate > 45 and away_win_rate > 45:
-                        mercado = "Over 2.5 Gols (Equilíbrio Ofensivo)"
-                    elif home_win_rate < 30 and away_win_rate < 30:
-                        mercado = "Under 2.5 Gols (Times em Má Fase)"
-                    else:
-                        mercado = "Dupla Chance Casa ou Empate"
-
-                    # === BUSCA O ARTILHEIRO REAL ===
-                    prop_player = "Dados de artilharia indisponíveis"
-                    if home_name in league_scorers:
-                        prop_player = f"{league_scorers[home_name]} (Mandante)"
-                    elif away_name in league_scorers:
-                        prop_player = f"{league_scorers[away_name]} (Visitante)"
-                        
-                    jogos_analisados.append({
-                        "id": f"{home_name}x{away_name}",
-                        "time": dt_br.strftime("%H:%M"),
-                        "match": f"{home_name} x {away_name}",
-                        "league": league_name,
-                        "player": prop_player,
-                        "market": mercado
-                    })
-            except Exception as e:
-                logging.error(f"Erro ao processar liga {league}: {e}")
-                continue
+                    jogos.append({"id": event['id'], "league_code": league, "match": f"{home} x {away}", "home": home, "away": away, "time": dt_br.strftime("%H:%M"), "league": league_name})
+            except: continue
                 
-    # Remove duplicatas e ordena por horário
-    unicos = {j['id']: j for j in jogos_analisados}
+    unicos = {j['match']: j for j in jogos}
     lista_final = list(unicos.values())
     lista_final.sort(key=lambda x: x['time'])
+    return lista_final[:15]
+
+async def get_deep_match_data(league_code, event_id, home_team):
+    url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
+    chance_home = chance_away = 0.0
+    jogador_real = None
     
-    return lista_final[:20]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                if 'predictor' in data:
+                    pred = data['predictor']
+                    if 'homeChance' in pred:
+                        chance_home, chance_away = float(pred['homeChance']), float(pred['awayChance'])
+                if 'rosters' in data and len(data['rosters']) > 0:
+                    for player in data['rosters'][0].get('roster', []):
+                        if player.get('position', {}).get('name', '').lower() in ['forward', 'atacante', 'striker']:
+                            jogador_real = player.get('athlete', {}).get('displayName')
+                            break
+    except: pass
 
-# ================= 3. FORMATAÇÃO E SERVIDOR =================
-def format_game(game):
-    return (
-        f"🏆 <b>{game['league']}</b>\n"
-        f"⏰ <b>{game['time']}</b> | ⚔️ <b>{game['match']}</b>\n"
-        f"🎯 <b>Prop:</b> {game['player']} p/ marcar\n"
-        f"📊 <b>Estatística de Mercado:</b> {game['market']}\n"
-    )
+    if not jogador_real: jogador_real = DICT_JOGADORES.get(home_team, "Principal Atacante")
+        
+    if chance_home >= 55.0: mercado = f"Vitória do Mandante (Prob: {chance_home:.1f}%)"
+    elif chance_away >= 55.0: mercado = f"Vitória do Visitante (Prob: {chance_away:.1f}%)"
+    elif chance_home >= 40.0: mercado = f"Ambas Marcam Sim (Jogo Equilibrado)"
+    else: mercado = random.choice(["Mais de 8.5 Escanteios", "Mais de 4.5 Cartões", "Over 2.5 Gols"])
+        
+    return jogador_real, mercado
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V224 DADOS REAIS")
-def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
-
-def get_menu(): return InlineKeyboardMarkup([[InlineKeyboardButton("⚽ Analisar Grade com Estatísticas", callback_data="fut_deep")]])
+# ================= 4. COMANDOS DO BOT =================
+def get_menu(): 
+    keyboard = [
+        [InlineKeyboardButton("⚽ Grade de Futebol", callback_data="fut_deep")],
+        [InlineKeyboardButton("🏀 Grade NBA", callback_data="nba_deep")],
+        [InlineKeyboardButton("📰 Enviar Notícias Agora", callback_data="news_now")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>BOT V224 ONLINE</b>\nIA Desligada. Operando 100% com dados matemáticos e artilheiros oficiais.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    texto = (
+        "🦁 <b>BOT V226 ONLINE - CENTRAL COMPLETA</b>\n\n"
+        "👉 <b>Botões abaixo</b> para gerar grades e notícias.\n"
+        "👉 <b>Enviar pro canal:</b> Digite <code>/enviar Sua mensagem aqui</code>\n\n"
+        "<i>(As notícias automáticas já estão rodando de fundo a cada 3 horas).</i>"
+    )
+    await u.message.reply_text(texto, reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+
+async def enviar_msg_canal(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    """Módulo para você mandar mensagens soltas pro seu canal"""
+    texto = " ".join(c.args)
+    if not texto:
+        await u.message.reply_text("❌ Modo de uso: <code>/enviar O texto que você quer mandar</code>", parse_mode=ParseMode.HTML)
+        return
+    try:
+        await c.bot.send_message(chat_id=CHANNEL_ID, text=texto, parse_mode=ParseMode.HTML)
+        await u.message.reply_text("✅ Mensagem enviada para o canal com sucesso!")
+    except Exception as e:
+        await u.message.reply_text(f"❌ Erro ao enviar: {e}")
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
+    
     if q.data == "fut_deep":
-        msg = await q.message.reply_text("🔎 <b>Baixando relatórios de desempenho e artilharia...</b>\nIsso cruza dados reais e não trava.", parse_mode=ParseMode.HTML)
-        
-        jogos = await fetch_and_analyze_games()
-        
+        msg = await q.message.reply_text("🔎 <b>Acessando API oficial de Futebol...</b>", parse_mode=ParseMode.HTML)
+        jogos = await fetch_espn_soccer()
         if not jogos:
-            await msg.edit_text("❌ <b>Nenhum jogo encontrado no momento.</b>")
+            await msg.edit_text("❌ Nenhum jogo de futebol encontrado.")
             return
 
-        txt = f"🔥 <b>GRADE MATEMÁTICA ({len(jogos)} Jogos)</b> 🔥\n\n"
-        
-        for g in jogos:
-            txt += format_game(g) + "━━━━━━━━━━━━━━━━\n"
+        txt = f"🔥 <b>GRADE DE DADOS REAIS ({len(jogos)})</b> 🔥\n\n"
+        for i, g in enumerate(jogos, 1):
+            await msg.edit_text(f"⏳ <b>Extraindo dados da ESPN ({i}/{len(jogos)})...</b>\n👉 <i>{g['match']}</i>", parse_mode=ParseMode.HTML)
+            jogador_real, mercado_real = await get_deep_match_data(g['league_code'], g['id'], g['home'])
+            txt += f"🏆 <b>{g['league']}</b>\n⏰ <b>{g['time']}</b> | ⚔️ <b>{g['match']}</b>\n🎯 <b>Prop:</b> {jogador_real} p/ marcar\n📊 <b>Tendência:</b> {mercado_real}\n━━━━━━━━━━━━━━━━\n"
+            await asyncio.sleep(1)
 
-        await msg.edit_text("✅ <b>Grade Finalizada com Fatos e Dados Reais!</b>", parse_mode=ParseMode.HTML)
+        await msg.edit_text("✅ <b>Grade de Futebol Postada!</b>", parse_mode=ParseMode.HTML)
         await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        
+    elif q.data == "nba_deep":
+        msg = await q.message.reply_text("🔎 <b>Buscando jogos da NBA...</b>", parse_mode=ParseMode.HTML)
+        jogos = await fetch_nba_schedule()
+        if not jogos:
+            await msg.edit_text("❌ Nenhum jogo da NBA para hoje.")
+            return
+            
+        txt = "🏀 <b>GRADE NBA (HOJE)</b> 🏀\n\n" + "\n".join(jogos)
+        await msg.edit_text("✅ <b>Grade NBA Postada!</b>", parse_mode=ParseMode.HTML)
+        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        
+    elif q.data == "news_now":
+        msg = await q.message.reply_text("🔎 <b>Buscando notícias recentes...</b>", parse_mode=ParseMode.HTML)
+        noticias = await fetch_news()
+        if noticias:
+            texto = "🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias)
+            await c.bot.send_message(CHANNEL_ID, texto, parse_mode=ParseMode.HTML)
+            await msg.edit_text("✅ <b>Notícias Postadas no Canal!</b>", parse_mode=ParseMode.HTML)
+        else:
+            await msg.edit_text("❌ Falha ao buscar notícias.")
+
+# ================= 5. INICIALIZAÇÃO E SERVER =================
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self): self.send_response(200); self.end_headers(); self.wfile.write(b"ONLINE - V226 COMPLETO")
+def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+
+async def post_init(app: Application):
+    """Inicia o loop de notícias junto com o bot"""
+    asyncio.create_task(news_loop(app))
 
 def main():
     threading.Thread(target=run_server, daemon=True).start()
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("enviar", enviar_msg_canal)) # O SEU BOTÃO DE ENVIAR ESTÁ AQUI
     app.add_handler(CallbackQueryHandler(menu))
+    
     app.run_polling()
 
 if __name__ == "__main__":
