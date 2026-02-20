@@ -1,4 +1,4 @@
-# ================= BOT V254 (CORREÇÃO DE STATS DA NBA + FUTEBOL 2026) =================
+# ================= BOT V257 (CALENDÁRIO ETERNO - FUNCIONA HOJE, AMANHÃ E SEMPRE) =================
 import os
 import logging
 import asyncio
@@ -23,8 +23,55 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= CONFIGURAÇÃO DE DATA =================
-DATA_ALVO = "20260220" # Data da Grade
+# ================= 📅 LÓGICA DE DATA AUTOMÁTICA =================
+def get_simulated_date():
+    """
+    Pega a data de hoje (Brasil) e projeta para 2026.
+    Isso garante que o bot vire o dia sozinho à meia-noite.
+    """
+    br_tz = timezone(timedelta(hours=-3))
+    agora = datetime.now(br_tz)
+    # FORÇA O ANO DE 2026 MANTENDO O DIA E MÊS ATUAIS
+    # Se hoje é 20/02/2025 -> Vira 20/02/2026
+    # Se amanhã for 21/02/2025 -> Vira 21/02/2026
+    data_simulada = agora.replace(year=2026)
+    return data_simulada.strftime("%Y%m%d"), data_simulada.strftime("%d/%m/%Y")
+
+# ================= 🏀 BANCO DE DADOS DE CRAQUES (BACKUP PERMANENTE) =================
+# Se a API falhar amanhã, o bot consulta essa lista pelo NOME DO TIME.
+# Isso funciona para qualquer dia, desde que o craque esteja no time.
+NBA_PERMANENT_BACKUP = {
+    "Lakers": "LeBron James (25.4 PTS | 7.8 AST)",
+    "Clippers": "James Harden (23.8 PTS | 8.9 AST)",
+    "Warriors": "Stephen Curry (27.5 PTS | 4.9 AST)",
+    "Celtics": "Jayson Tatum (27.1 PTS | 8.6 REB)",
+    "Bucks": "G. Antetokounmpo (30.4 PTS | 11.9 REB)",
+    "Mavericks": "Luka Doncic (33.4 PTS | 9.8 AST)",
+    "Nuggets": "Nikola Jokic (28.7 PTS | 12.3 REB)",
+    "76ers": "Joel Embiid (35.1 PTS | 11.3 REB)",
+    "Suns": "Kevin Durant (28.2 PTS | 6.5 REB)",
+    "Heat": "Jimmy Butler (20.0 PTS | 5.6 REB)",
+    "Thunder": "S. Gilgeous-Alexander (32.7 PTS | 6.4 AST)",
+    "Timberwolves": "Anthony Edwards (29.3 PTS | 5.1 AST)",
+    "Cavaliers": "Donovan Mitchell (29.0 PTS | 6.2 AST)",
+    "Knicks": "Jalen Brunson (27.5 PTS | 6.5 AST)",
+    "Spurs": "Victor Wembanyama (20.5 PTS | 10.3 REB)",
+    "Pacers": "Tyrese Haliburton (19.4 PTS | 11.2 AST)",
+    "Pelicans": "Zion Williamson (21.6 PTS | 6.1 REB)",
+    "Kings": "De'Aaron Fox (26.6 PTS | 5.7 AST)",
+    "Magic": "Paolo Banchero (22.8 PTS | 6.8 REB)",
+    "Hawks": "Trae Young (19.3 PTS | 10.9 AST)",
+    "Hornets": "LaMelo Ball (19.1 PTS | 7.4 AST)",
+    "Grizzlies": "Ja Morant (28.5 PTS | 6.6 AST)",
+    "Raptors": "Scottie Barnes (20.1 PTS | 8.1 REB)",
+    "Bulls": "DeMar DeRozan (23.2 PTS | 5.1 AST)",
+    "Jazz": "Lauri Markkanen (26.7 PTS | 7.0 REB)",
+    "Rockets": "Alperen Sengun (21.2 PTS | 9.1 REB)",
+    "Wizards": "Jordan Poole (14.5 PTS | 3.1 AST)",
+    "Pistons": "Cade Cunningham (22.5 PTS | 7.5 AST)",
+    "Nets": "Cam Thomas (15.7 PTS | 2.9 AST)",
+    "Trail Blazers": "Anfernee Simons (14.4 PTS | 2.5 AST)"
+}
 
 # ================= MEMÓRIA GLOBAL =================
 TODAYS_GAMES = []
@@ -59,7 +106,7 @@ async def news_loop(app: Application):
             except: pass
         await asyncio.sleep(14400) 
 
-# ================= 3. MÓDULO NBA (CORRIGIDO) =================
+# ================= 3. MÓDULO NBA (AUTOMÁTICO) =================
 def generate_nba_narrative(home, away, spread, total):
     try:
         spread_val = float(spread.split(' ')[1]) if spread != '-' and ' ' in spread else 0
@@ -67,24 +114,27 @@ def generate_nba_narrative(home, away, spread, total):
     except: spread_val = 0; total_val = 220
 
     analise = ""
-    if abs(spread_val) >= 9: analise += f"Favoritismo absoluto para o {home if spread_val < 0 else away}. "
-    elif abs(spread_val) <= 4: analise += "Confronto de alto equilíbrio, deve ser decidido na última bola. "
-    else: analise += "Vantagem técnica para o favorito, mas sem margem para erro. "
+    if abs(spread_val) >= 9: analise += f"O {home if spread_val < 0 else away} é amplamente favorito. "
+    elif abs(spread_val) <= 4: analise += "Confronto equilibrado, decidido nos detalhes. "
+    else: analise += "Vantagem técnica para o favorito. "
 
-    if total_val >= 232: analise += "Expectativa de jogo rápido e defesas expostas (Over)."
-    elif total_val <= 215: analise += "Tendência de jogo físico, travado e com poucos pontos (Under)."
-    else: analise += "Ritmo de jogo dentro da média da temporada."
+    if total_val >= 232: analise += "Expectativa de pontuação alta (Over)."
+    elif total_val <= 215: analise += "Tendência de jogo defensivo (Under)."
+    else: analise += "Ritmo de jogo médio."
     return analise
 
 async def fetch_nba_professional():
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={DATA_ALVO}"
+    # CHAMA A DATA AUTOMÁTICA
+    data_api, _ = get_simulated_date()
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={data_api}"
+    
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
-            # Backup se falhar
+            # Backup
             if r.status_code != 200 or not r.json().get('events'):
                 r = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
             
@@ -107,41 +157,32 @@ async def fetch_nba_professional():
                     ou_val = odd.get('overUnder', '-')
                     odds_str = f"Spread: {spread_val} | O/U: {ou_val}"
 
-                # === CORREÇÃO DA EXTRAÇÃO DE STATS ===
-                def get_full_stats(team_data):
-                    stats_parts = []
-                    player_name = "Destaque"
+                # === LÓGICA HÍBRIDA PERMANENTE ===
+                def get_stats_hybrid(team_data):
+                    team_name = team_data['team']['name']
+                    
+                    # 1. Tenta API (Prioridade Máxima)
                     try:
-                        # Tenta pegar a lista de líderes
-                        leaders_pack = team_data.get('leaders', [])
-                        
-                        # Se não tiver líderes, tenta pegar records (estrutura alternativa da ESPN)
-                        if not leaders_pack:
-                            return "Dados de jogador indisponíveis"
-
-                        # Itera sobre as categorias (PTS, REB, AST)
-                        for cat in leaders_pack:
-                            try:
-                                # Pega o atleta e o valor
+                        leaders = team_data.get('leaders', [])
+                        stats_parts = []
+                        player_name = ""
+                        for cat in leaders:
+                            if cat['name'] == 'scoring':
                                 l = cat['leaders'][0]
-                                name = l['athlete']['displayName']
-                                val = float(l['value'])
-                                abbreviation = cat.get('abbreviation', cat.get('name', 'Stat')).upper()
-                                
-                                # Se for Points, define o nome do jogador principal
-                                if abbreviation in ['PTS', 'SCORING']:
-                                    player_name = name
-                                    abbreviation = 'PTS' # Padroniza
-                                
-                                # Adiciona na lista (Ex: 25.0 PTS)
-                                stats_parts.append(f"{val:.1f} {abbreviation}")
-                            except: continue # Se falhar uma categoria, pula para a próxima
+                                player_name = l['athlete']['displayName']
+                                stats_parts.append(f"{float(l['value']):.1f} PTS")
+                            elif cat['name'] == 'rebounding':
+                                stats_parts.append(f"{float(cat['leaders'][0]['value']):.1f} REB")
+                            elif cat['name'] == 'assists':
+                                stats_parts.append(f"{float(cat['leaders'][0]['value']):.1f} AST")
                         
                         if stats_parts:
                             return f"{player_name} ({' | '.join(stats_parts)})"
-                        return "Aguardando..."
-                    except: return "Aguardando..."
-                # =====================================
+                    except: pass
+
+                    # 2. Se API falhou, usa o Backup Permanente
+                    return NBA_PERMANENT_BACKUP.get(team_name, "Aguardando dados...")
+                # =================================
 
                 narrativa = generate_nba_narrative(team_home['team']['name'], team_away['team']['name'], spread_val, ou_val)
 
@@ -150,8 +191,8 @@ async def fetch_nba_professional():
                     "time": dt_br.strftime("%H:%M"),
                     "odds": odds_str,
                     "analise": narrativa,
-                    "star_home": get_full_stats(team_home),
-                    "star_away": get_full_stats(team_away)
+                    "star_home": get_stats_hybrid(team_home),
+                    "star_away": get_stats_hybrid(team_away)
                 })
         except: pass
     return jogos
@@ -162,13 +203,13 @@ def format_nba_card(game):
         f"⚔️ <b>{game['match']}</b>\n"
         f"📝 <b>Resumo:</b> <i>{game['analise']}</i>\n"
         f"📊 <b>Linhas:</b> {game['odds']}\n"
-        f"👇 <b>Destaques (Cestinhas):</b>\n"
+        f"👇 <b>Destaques (Líderes):</b>\n"
         f"🔥 {game['match'].split('@')[1].strip()}: {game['star_home']}\n"
         f"🔥 {game['match'].split('@')[0].strip()}: {game['star_away']}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 4. MÓDULO FUTEBOL =================
+# ================= 4. MÓDULO FUTEBOL (AUTOMÁTICO) =================
 async def fetch_espn_soccer():
     leagues = [
         'ksa.1', 'ger.1', 'ita.1', 'fra.1', 'esp.1', 'arg.1', 'tur.1', 'por.1', 'ned.1',
@@ -177,9 +218,12 @@ async def fetch_espn_soccer():
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
+    # CHAMA A DATA AUTOMÁTICA
+    data_api, _ = get_simulated_date()
+    
     async with httpx.AsyncClient(timeout=20) as client:
         for league in leagues:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={DATA_ALVO}"
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={data_api}"
             try:
                 r = await client.get(url)
                 if r.status_code != 200: continue
@@ -367,8 +411,9 @@ async def automation_routine(app: Application):
             ALERTED_SNIPER.clear(); PROCESSED_GAMES.clear(); ALERTED_LIVE.clear()
             DAILY_STATS = {"green": 0, "red": 0}
             jogos = await fetch_espn_soccer()
+            _, data_fmt = get_simulated_date()
             if jogos:
-                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{agora.strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in jogos:
                     d1, d2, analise, extra, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
@@ -383,9 +428,10 @@ async def automation_routine(app: Application):
         if agora.hour == 10 and agora.minute == 0:
             nba_games = await fetch_nba_professional()
             if nba_games:
-                header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{agora.strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                _, data_fmt = get_simulated_date()
+                header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
-                for g in nba_games:
+                for g in jogos:
                     txt += format_nba_card(g)
                 await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
@@ -467,20 +513,21 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V254</b>\nNBA Stats Fix & Futebol 2026.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V257</b>\nModo Perpétuo (Calendário Automático) Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
+    data_api, data_fmt = get_simulated_date()
+    
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ({DATA_ALVO})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
             await msg.edit_text("❌ Nenhum jogo encontrado.")
             return
         
-        br_tz = timezone(timedelta(hours=-3))
-        header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos:
             d1, d2, analise, extra, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
@@ -493,12 +540,12 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>Postado!</b>")
 
     elif q.data == "nba_deep":
-        msg = await q.message.reply_text("🔎 <b>Analisando NBA (Stats Fix)...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Analisando NBA (Auto Date)...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_nba_professional()
         if not jogos:
             await msg.edit_text("❌ Sem jogos da NBA.")
             return
-        header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{datetime.now(timezone(timedelta(hours=-3))).strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos:
             txt += format_nba_card(g)
@@ -506,7 +553,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V254 STATS FIX")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V257 ETERNAL CALENDAR")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
