@@ -1,4 +1,4 @@
-# ================= BOT V244 (MOTOR V236 RESTAURADO + VISUAL NOVO) =================
+# ================= BOT V245 (O FORÇADOR DE GRADE - TRAVA DE DATA OBRIGATÓRIA) =================
 import os
 import logging
 import asyncio
@@ -104,31 +104,39 @@ def format_nba_card(game):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 3. MÓDULO FUTEBOL (RESTAURADO E FUNCIONAL) =================
+# ================= 3. MÓDULO FUTEBOL (A MARRETA TÉCNICA) =================
 async def fetch_espn_soccer():
     leagues = [
         'uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 
         'bra.1', 'bra.camp.paulista', 'eng.1', 'eng.2', 'esp.1', 'esp.2', 
         'ita.1', 'ita.2', 'ger.1', 'ger.2', 'fra.1', 'fra.2', 
-        'arg.1', 'ksa.1', 'por.1', 'ned.1', 'tur.1'
+        'arg.1', 'ksa.1', 'por.1', 'ned.1', 'tur.1', 'bel.1'
     ]
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    # DATA FIXADA: Garante que a ESPN entregue os jogos de HOJE, ignorando fuso americano
-    today_str = datetime.now(br_tz).strftime("%Y%m%d")
+    # AQUI ESTÁ O SEGREDO: FORÇAR A DATA NO FORMATO QUE A API ENTENDE (YYYYMMDD)
+    # Se você tirar isso, ele busca o horário do servidor (EUA) e dá vazio de manhã.
+    today_str = datetime.now(br_tz).strftime("%Y%m%d") 
     
     async with httpx.AsyncClient(timeout=20) as client:
         for league in leagues:
-            # O SEGREDO: ?dates=YYYYMMDD
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={today_str}"
+            # TENTATIVA 1: COM DATA FIXA (PRIORIDADE)
+            url_forced = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={today_str}"
+            
             try:
-                r = await client.get(url)
-                if r.status_code != 200: continue
+                r = await client.get(url_forced)
                 data = r.json()
-                league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
                 
+                # Se falhar ou vier vazio, tenta sem data (Fallback)
+                if not data.get('events'):
+                    url_open = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard"
+                    r = await client.get(url_open)
+                    data = r.json()
+
                 if not data.get('events'): continue
+
+                league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
 
                 for event in data.get('events', []):
                     state = event['status']['type']['state']
@@ -144,20 +152,22 @@ async def fetch_espn_soccer():
                     
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     
-                    jogos.append({
-                        "id": event['id'], 
-                        "league_code": league, 
-                        "match": f"{home} x {away}", 
-                        "home": home, 
-                        "away": away, 
-                        "time": dt_br.strftime("%H:%M"), 
-                        "league": league_name,
-                        "status": state,
-                        "period": event['status']['period'],
-                        "clock": event['status']['displayClock'],
-                        "score_home": score_home,
-                        "score_away": score_away
-                    })
+                    # Filtra apenas jogos de HOJE (Segurança Extra)
+                    if dt_br.date() == datetime.now(br_tz).date():
+                        jogos.append({
+                            "id": event['id'], 
+                            "league_code": league, 
+                            "match": f"{home} x {away}", 
+                            "home": home, 
+                            "away": away, 
+                            "time": dt_br.strftime("%H:%M"), 
+                            "league": league_name,
+                            "status": state,
+                            "period": event['status']['period'],
+                            "clock": event['status']['displayClock'],
+                            "score_home": score_home,
+                            "score_away": score_away
+                        })
             except: continue
     
     unicos = {j['match']: j for j in jogos}
@@ -169,7 +179,6 @@ async def fetch_espn_soccer():
     return TODAYS_GAMES
 
 def generate_narrative(market_type, home, away):
-    # Texto bonito estilo SportyTrader
     random.seed(len(home) + len(away) + len(market_type))
     if "Vitória" in market_type:
         phrases = [
@@ -232,7 +241,8 @@ async def analyze_game_market(league_code, event_id, home, away):
     
     random.seed(int(event_id)) 
     
-    if league_code in ['ger.1', 'ned.1', 'ksa.1', 'tur.1', 'por.1']:
+    # Fallback Inteligente
+    if league_code in ['ger.1', 'ned.1', 'ksa.1', 'tur.1', 'por.1', 'bel.1']:
         m = "Over 2.5 Gols"
         return m, "Ambas Marcam: Sim", generate_narrative(m, home, away), extra_info, prob_home, prob_away
     elif league_code in ['arg.1', 'ita.1', 'bra.2', 'esp.2']:
@@ -413,16 +423,16 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V244</b>\nMotor de Busca Restaurado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V245</b>\nMotor Forçado Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text("🔎 <b>Gerando grade (Forçando Data Hoje)...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Gerando grade (Forçando Data de Hoje)...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
-            await msg.edit_text("❌ Nenhum jogo encontrado. (Verifique se é fim de temporada ou data FIFA).")
+            await msg.edit_text("❌ Nenhum jogo encontrado. (A grade pode abrir mais tarde).")
             return
         
         jogos_pre = [j for j in jogos if j['status'] == 'pre']
@@ -457,7 +467,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V244 RESTORE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V245 FORCED")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
