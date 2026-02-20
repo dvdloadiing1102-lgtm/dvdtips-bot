@@ -1,4 +1,4 @@
-# ================= BOT V248 (MODO BRUTO - CÓPIA DO DIAGNÓSTICO QUE FUNCIONOU) =================
+# ================= BOT V249 (CORREÇÃO DO CRASH 'KEYERROR: PERIOD') =================
 import os
 import logging
 import asyncio
@@ -21,9 +21,8 @@ PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(level=logging.INFO)
 
-# ================= CONFIGURAÇÃO CRÍTICA =================
-# A MESMA DATA QUE FUNCIONOU NO SEU DIAGNÓSTICO
-DATA_ALVO = "20260220" 
+# ================= CONFIGURAÇÃO =================
+DATA_ALVO = "20260220" # Data Travada
 
 # ================= MEMÓRIA GLOBAL =================
 TODAYS_GAMES = []
@@ -63,7 +62,7 @@ async def fetch_nba_professional():
             if r.status_code == 200:
                 data = r.json()
                 for event in data.get('events', []):
-                    # Aceita qualquer status para garantir que apareça
+                    if event['status']['type']['state'] not in ['pre', 'in']: continue
                     comp = event['competitions'][0]
                     t1 = comp['competitors'][0]
                     t2 = comp['competitors'][1]
@@ -108,28 +107,20 @@ def format_nba_card(game):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 3. MÓDULO FUTEBOL (MODO BRUTO) =================
+# ================= 3. MÓDULO FUTEBOL (CORRIGIDO O BUG DO LOG) =================
 async def fetch_espn_soccer():
-    # As mesmas ligas do diagnóstico
+    # Incluindo todas as ligas que apareceram no seu log e mais algumas
     leagues = [
-        'ksa.1', # Arábia (Al Okhdood)
-        'ger.1', # Bundesliga (Mainz)
-        'ita.1', # Serie A (Sassuolo)
-        'fra.1', # Ligue 1 (Brest)
-        'esp.1', # La Liga (Athletic)
-        'arg.1', # Argentina (Boca, Defensa)
-        'tur.1', # Turquia
-        'eng.1', 'eng.2', 'por.1', 'ned.1', 'bra.1', 'bra.camp.paulista', 
-        'uefa.europa', 'uefa.champions', 'conmebol.libertadores'
+        'ksa.1', 'ger.1', 'ita.1', 'fra.1', 'esp.1', 'arg.1', 'tur.1', 'por.1', 'ned.1',
+        'bra.1', 'bra.camp.paulista', 'eng.1', 'eng.2', 'uefa.europa', 'uefa.champions'
     ]
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    logging.info(f"--- INICIANDO BUSCA BRUTA PARA: {DATA_ALVO} ---")
+    logging.info(f"--- INICIANDO BUSCA V249 (FIXED) PARA: {DATA_ALVO} ---")
 
     async with httpx.AsyncClient(timeout=20) as client:
         for league in leagues:
-            # URL IDÊNTICA AO DIAGNÓSTICO
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={DATA_ALVO}"
             
             try:
@@ -142,7 +133,6 @@ async def fetch_espn_soccer():
                 league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
 
                 for event in data.get('events', []):
-                    # NÃO FILTRA STATUS. PEGA TUDO.
                     state = event['status']['type']['state']
                     
                     comp = event['competitions'][0]['competitors']
@@ -156,7 +146,13 @@ async def fetch_espn_soccer():
                     
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     
-                    # Adiciona SEM medo
+                    # === A CORREÇÃO DO SEU LOG ESTÁ AQUI ===
+                    # Antes: period = event['status']['period']  <-- ISSO QUEBRAVA SE O JOGO NÃO TIVESSE COMEÇADO
+                    # Agora: period = event['status'].get('period', 0) <-- ISSO RESOLVE
+                    
+                    period = event['status'].get('period', 0)
+                    clock = event['status'].get('displayClock', '00:00')
+                    
                     jogos.append({
                         "id": event['id'], 
                         "league_code": league, 
@@ -166,14 +162,14 @@ async def fetch_espn_soccer():
                         "time": dt_br.strftime("%H:%M"), 
                         "league": league_name,
                         "status": state,
-                        "period": event['status']['period'],
-                        "clock": event['status']['displayClock'],
+                        "period": period,
+                        "clock": clock,
                         "score_home": score_home,
                         "score_away": score_away
                     })
-                    logging.info(f"Jogo encontrado: {home} x {away} ({state})")
+                    logging.info(f"Jogo processado com sucesso: {home} x {away}")
             except Exception as e:
-                logging.error(f"Erro em {league}: {e}")
+                logging.error(f"Erro processando {league}: {e}")
                 continue
     
     unicos = {j['match']: j for j in jogos}
@@ -327,17 +323,18 @@ async def automation_routine(app: Application):
             DAILY_STATS = {"green": 0, "red": 0}
             jogos = await fetch_espn_soccer()
             if jogos:
-                # Na automação, mandamos TUDO que achou para a data
-                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{DATA_ALVO} (Simulação)</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-                txt = header
-                for g in jogos:
-                    d1, d2, analise, extra, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
-                    card = format_morning_card(g, d1, d2, analise, extra)
-                    if len(txt) + len(card) > 4000:
-                        await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
-                        txt = ""
-                    txt += card
-                if txt: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
+                jogos_pre = [j for j in jogos if j['status'] == 'pre']
+                if jogos_pre:
+                    header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{DATA_ALVO} (Simulação)</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                    txt = header
+                    for g in jogos_pre:
+                        d1, d2, analise, extra, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
+                        card = format_morning_card(g, d1, d2, analise, extra)
+                        if len(txt) + len(card) > 4000:
+                            await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
+                            txt = ""
+                        txt += card
+                    if txt: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
 
         if agora.hour == 10 and agora.minute == 0:
@@ -362,7 +359,7 @@ async def live_radar_routine(app: Application):
         if TODAYS_GAMES:
             await fetch_espn_soccer()
             for g in TODAYS_GAMES:
-                if g['status'] == 'in' and g['period'] >= 2 and g['id'] not in ALERTED_LIVE:
+                if g['status'] == 'in' and g.get('period', 0) >= 2 and g['id'] not in ALERTED_LIVE:
                     _, _, _, _, ph, pa = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
                     msg = None
                     if ph >= 60.0:
@@ -395,8 +392,8 @@ async def live_sniper_routine(app: Application):
     while True:
         agora = datetime.now(br_tz)
         if TODAYS_GAMES:
-            # Em modo bruto, não filtramos status 'pre' rigorosamente aqui, tentamos achar oportunidade em tudo
-            for g in TODAYS_GAMES:
+            jogos_pre = [j for j in TODAYS_GAMES if j['status'] == 'pre']
+            for g in jogos_pre:
                 if g['id'] in ALERTED_SNIPER: continue
                 try:
                     h, m = map(int, g['time'].split(':'))
@@ -428,7 +425,7 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V248</b>\nModo BRUTO (Sem filtros).", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V249</b>\nCorreção do Crash Aplicada. Pronto para rodar.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -439,9 +436,6 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         if not jogos:
             await msg.edit_text("❌ Nenhum jogo encontrado (API retornou vazio).")
             return
-        
-        # AQUI FOI A CORREÇÃO: Removi o filtro "if j['status'] == 'pre'".
-        # Se a API mandou o jogo, nós postamos.
         
         br_tz = timezone(timedelta(hours=-3))
         header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
@@ -470,7 +464,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V248 BRUTE FORCE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V249 FIXED KEYERROR")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
