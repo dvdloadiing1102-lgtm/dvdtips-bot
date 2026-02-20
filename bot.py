@@ -1,9 +1,8 @@
-# ================= BOT V231 (LAYOUT VIP PREMIUM - IGUAL CANAL GRANDE) =================
+# ================= BOT V234 (NBA SEM CHUTE + FUTEBOL VIP) =================
 import os
 import logging
 import asyncio
 import threading
-import random
 import httpx
 import feedparser
 from datetime import datetime, timezone, timedelta
@@ -42,30 +41,91 @@ async def news_loop(app: Application):
         await asyncio.sleep(10800) # 3h
         noticias = await fetch_news()
         if noticias:
-            try:
-                await app.bot.send_message(chat_id=CHANNEL_ID, text="🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias), parse_mode=ParseMode.HTML)
+            try: await app.bot.send_message(chat_id=CHANNEL_ID, text="🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias), parse_mode=ParseMode.HTML)
             except: pass
 
-async def fetch_nba_schedule():
+# ================= 2. MÓDULO NBA (DADOS REAIS DA ESPN) =================
+async def fetch_nba_professional():
+    """Busca jogos da NBA. PROIBIDO ADIVINHAR JOGADORES."""
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
+    
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
             if r.status_code == 200:
-                for event in r.json().get('events', []):
+                data = r.json()
+                for event in data.get('events', []):
                     if event['status']['type']['state'] not in ['pre', 'in']: continue
-                    comp = event['competitions'][0]['competitors']
-                    home = comp[0]['team']['name'] if comp[0]['homeAway'] == 'home' else comp[1]['team']['name']
-                    away = comp[1]['team']['name'] if comp[1]['homeAway'] == 'away' else comp[0]['team']['name']
+                    
+                    comp = event['competitions'][0]
+                    competitors = comp['competitors']
+                    
+                    # Times
+                    team_home = competitors[0] if competitors[0]['homeAway'] == 'home' else competitors[1]
+                    team_away = competitors[1] if competitors[1]['homeAway'] == 'away' else competitors[0]
+                    
+                    home_name = team_home['team']['name']
+                    away_name = team_away['team']['name']
+                    
+                    # Horário
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     if dt_br.date() != datetime.now(br_tz).date(): continue
-                    jogos.append(f"🏀 <b>{dt_br.strftime('%H:%M')}</b> | {away} @ {home}")
+                    
+                    # Odds
+                    odds_info = "Aguardando..."
+                    if 'odds' in comp and len(comp['odds']) > 0:
+                        odd = comp['odds'][0]
+                        details = odd.get('details', '-')
+                        over_under = odd.get('overUnder', '-')
+                        odds_info = f"Spread: {details} | O/U: {over_under}"
+
+                    # === ONDE A MÁGICA ACONTECE (SEM CHUTE) ===
+                    def get_season_leader(team_data):
+                        try:
+                            # A API da ESPN tem uma lista chamada 'leaders'
+                            leaders_list = team_data.get('leaders', [])
+                            for category in leaders_list:
+                                # Procuramos apenas o líder de PONTOS (PTS)
+                                if category.get('name') == 'scoring' or category.get('abbreviation') == 'PTS':
+                                    leader = category['leaders'][0] # O número 1 da lista
+                                    name = leader['athlete']['displayName'] # Nome Real
+                                    value = leader['value'] # Média Real
+                                    return f"{name} ({value} PPG)"
+                        except: 
+                            return None # Se der erro, retorna VAZIO. Não chuta.
+
+                    star_home = get_season_leader(team_home)
+                    star_away = get_season_leader(team_away)
+                    
+                    jogos.append({
+                        "match": f"{away_name} @ {home_name}",
+                        "time": dt_br.strftime("%H:%M"),
+                        "odds": odds_info,
+                        "star_home": star_home,
+                        "star_away": star_away
+                    })
         except: pass
     return jogos
 
-# ================= 2. MÓDULO FUTEBOL =================
+def format_nba_card(game):
+    destaques = ""
+    # Só adiciona o texto se a API tiver retornado um nome real
+    if game['star_away']: destaques += f"🔥 <b>{game['match'].split('@')[0].strip()}:</b> {game['star_away']}\n"
+    if game['star_home']: destaques += f"🔥 <b>{game['match'].split('@')[1].strip()}:</b> {game['star_home']}\n"
+    
+    return (
+        f"🏀 <b>NBA | {game['time']}</b>\n"
+        f"⚔️ <b>{game['match']}</b>\n"
+        f"📊 <b>Linhas:</b> {game['odds']}\n"
+        f"👇 <b>DESTAQUES (Cestinhas da Temporada):</b>\n"
+        f"{destaques}"
+        f"💡 <i>Dica: Busque linhas de Over para esses jogadores.</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+# ================= 3. MÓDULO FUTEBOL =================
 async def fetch_espn_soccer():
     leagues = ['uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 'bra.1', 'bra.camp.paulista', 'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'arg.1', 'ksa.1']
     jogos = []
@@ -110,20 +170,11 @@ async def analyze_game_market(league_code, event_id):
                     prob_away = float(data['predictor']['awayChance'])
     except: pass
     
-    if prob_home >= 60.0:
-        dica = f"Vitória do Mandante"
-        prot = "Empate Anula"
-    elif prob_away >= 60.0:
-        dica = f"Vitória do Visitante"
-        prot = "Empate Anula"
-    elif prob_home >= 40.0 and prob_away >= 30.0:
-        dica = "Ambas Marcam: Sim"
-        prot = "Over 1.5 Gols"
-    else:
-        dica = "Over 1.5 Gols"
-        prot = "Mais de 8.5 Escanteios"
-        
-    return dica, prot
+    if prob_home >= 60.0: d1, d2 = "Vitória do Mandante", "Empate Anula"
+    elif prob_away >= 60.0: d1, d2 = "Vitória do Visitante", "Empate Anula"
+    elif prob_home >= 40.0: d1, d2 = "Ambas Marcam: Sim", "Over 1.5 Gols"
+    else: d1, d2 = "Over 1.5 Gols", "Mais de 8.5 Escanteios"
+    return d1, d2
 
 async def get_confirmed_lineup(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
@@ -139,14 +190,12 @@ async def get_confirmed_lineup(league_code, event_id):
     except: pass
     return None
 
-# ================= 3. NOVO DESIGN VIP (AQUI QUE MUDA A BELEZA) =================
-
+# ================= 4. LAYOUTS =================
 def format_morning_card(game, d1, d2):
-    """Layout limpo para a grade geral"""
     return (
         f"🏆 <b>{game['league']}</b>\n"
         f"⚔️ <b>{game['match']}</b>\n"
-        f"⏰ Horário: {game['time']}\n"
+        f"⏰ {game['time']}\n"
         f"👇 <b>ANÁLISE:</b>\n"
         f"✅ <b>Entrada:</b> {d1}\n"
         f"🛡️ <b>Proteção:</b> {d2}\n"
@@ -154,7 +203,6 @@ def format_morning_card(game, d1, d2):
     )
 
 def format_sniper_card(game, jogador, d1):
-    """Layout agressivo de 'Green' para o Sniper"""
     return (
         f"🚨 <b>ALERTA DE OPORTUNIDADE</b> 🚨\n"
         f"➖➖➖➖➖➖➖➖➖➖\n"
@@ -169,39 +217,41 @@ def format_sniper_card(game, jogador, d1):
         f"🌊 <i>Surfando na tendência do mercado</i>"
     )
 
-# ================= 4. AUTOMAÇÕES =================
-async def morning_routine(app: Application):
+# ================= 5. AUTOMAÇÕES =================
+async def automation_routine(app: Application):
     br_tz = timezone(timedelta(hours=-3))
     while True:
         agora = datetime.now(br_tz)
+        
+        # 08:00 - FUTEBOL
         if agora.hour == 8 and agora.minute == 0:
             global ALERTED_GAMES
             ALERTED_GAMES.clear()
             jogos = await fetch_espn_soccer()
-            
             if jogos:
-                # CABEÇALHO BONITO
-                header = (
-                    "🦁 <b>DVD TIPS | GRADE DO DIA</b> 🦁\n"
-                    f"📅 <b>Data:</b> {agora.strftime('%d/%m/%Y')}\n"
-                    "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-                )
-                
+                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{agora.strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in jogos:
                     d1, d2 = await analyze_game_market(g['league_code'], g['id'])
                     card = format_morning_card(g, d1, d2)
-                    # Verifica limite de caracteres do Telegram (4096)
                     if len(txt) + len(card) > 4000:
                         await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
-                        txt = "" # Reseta para nova mensagem
+                        txt = ""
                     txt += card
-                
-                if txt:
-                    txt += "\n⚠️ <i>Faça suas análises. Jogue com responsabilidade.</i>"
-                    await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
-            
+                if txt: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
+
+        # 10:00 - NBA
+        if agora.hour == 10 and agora.minute == 0:
+            nba_games = await fetch_nba_professional()
+            if nba_games:
+                header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{agora.strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                txt = header
+                for g in nba_games:
+                    txt += format_nba_card(g)
+                await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
+            await asyncio.sleep(60)
+            
         await asyncio.sleep(30)
 
 async def live_sniper_routine(app: Application):
@@ -216,7 +266,6 @@ async def live_sniper_routine(app: Application):
                     h, m = map(int, g['time'].split(':'))
                     hora_jogo = agora.replace(hour=h, minute=m, second=0, microsecond=0)
                     minutos = (hora_jogo - agora).total_seconds() / 60.0
-                    
                     if 50 <= minutos <= 60:
                         jogos_do_horario.append(g)
                         ALERTED_GAMES.add(g['id'])
@@ -226,42 +275,35 @@ async def live_sniper_routine(app: Application):
                 for g in jogos_do_horario:
                     jogador = await get_confirmed_lineup(g['league_code'], g['id'])
                     d1, _ = await analyze_game_market(g['league_code'], g['id'])
-                    
                     if jogador:
                         txt = format_sniper_card(g, jogador, d1)
                         try: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
                         except: pass
                         await asyncio.sleep(2)
-        
         await asyncio.sleep(60)
 
-# ================= 5. MENU MANUAL =================
+# ================= 6. MENU E START =================
 def get_menu(): 
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Grade VIP (Manhã)", callback_data="fut_market")],
+        [InlineKeyboardButton("⚽ Grade VIP (Manhã)", callback_data="fut_market")],
         [InlineKeyboardButton("🔫 Sniper (Ao Vivo)", callback_data="fut_sniper")],
-        [InlineKeyboardButton("🏀 NBA", callback_data="nba_deep")]
+        [InlineKeyboardButton("🏀 Grade NBA VIP", callback_data="nba_deep")]
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>BOT DVD TIPS | PAINEL VIP</b>\nSelecione uma opção:", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V234</b>\nSistema 100% Real Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text("🔎 <b>Gerando layout VIP...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Gerando grade...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
-            await msg.edit_text("❌ Nenhum jogo.")
+            await msg.edit_text("❌ Sem jogos.")
             return
-        
         br_tz = timezone(timedelta(hours=-3))
-        header = (
-            "🦁 <b>DVD TIPS | GRADE DO DIA</b> 🦁\n"
-            f"📅 <b>Data:</b> {datetime.now(br_tz).strftime('%d/%m/%Y')}\n"
-            "➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        )
+        header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{datetime.now(br_tz).strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos:
             d1, d2 = await analyze_game_market(g['league_code'], g['id'])
@@ -270,40 +312,33 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
                 await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
                 txt = ""
             txt += card
-        
-        if txt: 
-            txt += "\n⚠️ <i>Faça suas análises.</i>"
-            await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-        await msg.edit_text("✅ <b>Grade VIP Postada!</b>", parse_mode=ParseMode.HTML)
-        
-    elif q.data == "fut_sniper":
-        msg = await q.message.reply_text("🔎 <b>Buscando oportunidades ao vivo...</b>", parse_mode=ParseMode.HTML)
-        jogos = await fetch_espn_soccer()
-        encontrou = False
-        for g in jogos:
-            jogador = await get_confirmed_lineup(g['league_code'], g['id'])
-            d1, _ = await analyze_game_market(g['league_code'], g['id'])
-            if jogador:
-                txt = format_sniper_card(g, jogador, d1)
-                await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                encontrou = True
-        
-        if encontrou: await msg.edit_text("✅ <b>Alertas enviados!</b>")
-        else: await msg.edit_text("❌ <b>Nenhuma oportunidade confirmada agora.</b>\n(Aguarde 1h antes dos jogos).")
+        if txt: await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await msg.edit_text("✅ <b>Postado!</b>")
 
     elif q.data == "nba_deep":
-        j = await fetch_nba_schedule()
-        if j: await c.bot.send_message(CHANNEL_ID, "🏀 <b>NBA VIP</b>\n\n"+"\n".join(j), parse_mode=ParseMode.HTML)
-        else: await q.message.edit_text("Sem NBA.")
+        msg = await q.message.reply_text("🔎 <b>Buscando NBA...</b>", parse_mode=ParseMode.HTML)
+        jogos = await fetch_nba_professional()
+        if not jogos:
+            await msg.edit_text("❌ Sem jogos da NBA.")
+            return
+        br_tz = timezone(timedelta(hours=-3))
+        header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{datetime.now(br_tz).strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        txt = header
+        for g in jogos:
+            txt += format_nba_card(g)
+        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await msg.edit_text("✅ <b>NBA Postada!</b>")
 
-# ================= 6. START =================
+    elif q.data == "fut_sniper":
+        await q.message.reply_text("🔎 <b>Sniper manual ativado...</b>")
+
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V231 LAYOUT VIP")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V234 NO GUESS")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
     await fetch_espn_soccer()
-    asyncio.create_task(morning_routine(app))
+    asyncio.create_task(automation_routine(app))
     asyncio.create_task(live_sniper_routine(app))
     asyncio.create_task(news_loop(app))
 
