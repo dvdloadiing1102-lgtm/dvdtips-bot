@@ -1,4 +1,4 @@
-# ================= BOT V246 (CORREÇÃO DEFINITIVA: REMOVIDO O FILTRO QUE JOGAVA OS JOGOS FORA) =================
+# ================= BOT V247 (MODO SIMULAÇÃO 2026 - CORREÇÃO DE DATA/ANO) =================
 import os
 import logging
 import asyncio
@@ -20,6 +20,10 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
 logging.basicConfig(level=logging.INFO)
+
+# ================= CONFIGURAÇÃO DE DATA (CRÍTICO) =================
+# Aqui forçamos a data da sua grade (20/02/2026) para o bot não usar 2025
+DATA_SIMULADA = "20260220" 
 
 # ================= MEMÓRIA GLOBAL =================
 TODAYS_GAMES = []
@@ -59,7 +63,7 @@ async def fetch_nba_professional():
             if r.status_code == 200:
                 data = r.json()
                 for event in data.get('events', []):
-                    if event['status']['type']['state'] not in ['pre', 'in']: continue
+                    # NBA não filtramos status rigorosamente na busca geral
                     comp = event['competitions'][0]
                     t1 = comp['competitors'][0]
                     t2 = comp['competitors'][1]
@@ -104,7 +108,7 @@ def format_nba_card(game):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 3. MÓDULO FUTEBOL (SEM FILTRO INTERNO) =================
+# ================= 3. MÓDULO FUTEBOL (DATA 2026 FORÇADA) =================
 async def fetch_espn_soccer():
     leagues = [
         'uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 
@@ -115,25 +119,18 @@ async def fetch_espn_soccer():
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    # Define a data de hoje para pedir à API
-    today_str = datetime.now(br_tz).strftime("%Y%m%d") 
-    
-    logging.info(f"Buscando jogos para a data: {today_str}")
+    logging.info(f"BUSCANDO GRADE SIMULADA: {DATA_SIMULADA}")
 
     async with httpx.AsyncClient(timeout=20) as client:
         for league in leagues:
-            # Pede jogos especificamente de hoje
-            url_forced = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={today_str}"
+            # Força a data 20260220 na URL
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={DATA_SIMULADA}"
             
             try:
-                r = await client.get(url_forced)
+                r = await client.get(url)
+                if r.status_code != 200: continue
                 data = r.json()
                 
-                # Se não vier nada com a data forçada, tenta o endpoint aberto (backup)
-                if not data.get('events'):
-                    r = await client.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard")
-                    data = r.json()
-
                 if not data.get('events'): continue
 
                 league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
@@ -152,9 +149,10 @@ async def fetch_espn_soccer():
                     
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     
-                    # === A CORREÇÃO ESTÁ AQUI ===
-                    # REMOVI O IF QUE CHECAVA A DATA.
-                    # Se a API mandou o jogo quando pedimos ?dates=HOJE, nós aceitamos e pronto.
+                    # === CORREÇÃO V247 ===
+                    # REMOVIDO: if dt_br.date() == datetime.now().date()
+                    # MOTIVO: O servidor está em 2025, o jogo em 2026. A comparação falhava.
+                    # Agora aceitamos TUDO que a API retornar para a data pedida.
                     
                     jogos.append({
                         "id": event['id'], 
@@ -178,7 +176,7 @@ async def fetch_espn_soccer():
     
     global TODAYS_GAMES
     TODAYS_GAMES = lista_final
-    logging.info(f"Jogos carregados na memória: {len(TODAYS_GAMES)}")
+    logging.info(f"Jogos encontrados: {len(TODAYS_GAMES)}")
     return TODAYS_GAMES
 
 def generate_narrative(market_type, home, away):
@@ -244,6 +242,7 @@ async def analyze_game_market(league_code, event_id, home, away):
     
     random.seed(int(event_id)) 
     
+    # Fallback Inteligente
     if league_code in ['ger.1', 'ned.1', 'ksa.1', 'tur.1', 'por.1', 'bel.1']:
         m = "Over 2.5 Gols"
         return m, "Ambas Marcam: Sim", generate_narrative(m, home, away), extra_info, prob_home, prob_away
@@ -425,16 +424,16 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V246</b>\nCorreção Definitiva de Filtro Aplicada.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V247</b>\nModo Simulação 2026 Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text("🔎 <b>Gerando grade (Modo Seguro)...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Gerando grade (Modo 2026)...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
-            await msg.edit_text("❌ Nenhum jogo encontrado na API da ESPN no momento.")
+            await msg.edit_text("❌ Nenhum jogo encontrado na grade simulada.")
             return
         
         jogos_pre = [j for j in jogos if j['status'] == 'pre']
@@ -443,7 +442,8 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
             return
 
         br_tz = timezone(timedelta(hours=-3))
-        header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{datetime.now(br_tz).strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        # Exibe a data simulada no cabeçalho
+        header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: 20/02/2026</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos_pre:
             d1, d2, analise, extra, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
@@ -469,7 +469,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V246 NO FILTER")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V247 SIMULATION")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
