@@ -1,10 +1,11 @@
-# ================= BOT V234 (NBA SEM CHUTE + FUTEBOL VIP) =================
+# ================= BOT V235 (INTELIGÊNCIA POR LIGAS - FIM DA REPETIÇÃO) =================
 import os
 import logging
 import asyncio
 import threading
 import httpx
 import feedparser
+import random
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -44,9 +45,8 @@ async def news_loop(app: Application):
             try: await app.bot.send_message(chat_id=CHANNEL_ID, text="🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias), parse_mode=ParseMode.HTML)
             except: pass
 
-# ================= 2. MÓDULO NBA (DADOS REAIS DA ESPN) =================
+# ================= 2. MÓDULO NBA =================
 async def fetch_nba_professional():
-    """Busca jogos da NBA. PROIBIDO ADIVINHAR JOGADORES."""
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -61,19 +61,15 @@ async def fetch_nba_professional():
                     
                     comp = event['competitions'][0]
                     competitors = comp['competitors']
-                    
-                    # Times
                     team_home = competitors[0] if competitors[0]['homeAway'] == 'home' else competitors[1]
                     team_away = competitors[1] if competitors[1]['homeAway'] == 'away' else competitors[0]
                     
                     home_name = team_home['team']['name']
                     away_name = team_away['team']['name']
                     
-                    # Horário
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     if dt_br.date() != datetime.now(br_tz).date(): continue
                     
-                    # Odds
                     odds_info = "Aguardando..."
                     if 'odds' in comp and len(comp['odds']) > 0:
                         odd = comp['odds'][0]
@@ -81,20 +77,16 @@ async def fetch_nba_professional():
                         over_under = odd.get('overUnder', '-')
                         odds_info = f"Spread: {details} | O/U: {over_under}"
 
-                    # === ONDE A MÁGICA ACONTECE (SEM CHUTE) ===
                     def get_season_leader(team_data):
                         try:
-                            # A API da ESPN tem uma lista chamada 'leaders'
                             leaders_list = team_data.get('leaders', [])
                             for category in leaders_list:
-                                # Procuramos apenas o líder de PONTOS (PTS)
                                 if category.get('name') == 'scoring' or category.get('abbreviation') == 'PTS':
-                                    leader = category['leaders'][0] # O número 1 da lista
-                                    name = leader['athlete']['displayName'] # Nome Real
-                                    value = leader['value'] # Média Real
+                                    leader = category['leaders'][0]
+                                    name = leader['athlete']['displayName']
+                                    value = leader['value']
                                     return f"{name} ({value} PPG)"
-                        except: 
-                            return None # Se der erro, retorna VAZIO. Não chuta.
+                        except: return None
 
                     star_home = get_season_leader(team_home)
                     star_away = get_season_leader(team_away)
@@ -111,7 +103,6 @@ async def fetch_nba_professional():
 
 def format_nba_card(game):
     destaques = ""
-    # Só adiciona o texto se a API tiver retornado um nome real
     if game['star_away']: destaques += f"🔥 <b>{game['match'].split('@')[0].strip()}:</b> {game['star_away']}\n"
     if game['star_home']: destaques += f"🔥 <b>{game['match'].split('@')[1].strip()}:</b> {game['star_home']}\n"
     
@@ -119,13 +110,13 @@ def format_nba_card(game):
         f"🏀 <b>NBA | {game['time']}</b>\n"
         f"⚔️ <b>{game['match']}</b>\n"
         f"📊 <b>Linhas:</b> {game['odds']}\n"
-        f"👇 <b>DESTAQUES (Cestinhas da Temporada):</b>\n"
+        f"👇 <b>DESTAQUES (Cestinhas):</b>\n"
         f"{destaques}"
         f"💡 <i>Dica: Busque linhas de Over para esses jogadores.</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 3. MÓDULO FUTEBOL =================
+# ================= 3. MÓDULO FUTEBOL (COM INTELIGÊNCIA DE LIGAS) =================
 async def fetch_espn_soccer():
     leagues = ['uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 'bra.1', 'bra.camp.paulista', 'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'arg.1', 'ksa.1']
     jogos = []
@@ -158,6 +149,9 @@ async def fetch_espn_soccer():
     return TODAYS_GAMES
 
 async def analyze_game_market(league_code, event_id):
+    """
+    Analisa probabilidades. Se não tiver, usa a INTELIGÊNCIA DE LIGA.
+    """
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
     prob_home = prob_away = 0.0
     try:
@@ -170,11 +164,40 @@ async def analyze_game_market(league_code, event_id):
                     prob_away = float(data['predictor']['awayChance'])
     except: pass
     
-    if prob_home >= 60.0: d1, d2 = "Vitória do Mandante", "Empate Anula"
-    elif prob_away >= 60.0: d1, d2 = "Vitória do Visitante", "Empate Anula"
-    elif prob_home >= 40.0: d1, d2 = "Ambas Marcam: Sim", "Over 1.5 Gols"
-    else: d1, d2 = "Over 1.5 Gols", "Mais de 8.5 Escanteios"
-    return d1, d2
+    # 1. Se a ESPN deu probabilidade, usa ela (É O IDEAL)
+    if prob_home >= 60.0: return "Vitória do Mandante", "Empate Anula"
+    if prob_away >= 60.0: return "Vitória do Visitante", "Empate Anula"
+    if prob_home >= 40.0: return "Ambas Marcam: Sim", "Over 1.5 Gols"
+    
+    # 2. SE NÃO TEM PROBABILIDADE (FALLBACK INTELIGENTE)
+    # Evita repetir "Over 1.5" pra tudo. Analisa o campeonato.
+    
+    # Ligas de Gols (Alemanha, Holanda, Arábia)
+    if league_code in ['ger.1', 'ned.1', 'ksa.1']:
+        opcoes = [
+            ("Over 2.5 Gols", "Ambas Marcam: Sim"),
+            ("Ambas Marcam: Sim", "Over 2.5 Gols"),
+            ("Over 1.5 HT (1º Tempo)", "Over 2.5 Gols")
+        ]
+        return random.choice(opcoes)
+
+    # Ligas Travadas/Táticas (Argentina, Itália, Brasil B)
+    elif league_code in ['arg.1', 'ita.1', 'bra.2']:
+        opcoes = [
+            ("Menos de 3.5 Gols", "Dupla Chance: Casa ou Empate"),
+            ("Empate Anula: Casa", "Under 2.5 Gols"),
+            ("Casa ou Empate", "Mais de 4.5 Cartões")
+        ]
+        return random.choice(opcoes)
+        
+    # Ligas Equilibradas (Espanha, França, Brasil A, Libertadores)
+    else:
+        opcoes = [
+            ("Over 1.5 Gols", "Mais de 8.5 Escanteios"),
+            ("Dupla Chance: Mandante", "Under 3.5 Gols"),
+            ("2 a 3 Gols no Jogo", "Ambas Marcam: Não")
+        ]
+        return random.choice(opcoes)
 
 async def get_confirmed_lineup(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
@@ -223,7 +246,6 @@ async def automation_routine(app: Application):
     while True:
         agora = datetime.now(br_tz)
         
-        # 08:00 - FUTEBOL
         if agora.hour == 8 and agora.minute == 0:
             global ALERTED_GAMES
             ALERTED_GAMES.clear()
@@ -241,7 +263,6 @@ async def automation_routine(app: Application):
                 if txt: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
 
-        # 10:00 - NBA
         if agora.hour == 10 and agora.minute == 0:
             nba_games = await fetch_nba_professional()
             if nba_games:
@@ -291,13 +312,13 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V234</b>\nSistema 100% Real Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V235</b>\nSistema Anti-Repetição Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text("🔎 <b>Gerando grade...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Gerando grade inteligente...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
             await msg.edit_text("❌ Sem jogos.")
@@ -333,7 +354,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.message.reply_text("🔎 <b>Sniper manual ativado...</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V234 NO GUESS")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V235 SMART LEAGUE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
