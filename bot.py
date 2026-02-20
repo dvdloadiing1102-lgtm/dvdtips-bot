@@ -1,4 +1,4 @@
-# ================= BOT V253 (FINAL BOSS: FUTEBOL 2026 + NBA TRIPLE-DOUBLE + SISTEMA BLINDADO) =================
+# ================= BOT V254 (CORREÇÃO DE STATS DA NBA + FUTEBOL 2026) =================
 import os
 import logging
 import asyncio
@@ -10,7 +10,6 @@ from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 
-# Telegram Imports
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -21,12 +20,11 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# Configuração de Logs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= CONFIGURAÇÃO CRÍTICA (DATA SIMULADA) =================
-DATA_ALVO = "20260220" # Garante que os jogos de 20/02/2026 apareçam sempre
+# ================= CONFIGURAÇÃO DE DATA =================
+DATA_ALVO = "20260220" # Data da Grade
 
 # ================= MEMÓRIA GLOBAL =================
 TODAYS_GAMES = []
@@ -35,11 +33,11 @@ ALERTED_SNIPER = set()
 ALERTED_LIVE = set()
 DAILY_STATS = {"green": 0, "red": 0}
 
-# ================= 1. TRATAMENTO DE ERROS (O AIRBAG) =================
+# ================= 1. TRATAMENTO DE ERROS =================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
-# ================= 2. MÓDULOS AUXILIARES =================
+# ================= 2. NOTÍCIAS =================
 async def fetch_news():
     feeds = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml", "https://www.espn.com.br/rss/nba/news"]
     noticias = []
@@ -59,9 +57,9 @@ async def news_loop(app: Application):
             txt = "🌍 <b>GIRO DE NOTÍCIAS</b> 🌍\n\n" + "\n\n".join(noticias)
             try: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             except: pass
-        await asyncio.sleep(14400) # 4 em 4 horas
+        await asyncio.sleep(14400) 
 
-# ================= 3. MÓDULO NBA (COM PTS + REB + AST) =================
+# ================= 3. MÓDULO NBA (CORRIGIDO) =================
 def generate_nba_narrative(home, away, spread, total):
     try:
         spread_val = float(spread.split(' ')[1]) if spread != '-' and ' ' in spread else 0
@@ -69,19 +67,16 @@ def generate_nba_narrative(home, away, spread, total):
     except: spread_val = 0; total_val = 220
 
     analise = ""
-    # Análise de Handicap
     if abs(spread_val) >= 9: analise += f"Favoritismo absoluto para o {home if spread_val < 0 else away}. "
     elif abs(spread_val) <= 4: analise += "Confronto de alto equilíbrio, deve ser decidido na última bola. "
     else: analise += "Vantagem técnica para o favorito, mas sem margem para erro. "
 
-    # Análise de Pontos
     if total_val >= 232: analise += "Expectativa de jogo rápido e defesas expostas (Over)."
     elif total_val <= 215: analise += "Tendência de jogo físico, travado e com poucos pontos (Under)."
     else: analise += "Ritmo de jogo dentro da média da temporada."
     return analise
 
 async def fetch_nba_professional():
-    # Busca dados completos na data alvo
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={DATA_ALVO}"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -89,7 +84,7 @@ async def fetch_nba_professional():
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
-            # Backup se falhar a data específica
+            # Backup se falhar
             if r.status_code != 200 or not r.json().get('events'):
                 r = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
             
@@ -112,29 +107,41 @@ async def fetch_nba_professional():
                     ou_val = odd.get('overUnder', '-')
                     odds_str = f"Spread: {spread_val} | O/U: {ou_val}"
 
-                # --- LÓGICA TURBINADA DE ESTATÍSTICAS (PTS | REB | AST) ---
+                # === CORREÇÃO DA EXTRAÇÃO DE STATS ===
                 def get_full_stats(team_data):
-                    stats_list = []
+                    stats_parts = []
                     player_name = "Destaque"
                     try:
-                        leaders = team_data.get('leaders', [])
-                        for cat in leaders:
-                            if cat['name'] == 'scoring':
-                                l = cat['leaders'][0]
-                                player_name = l['athlete']['displayName']
-                                stats_list.append(f"{float(l['value']):.1f} PTS")
-                            elif cat['name'] == 'rebounding':
-                                l = cat['leaders'][0]
-                                stats_list.append(f"{float(l['value']):.1f} REB")
-                            elif cat['name'] == 'assists':
-                                l = cat['leaders'][0]
-                                stats_list.append(f"{float(l['value']):.1f} AST")
+                        # Tenta pegar a lista de líderes
+                        leaders_pack = team_data.get('leaders', [])
                         
-                        if stats_list:
-                            return f"{player_name} ({' | '.join(stats_list)})"
-                        return "Aguardando dados..."
-                    except: return "Aguardando dados..."
-                # ----------------------------------------------------------
+                        # Se não tiver líderes, tenta pegar records (estrutura alternativa da ESPN)
+                        if not leaders_pack:
+                            return "Dados de jogador indisponíveis"
+
+                        # Itera sobre as categorias (PTS, REB, AST)
+                        for cat in leaders_pack:
+                            try:
+                                # Pega o atleta e o valor
+                                l = cat['leaders'][0]
+                                name = l['athlete']['displayName']
+                                val = float(l['value'])
+                                abbreviation = cat.get('abbreviation', cat.get('name', 'Stat')).upper()
+                                
+                                # Se for Points, define o nome do jogador principal
+                                if abbreviation in ['PTS', 'SCORING']:
+                                    player_name = name
+                                    abbreviation = 'PTS' # Padroniza
+                                
+                                # Adiciona na lista (Ex: 25.0 PTS)
+                                stats_parts.append(f"{val:.1f} {abbreviation}")
+                            except: continue # Se falhar uma categoria, pula para a próxima
+                        
+                        if stats_parts:
+                            return f"{player_name} ({' | '.join(stats_parts)})"
+                        return "Aguardando..."
+                    except: return "Aguardando..."
+                # =====================================
 
                 narrativa = generate_nba_narrative(team_home['team']['name'], team_away['team']['name'], spread_val, ou_val)
 
@@ -155,7 +162,7 @@ def format_nba_card(game):
         f"⚔️ <b>{game['match']}</b>\n"
         f"📝 <b>Resumo:</b> <i>{game['analise']}</i>\n"
         f"📊 <b>Linhas:</b> {game['odds']}\n"
-        f"👇 <b>DESTAQUES (PTS | REB | AST):</b>\n"
+        f"👇 <b>Destaques (Cestinhas):</b>\n"
         f"🔥 {game['match'].split('@')[1].strip()}: {game['star_home']}\n"
         f"🔥 {game['match'].split('@')[0].strip()}: {game['star_away']}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -355,8 +362,6 @@ async def automation_routine(app: Application):
     br_tz = timezone(timedelta(hours=-3))
     while True:
         agora = datetime.now(br_tz)
-        
-        # 08:00 - FUTEBOL
         if agora.hour == 8 and agora.minute == 0:
             global ALERTED_SNIPER, PROCESSED_GAMES, ALERTED_LIVE, DAILY_STATS
             ALERTED_SNIPER.clear(); PROCESSED_GAMES.clear(); ALERTED_LIVE.clear()
@@ -375,7 +380,6 @@ async def automation_routine(app: Application):
                 if txt: await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
 
-        # 10:00 - NBA
         if agora.hour == 10 and agora.minute == 0:
             nba_games = await fetch_nba_professional()
             if nba_games:
@@ -386,7 +390,6 @@ async def automation_routine(app: Application):
                 await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
             
-        # 23:30 - FECHAMENTO
         if agora.hour == 23 and agora.minute == 30:
             if DAILY_STATS["green"] > 0 or DAILY_STATS["red"] > 0:
                 txt = (f"🏁 <b>FECHAMENTO</b> 🏁\n✅ <b>GREENS:</b> {DAILY_STATS['green']}\n❌ <b>REDS:</b> {DAILY_STATS['red']}")
@@ -464,7 +467,7 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V253</b>\nModo Simulação & NBA Triple-Double Ativos.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V254</b>\nNBA Stats Fix & Futebol 2026.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -490,7 +493,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>Postado!</b>")
 
     elif q.data == "nba_deep":
-        msg = await q.message.reply_text("🔎 <b>Analisando NBA (Triple-Double)...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Analisando NBA (Stats Fix)...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_nba_professional()
         if not jogos:
             await msg.edit_text("❌ Sem jogos da NBA.")
@@ -503,7 +506,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V253 FINAL")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V254 STATS FIX")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
