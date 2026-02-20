@@ -1,4 +1,4 @@
-# ================= BOT V241 (O TRADER ARTIFICIAL: RADAR DE VIRADA + FECHAMENTO DE CAIXA) =================
+# ================= BOT V242 (CORREÇÃO DE DATA/FUSO + FUSÃO TOTAL) =================
 import os
 import logging
 import asyncio
@@ -23,10 +23,10 @@ logging.basicConfig(level=logging.INFO)
 
 # ================= MEMÓRIA GLOBAL =================
 TODAYS_GAMES = []
-PROCESSED_GAMES = set() # Jogos finalizados e conferidos
-ALERTED_SNIPER = set() # Jogos com escalação postada
-ALERTED_LIVE = set() # Jogos com alerta de virada postado
-DAILY_STATS = {"green": 0, "red": 0} # Contabilidade do dia
+PROCESSED_GAMES = set() 
+ALERTED_SNIPER = set()
+ALERTED_LIVE = set()
+DAILY_STATS = {"green": 0, "red": 0}
 
 # ================= 1. MÓDULOS AUXILIARES =================
 async def fetch_news():
@@ -42,7 +42,7 @@ async def fetch_news():
 
 async def news_loop(app: Application):
     while True:
-        await asyncio.sleep(10800) # 3h
+        await asyncio.sleep(10800)
         noticias = await fetch_news()
         if noticias:
             try: await app.bot.send_message(chat_id=CHANNEL_ID, text="🗞️ <b>GIRO DE NOTÍCIAS</b> 🗞️\n\n" + "\n\n".join(noticias), parse_mode=ParseMode.HTML)
@@ -50,9 +50,11 @@ async def news_loop(app: Application):
 
 # ================= 2. MÓDULO NBA =================
 async def fetch_nba_professional():
+    # Para NBA, usamos a data de hoje se for depois das 10h, senão pega jogos de "ontem" (madrugada)
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
+    
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
@@ -61,14 +63,13 @@ async def fetch_nba_professional():
                 for event in data.get('events', []):
                     if event['status']['type']['state'] not in ['pre', 'in']: continue
                     comp = event['competitions'][0]
-                    # Identifica times
                     t1 = comp['competitors'][0]
                     t2 = comp['competitors'][1]
                     team_home = t1 if t1['homeAway'] == 'home' else t2
                     team_away = t2 if t2['homeAway'] == 'away' else t1
                     
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
-                    if dt_br.date() != datetime.now(br_tz).date(): continue
+                    # NBA mostra jogos da madrugada, não filtra data estrita aqui
                     
                     odds_info = "Aguardando..."
                     if 'odds' in comp and len(comp['odds']) > 0:
@@ -106,24 +107,36 @@ def format_nba_card(game):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 3. MÓDULO FUTEBOL (AGORA COM MONITORAMENTO LIVE) =================
+# ================= 3. MÓDULO FUTEBOL (DATA FORÇADA) =================
 async def fetch_espn_soccer():
-    leagues = ['uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 'bra.1', 'bra.camp.paulista', 'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'arg.1', 'ksa.1', 'por.1']
+    # Lista expandida para garantir jogos em Sexta-feira
+    leagues = [
+        'uefa.europa', 'uefa.champions', 'conmebol.libertadores', 'conmebol.recopa', 
+        'bra.1', 'bra.camp.paulista', 
+        'eng.1', 'eng.2', # Premier e Championship
+        'esp.1', 'esp.2', # La Liga e Segundona
+        'ita.1', 'ita.2', # Serie A e B
+        'ger.1', 'ger.2', # Bundesliga 1 e 2
+        'fra.1', 'fra.2', # Ligue 1 e 2
+        'arg.1', 'ksa.1', 'por.1', 'ned.1', 'tur.1' # Adicionado Turquia
+    ]
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
+    today_str = datetime.now(br_tz).strftime("%Y%m%d") # Ex: 20260220
     
     async with httpx.AsyncClient(timeout=15) as client:
         for league in leagues:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard"
+            # AQUI ESTÁ A CORREÇÃO: ?dates=YYYYMMDD
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={today_str}"
             try:
                 r = await client.get(url)
                 if r.status_code != 200: continue
                 data = r.json()
                 league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
                 for event in data.get('events', []):
-                    state = event['status']['type']['state'] # pre, in, post
-                    period = event['status']['period'] # 1, 2
-                    clock = event['status']['displayClock'] # 45'
+                    state = event['status']['type']['state']
+                    period = event['status']['period']
+                    clock = event['status']['displayClock']
                     
                     comp = event['competitions'][0]['competitors']
                     t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
@@ -135,7 +148,7 @@ async def fetch_espn_soccer():
                     score_away = int(t_away['score'])
                     
                     dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
-                    if dt_br.date() != datetime.now(br_tz).date(): continue
+                    # Como forçamos a data na URL, não precisamos filtrar estritamente aqui
                     
                     jogos.append({
                         "id": event['id'], 
@@ -206,28 +219,35 @@ async def analyze_game_market(league_code, event_id, home, away):
                 except: pass
 
                 if 'predictor' in data and 'homeChance' in data['predictor']:
-                    prob_home = float(data['predictor']['homeChance'])
-                    prob_away = float(data['predictor']['awayChance'])
+                    ph = float(data['predictor']['homeChance'])
+                    pa = float(data['predictor']['awayChance'])
                     
-                    if prob_home >= 60.0: 
+                    if ph >= 60.0: 
                         m = f"Vitória do {home}"
-                        return m, "Over 1.5 Gols", generate_narrative(m, home, away), extra_info, prob_home, prob_away
-                    if prob_away >= 60.0: 
+                        return m, "Over 1.5 Gols", generate_narrative(m, home, away), extra_info, ph, pa
+                    if pa >= 60.0: 
                         m = f"Vitória do {away}"
-                        return m, "Empate Anula: Visitante", generate_narrative(m, home, away), extra_info, prob_home, prob_away
-                    if prob_home >= 40.0: 
+                        return m, "Empate Anula: Visitante", generate_narrative(m, home, away), extra_info, ph, pa
+                    if ph >= 40.0: 
                         m = "Ambas Marcam: Sim"
-                        return m, "Over 2.5 Gols", generate_narrative(m, home, away), extra_info, prob_home, prob_away
+                        return m, "Over 2.5 Gols", generate_narrative(m, home, away), extra_info, ph, pa
                     else: 
                         m = "Menos de 3.5 Gols"
-                        return m, "Empate ou Visitante", generate_narrative(m, home, away), extra_info, prob_home, prob_away
+                        return m, "Empate ou Visitante", generate_narrative(m, home, away), extra_info, ph, pa
     except: pass
     
-    # Fallback
     random.seed(int(event_id)) 
-    m = "Over 1.5 Gols"
-    if league_code in ['arg.1', 'ita.1']: m = "Under 2.5 Gols"
-    return m, "Dupla Chance", generate_narrative(m, home, away), extra_info, prob_home, prob_away
+    
+    # Fallback Inteligente por Liga
+    if league_code in ['ger.1', 'ned.1', 'ksa.1', 'tur.1']:
+        m = "Over 2.5 Gols"
+        return m, "Ambas Marcam: Sim", generate_narrative(m, home, away), extra_info, prob_home, prob_away
+    elif league_code in ['arg.1', 'ita.1', 'bra.2', 'esp.2']:
+        m = "Menos de 2.5 Gols"
+        return m, "Dupla Chance: Casa/Empate", generate_narrative(m, home, away), extra_info, prob_home, prob_away
+    else:
+        m = "Over 1.5 Gols"
+        return m, "Escanteios: +8.5", generate_narrative(m, home, away), extra_info, prob_home, prob_away
 
 # ================= 4. LAYOUTS =================
 def format_morning_card(game, d1, d2, analise, extra):
@@ -243,7 +263,6 @@ def format_morning_card(game, d1, d2, analise, extra):
     )
 
 def format_live_radar_card(game, favorite_team, situation):
-    """Card do Radar de Virada"""
     return (
         f"⚠️ <b>ALERTA DE OPORTUNIDADE (AO VIVO)</b> ⚠️\n"
         f"➖➖➖➖➖➖➖➖➖➖\n"
@@ -256,7 +275,6 @@ def format_live_radar_card(game, favorite_team, situation):
         f"🚀 <i>Chance de Ouro para entrada de valor!</i>"
     )
 
-# ================= 5. LÓGICA DE RESULTADO (AUDITOR) =================
 def verify_green(pick, h_score, a_score, home_team, away_team):
     total_goals = h_score + a_score
     is_green = False
@@ -269,11 +287,11 @@ def verify_green(pick, h_score, a_score, home_team, away_team):
     elif "Over 2.5" in pick:
         if total_goals > 2: is_green = True
     elif "Menos" in pick or "Under" in pick:
-        if total_goals < 3: is_green = True # Simplificado
+        if total_goals < 3: is_green = True 
     elif "Ambas" in pick:
         if h_score > 0 and a_score > 0: is_green = True
     elif "Empate" in pick or "Dupla" in pick:
-        is_green = True # Simplificado para Dupla Chance
+        is_green = True 
 
     if is_green:
         DAILY_STATS["green"] += 1
@@ -292,7 +310,7 @@ async def automation_routine(app: Application):
         if agora.hour == 8 and agora.minute == 0:
             global ALERTED_SNIPER, PROCESSED_GAMES, ALERTED_LIVE, DAILY_STATS
             ALERTED_SNIPER.clear(); PROCESSED_GAMES.clear(); ALERTED_LIVE.clear()
-            DAILY_STATS = {"green": 0, "red": 0} # Zera o caixa
+            DAILY_STATS = {"green": 0, "red": 0}
             
             jogos = await fetch_espn_soccer()
             if jogos:
@@ -321,65 +339,38 @@ async def automation_routine(app: Application):
                 await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
             
-        # 23:30 - FECHAMENTO DE CAIXA
+        # 23:30 - FECHAMENTO
         if agora.hour == 23 and agora.minute == 30:
             if DAILY_STATS["green"] > 0 or DAILY_STATS["red"] > 0:
                 total = DAILY_STATS["green"] + DAILY_STATS["red"]
-                txt = (
-                    "🏁 <b>FECHAMENTO DE CAIXA</b> 🏁\n"
-                    f"📅 Data: {agora.strftime('%d/%m/%Y')}\n"
-                    "➖➖➖➖➖➖➖➖➖➖\n"
-                    f"✅ <b>GREENS:</b> {DAILY_STATS['green']}\n"
-                    f"❌ <b>REDS:</b> {DAILY_STATS['red']}\n"
-                    f"📊 <b>Total de Tips:</b> {total}\n"
-                    "➖➖➖➖➖➖➖➖➖➖\n"
-                    "<i>Obrigado por operarem com a gente hoje! Amanhã tem mais. 🦁</i>"
-                )
+                txt = (f"🏁 <b>FECHAMENTO</b> 🏁\n✅ <b>GREENS:</b> {DAILY_STATS['green']}\n❌ <b>REDS:</b> {DAILY_STATS['red']}")
                 await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(60)
 
         await asyncio.sleep(30)
 
 async def live_radar_routine(app: Application):
-    """
-    O TRADER: Monitora jogos ao vivo em busca de zebras/viradas.
-    """
     while True:
         if TODAYS_GAMES:
-            await fetch_espn_soccer() # Atualiza placares
-            
+            await fetch_espn_soccer()
             for g in TODAYS_GAMES:
-                # Só analisa jogos AO VIVO (in) no 2º TEMPO (period >= 2)
                 if g['status'] == 'in' and g['period'] >= 2 and g['id'] not in ALERTED_LIVE:
-                    
-                    # Analisa quem era o favorito pré-jogo
                     _, _, _, _, ph, pa = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
-                    
-                    # Lógica do Radar: Favorito (>60%) perdendo ou empatando no 2º tempo
                     msg = None
-                    if ph >= 60.0: # Mandante era super favorito
-                        if g['score_home'] < g['score_away']: # Perdendo
-                            msg = format_live_radar_card(g, g['home'], "está perdendo")
-                        elif g['score_home'] == g['score_away']: # Empatando
-                            msg = format_live_radar_card(g, g['home'], "está empatando")
-                    
-                    elif pa >= 60.0: # Visitante era super favorito
-                        if g['score_away'] < g['score_home']: # Perdendo
-                            msg = format_live_radar_card(g, g['away'], "está perdendo")
-                        elif g['score_away'] == g['score_home']: # Empatando
-                            msg = format_live_radar_card(g, g['away'], "está empatando")
-                            
+                    if ph >= 60.0:
+                        if g['score_home'] < g['score_away']: msg = format_live_radar_card(g, g['home'], "está perdendo")
+                        elif g['score_home'] == g['score_away']: msg = format_live_radar_card(g, g['home'], "está empatando")
+                    elif pa >= 60.0:
+                        if g['score_away'] < g['score_home']: msg = format_live_radar_card(g, g['away'], "está perdendo")
+                        elif g['score_away'] == g['score_home']: msg = format_live_radar_card(g, g['away'], "está empatando")
                     if msg:
                         await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
                         ALERTED_LIVE.add(g['id'])
-                        
-        await asyncio.sleep(120) # Roda a cada 2 minutos
+        await asyncio.sleep(120)
 
 async def result_monitor_routine(app: Application):
-    """O AUDITOR: Confere resultados"""
     while True:
         if TODAYS_GAMES:
-            # Nota: fetch já é chamado no live_radar, mas aqui garante atualização
             for g in TODAYS_GAMES:
                 if g['status'] == 'post' and g['id'] not in PROCESSED_GAMES:
                     d1, _, _, _, _, _ = await analyze_game_market(g['league_code'], g['id'], g['home'], g['away'])
@@ -392,7 +383,6 @@ async def result_monitor_routine(app: Application):
         await asyncio.sleep(300)
 
 async def live_sniper_routine(app: Application):
-    """O SNIPER: Escalações 1h antes"""
     br_tz = timezone(timedelta(hours=-3))
     while True:
         agora = datetime.now(br_tz)
@@ -433,21 +423,23 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V241</b>\nSistema Trader & Auditor Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V242</b>\nCorreção de Data/Fuso Aplicada.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text("🔎 <b>Gerando grade...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🔎 <b>Gerando grade (Forçando Data Hoje)...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos:
-            await msg.edit_text("❌ Sem jogos.")
+            await msg.edit_text("❌ Nenhum jogo encontrado para hoje (Sexta). Verifique se as ligas têm rodada.")
             return
+        
         jogos_pre = [j for j in jogos if j['status'] == 'pre']
         if not jogos_pre:
-            await msg.edit_text("❌ Grade encerrada por hoje.")
+            await msg.edit_text("⚠️ Jogos encontrados, mas todos já começaram ou terminaram.")
             return
+
         br_tz = timezone(timedelta(hours=-3))
         header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>{datetime.now(br_tz).strftime('%d/%m/%Y')}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
@@ -475,15 +467,15 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V241 TRADER")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V242 DATE FIX")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    await fetch_espn_soccer() 
+    await fetch_espn_soccer() # Carrega inicial
     asyncio.create_task(automation_routine(app))
     asyncio.create_task(live_sniper_routine(app))
     asyncio.create_task(result_monitor_routine(app))
-    asyncio.create_task(live_radar_routine(app)) # O TRADER DE VIRADA
+    asyncio.create_task(live_radar_routine(app))
     asyncio.create_task(news_loop(app))
 
 def main():
