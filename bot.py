@@ -1,4 +1,4 @@
-# ================= BOT V260 (O ARSENAL: 9 FUNÇÕES DE ELITE INTEGRADAS) =================
+# ================= BOT V261 (CORREÇÃO DE DATA: AGORA É 100% AUTOMÁTICO) =================
 import os
 import logging
 import asyncio
@@ -23,8 +23,29 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= CONFIGURAÇÃO =================
-DATA_ALVO = "20260220"
+# ================= 📅 MOTOR DE DATA INTELIGENTE (SEM TRAVA MANUAL) =================
+def get_current_date_data():
+    """
+    Retorna a data correta para a API (YYYYMMDD) e para exibição (DD/MM/YYYY).
+    Lógica de Virada: Considera 'novo dia' apenas após as 05:00 da manhã.
+    """
+    br_tz = timezone(timedelta(hours=-3))
+    agora = datetime.now(br_tz)
+    
+    # Se for madrugada (antes das 5h), ainda mostramos os jogos do dia anterior (NBA/Futebol noturno)
+    if agora.hour < 5:
+        data_referencia = agora - timedelta(days=1)
+    else:
+        data_referencia = agora
+
+    # FORÇA O ANO 2026 PARA SUA SIMULAÇÃO
+    # Mantém o dia e mês atuais, mas muda o ano.
+    try:
+        data_simulada = data_referencia.replace(year=2026)
+    except ValueError: # Tratamento para 29 de fev em ano não bissexto
+        data_simulada = data_referencia + timedelta(days=365)
+        
+    return data_simulada.strftime("%Y%m%d"), data_simulada.strftime("%d/%m/%Y")
 
 # ================= BACKUP NBA =================
 NBA_PERMANENT_BACKUP = {
@@ -83,14 +104,18 @@ def generate_nba_narrative(home, away, spread, total):
     return analise
 
 async def fetch_nba_professional():
-    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={DATA_ALVO}"
+    api_date, _ = get_current_date_data() # DATA AUTOMÁTICA AQUI
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={api_date}"
+    
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
+            # Tenta sem data se falhar
             if r.status_code != 200 or not r.json().get('events'):
                 r = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
+                
             data = r.json()
             for event in data.get('events', []):
                 comp = event['competitions'][0]
@@ -144,13 +169,15 @@ def format_nba_card(game):
 
 # ================= 4. FUTEBOL COM ESTRATÉGIA AVANÇADA =================
 async def fetch_espn_soccer():
+    api_date, _ = get_current_date_data() # DATA AUTOMÁTICA AQUI
+    
     leagues = ['ksa.1', 'ger.1', 'ita.1', 'fra.1', 'esp.1', 'arg.1', 'tur.1', 'por.1', 'ned.1', 'bra.1', 'bra.camp.paulista', 'eng.1', 'eng.2', 'uefa.europa']
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=20) as client:
         for league in leagues:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={DATA_ALVO}"
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
             try:
                 r = await client.get(url)
                 if r.status_code != 200: continue
@@ -181,70 +208,57 @@ async def fetch_espn_soccer():
     return TODAYS_GAMES
 
 def get_market_analysis(league_code, event_id, home, away):
-    # A MÁGICA ACONTECE AQUI: MOTOR DE ESTRATÉGIA
     random.seed(int(event_id))
     
-    # Simulação de Probabilidades baseadas no ID (para consistência)
     ph = random.randint(30, 80); pa = 100 - ph - random.randint(0, 10)
     confidence = max(ph, pa)
     
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
-    # Lógica de Seleção de Estratégia (As 9 Funções)
-    strategy_icon = "🎲"
-    strategy_name = "Padrão"
+    strategy_icon = "🎲"; strategy_name = "Padrão"
     
-    # 1. FUNÇÃO: REI DOS CANTOS (Ligas Rápidas)
+    # 1. REI DOS CANTOS
     if league_code in ['eng.1', 'ger.1', 'ned.1'] and (ph > 50 or pa > 50):
-        strategy_icon = "🚩"
-        strategy_name = "Rei dos Cantos"
+        strategy_icon = "🚩"; strategy_name = "Rei dos Cantos"
         extra_pick = "Over 9.5 Escanteios"
         narrativa = "Jogo com tendência de velocidade pelas pontas e muitos cantos."
 
-    # 2. FUNÇÃO: AÇOUGUEIRO (Ligas Violentas / Clássicos)
+    # 2. AÇOUGUEIRO
     elif league_code in ['arg.1', 'conmebol.libertadores', 'bra.1'] and abs(ph - pa) < 15:
-        strategy_icon = "🟨"
-        strategy_name = "O Açougueiro"
+        strategy_icon = "🟨"; strategy_name = "O Açougueiro"
         extra_pick = "Over 5.5 Cartões"
         narrativa = "Clássico tenso, pegado e com promessa de muita reclamação."
         
-    # 3. FUNÇÃO: A MURALHA (Clean Sheet - Favorito Sólido em Casa)
+    # 3. MURALHA
     elif ph >= 75:
-        strategy_icon = "🛡️"
-        strategy_name = "A Muralha"
+        strategy_icon = "🛡️"; strategy_name = "A Muralha"
         extra_pick = f"Baliza Inviolada: {home}"
         narrativa = f"O {home} tem defesa sólida e não deve sofrer gols."
 
-    # 4. FUNÇÃO: HT/FT (Super Favorito)
+    # 4. HT/FT
     elif ph >= 80:
-        strategy_icon = "🔁"
-        strategy_name = "HT/FT"
+        strategy_icon = "🔁"; strategy_name = "HT/FT"
         extra_pick = f"Vence 1ºT e Final: {home}"
         narrativa = f"Domínio total do {home} desde o minuto inicial."
         
-    # 5. FUNÇÃO: CAÇADOR DE ZEBRAS (Valor no Visitante)
+    # 5. CAÇADOR DE ZEBRAS
     elif pa >= 35 and pa <= 45:
-        strategy_icon = "🦓"
-        strategy_name = "Caçador de Zebras"
+        strategy_icon = "🦓"; strategy_name = "Caçador de Zebras"
         extra_pick = f"Handicap Asiático +1.0: {away}"
         narrativa = f"O {away} é subestimado e pode surpreender no contra-ataque."
         
-    # 6. FUNÇÃO: H2H (Histórico - Simulado)
+    # 6. H2H
     elif abs(ph - pa) < 10:
-        strategy_icon = "🆚"
-        strategy_name = "H2H Equilibrado"
+        strategy_icon = "🆚"; strategy_name = "H2H Equilibrado"
         extra_pick = "Ambas Marcam: Sim"
         narrativa = "Histórico recente mostra gols para os dois lados."
         
     else:
-        # Padrão
-        strategy_icon = "🎯"
-        strategy_name = "Análise Tática"
+        strategy_icon = "🎯"; strategy_name = "Análise Tática"
         narrativa = "Confronto direto! O equilíbrio deve prevalecer."
         extra_pick = "Over 1.5 Gols"
 
-    # Definição do Palpite Principal
     if ph >= 55: main_pick = f"Vitória do {home}"; safe_odd = 1.55
     elif pa >= 55: main_pick = f"Vitória do {away}"; safe_odd = 1.60
     else: main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"; safe_odd = 1.40
@@ -265,7 +279,6 @@ async def generate_daily_ticket(app):
     ticket = []
     total_odd = 1.0
     
-    # Empilha para ODD 10 a 15
     for c in candidates:
         if total_odd < 11.0:
             ticket.append(c)
@@ -281,16 +294,11 @@ async def generate_daily_ticket(app):
     for i, c in enumerate(ticket, 1):
         msg += f"{i}️⃣ <b>{c['match']}</b>\n🎯 {c['pick']} (Odd ~{c['odd']:.2f})\n\n"
     
-    # FUNÇÃO 6: MARTINGALE (GESTÃO)
-    msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>\n"
-    msg += f"📉 <b>Gestão (Martingale Suave):</b>\n"
-    msg += f"• Entrada: 0.5% da Banca\n"
-    msg += f"• Se Red: Próxima entrada 0.75% (Não dobre seco!)"
-    
+    msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>\n💰 <i>Gestão: 0.5% da Banca (Martingale Suave)</i>"
     try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
     except: pass
 
-# ================= 6. LAYOUTS ATUALIZADOS =================
+# ================= 6. LAYOUTS =================
 def format_morning_card(game, d1, d2, analise, conf, icon, strat_name):
     return (
         f"🏆 <b>{game['league']}</b>\n"
@@ -305,7 +313,6 @@ def format_morning_card(game, d1, d2, analise, conf, icon, strat_name):
     )
 
 def format_live_radar_card(game, favorite_team, situation):
-    # FUNÇÃO 9: GOL TARDIO (Monitoramento 80min+)
     is_late = int(game['clock'].replace("'", "")) >= 80 if "'" in game['clock'] else False
     alert_type = "GOL TARDIO (Last Minute)" if is_late else "ALERTA DE OPORTUNIDADE"
     
@@ -354,8 +361,9 @@ async def automation_routine(app: Application):
             ALERTED_SNIPER.clear(); PROCESSED_GAMES.clear(); ALERTED_LIVE.clear()
             DAILY_STATS = {"green": 0, "red": 0}
             jogos = await fetch_espn_soccer()
+            _, data_fmt = get_current_date_data() # DATA FORMATADA AQUI
             if jogos:
-                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in jogos:
                     d1, d2, analise, conf, _, icon, sname = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
@@ -372,7 +380,8 @@ async def automation_routine(app: Application):
         if agora.hour == 10 and agora.minute == 0:
             nba_games = await fetch_nba_professional()
             if nba_games:
-                header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+                _, data_fmt = get_current_date_data()
+                header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in nba_games: txt += format_nba_card(g)
                 await app.bot.send_message(chat_id=CHANNEL_ID, text=txt, parse_mode=ParseMode.HTML)
@@ -442,17 +451,19 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V260</b>\nArsenal Completo Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V261</b>\nData Correta + Arsenal Completo.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
+    data_api, data_fmt = get_current_date_data()
+    
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
         
-        header = f"🦁 <b>DVD TIPS | FUTEBOL</b> 🦁\n📅 <b>{DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        header = f"🦁 <b>DVD TIPS | FUTEBOL</b> 🦁\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos:
             d1, d2, analise, conf, _, icon, sname = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
@@ -473,14 +484,14 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         jogos = await fetch_nba_professional()
         if not jogos: await msg.edit_text("❌ Grade NBA vazia."); return
         
-        header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{DATA_ALVO}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
+        header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos: txt += format_nba_card(g)
         await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V260 FULL ARSENAL")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V261 AUTO DATE FIX")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
