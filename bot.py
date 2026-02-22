@@ -1,4 +1,4 @@
-# ================= BOT V267 (ODDS DINÂMICAS: MATEMÁTICA DE APOSTA REAL) =================
+# ================= BOT V268 (CORREÇÃO CRÍTICA: GREEN FALSO RESOLVIDO) =================
 import os
 import logging
 import asyncio
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ================= 🛡️ CACHE DE TABELA (LIVE) =================
 LIVE_STANDINGS = {}
 
-# ================= 📊 BACKUP DE SEGURANÇA (CASO API FALHE) =================
+# ================= 📊 BACKUP DE SEGURANÇA =================
 REAL_STANDINGS_BACKUP = {
     "Arsenal": 1, "Manchester City": 2, "Aston Villa": 3, "Liverpool": 6, "Chelsea": 5,
     "Real Madrid": 1, "Barcelona": 2, "Villarreal": 3, "Atletico Madrid": 4,
@@ -54,7 +54,7 @@ ALERTED_SNIPER = set()
 ALERTED_LIVE = set()
 DAILY_STATS = {"green": 0, "red": 0}
 
-# ================= 1. ERROS =================
+# ================= 1. TRATAMENTO DE ERROS =================
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(msg="Exception while handling an update:", exc_info=context.error)
 
@@ -109,7 +109,7 @@ async def fetch_league_standings():
                     if temp_map: LIVE_STANDINGS[code] = temp_map
             except: pass
 
-# ================= 4. NBA (BACKUP) =================
+# ================= 4. NBA =================
 NBA_BACKUP = {
     "Lakers": "LeBron James (25.4 PTS)", "Celtics": "Jayson Tatum (27.1 PTS)",
     "Nuggets": "Nikola Jokic (28.7 PTS)", "Bucks": "G. Antetokounmpo (30.4 PTS)",
@@ -177,7 +177,7 @@ def format_nba_card(game):
         f"👇 <b>Cestinhas:</b>\n🔥 {game['match'].split('@')[1].strip()}: {game['star_home']}\n🔥 {game['match'].split('@')[0].strip()}: {game['star_away']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL COM ODDS CALCULADAS =================
+# ================= 5. FUTEBOL =================
 async def fetch_espn_soccer():
     api_date, _ = get_current_date_data()
     leagues = ['ksa.1', 'ger.1', 'ita.1', 'fra.1', 'esp.1', 'arg.1', 'tur.1', 'por.1', 'ned.1', 'bra.1', 'bra.camp.paulista', 'eng.1', 'eng.2', 'uefa.europa']
@@ -217,35 +217,20 @@ async def fetch_espn_soccer():
     return TODAYS_GAMES
 
 def calculate_dynamic_odd(probability):
-    """
-    Calcula a Odd baseada na probabilidade (Odd = 1/Prob).
-    Adiciona uma margem de segurança/bookie.
-    """
-    if probability <= 0: return 2.00 # Fallback
-    
-    # Odd "Justa" (Fair Odd)
+    if probability <= 0: return 2.00
     fair_odd = 100 / probability
-    
-    # Ajuste para mercado real (Bookie sempre paga menos que a justa)
-    # Mas como somos Tips, queremos mostrar valor.
-    # Ex: Prob 80% -> Justa 1.25 -> Mostramos 1.28 ~ 1.32 (variação de mercado)
     variation = random.uniform(0.02, 0.08)
-    final_odd = fair_odd + variation
-    
-    return round(final_odd, 2)
+    return round(fair_odd + variation, 2)
 
 def get_market_analysis(league_code, event_id, home, away):
     random.seed(int(event_id))
     
-    # 1. POSIÇÃO TABELA
     standings = LIVE_STANDINGS.get(league_code, {})
     rank_home = standings.get(home, REAL_STANDINGS_BACKUP.get(home, 10))
     rank_away = standings.get(away, REAL_STANDINGS_BACKUP.get(away, 10))
-    
     if rank_home == 10 and rank_away == 10:
         rank_home = random.randint(1, 18); rank_away = random.randint(1, 18)
 
-    # 2. CÁLCULO PROBABILIDADE
     diff = rank_away - rank_home
     base_prob = 50 + (diff * 2.5) + 5
     
@@ -256,14 +241,12 @@ def get_market_analysis(league_code, event_id, home, away):
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
-    # 3. TEXTO
     if rank_home == 1: narrativa = f"O líder {home} joga para se isolar na ponta."
     elif rank_away == 1: narrativa = f"Teste de fogo para o {home} contra o líder {away}."
     elif diff > 12: narrativa = f"Duelo desigual: {home} (G4) vs {away} (Z4)."
     elif abs(diff) < 4: narrativa = f"Confronto direto na tabela ({rank_home}º vs {rank_away}º)."
     else: narrativa = f"O {home} busca subir na tabela aproveitando o fator casa."
 
-    # 4. ESTRATÉGIAS
     strategy_icon = "🎯"; strategy_name = "Análise Tática"; extra_pick = "Over 1.5 Gols"
 
     if league_code in ['eng.1', 'ger.1'] and confidence < 60:
@@ -277,47 +260,34 @@ def get_market_analysis(league_code, event_id, home, away):
     elif pa >= 40 and pa <= 50 and rank_away < rank_home:
         strategy_icon = "🦓"; strategy_name = "Caçador de Zebras"; extra_pick = f"Handicap +1.0: {away}"
 
-    # 5. CÁLCULO DINÂMICO DE ODD
     if ph >= 55: 
-        main_pick = f"Vitória do {home}"
-        safe_odd = calculate_dynamic_odd(ph)
+        main_pick = f"Vitória do {home}"; safe_odd = calculate_dynamic_odd(ph)
     elif pa >= 55: 
-        main_pick = f"Vitória do {away}"
-        safe_odd = calculate_dynamic_odd(pa)
+        main_pick = f"Vitória do {away}"; safe_odd = calculate_dynamic_odd(pa)
     else: 
         main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"
-        # Probabilidade de Dupla Chance é soma de (Empate + Vitória)
-        # Estimamos ~70% para DC em jogo equilibrado
         safe_odd = calculate_dynamic_odd(65 + random.randint(0,10))
 
     return main_pick, extra_pick, narrativa, f"{conf_bar} {confidence}%", safe_odd, strategy_icon, strategy_name
 
-# ================= 6. MÚLTIPLA TURBINADA (COM ODDS DINÂMICAS) =================
+# ================= 6. MÚLTIPLA TURBINADA =================
 async def generate_daily_ticket(app):
     if not TODAYS_GAMES: return
     
     candidates = []
     for g in TODAYS_GAMES:
         main_pick, _, _, _, calculated_odd, _, _ = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
-        
-        # Filtra Odds para Múltipla
-        # Não queremos odd 1.05 (muito baixa) nem 2.50 (muito risco)
         if 1.20 <= calculated_odd <= 1.90:
             candidates.append({'match': g['match'], 'pick': main_pick, 'odd': calculated_odd})
     
     random.shuffle(candidates)
     ticket = []; total_odd = 1.0
     
-    # Monta até Odd 10-15
     for c in candidates:
-        if total_odd < 11.0:
-            ticket.append(c); total_odd *= c['odd']
+        if total_odd < 11.0: ticket.append(c); total_odd *= c['odd']
         else: break
             
-    # Ajuste Fino
-    if total_odd > 17.0 and len(ticket) > 2:
-        removed = ticket.pop(); total_odd /= removed['odd']
-
+    if total_odd > 17.0 and len(ticket) > 2: removed = ticket.pop(); total_odd /= removed['odd']
     if len(ticket) < 3: return
     
     msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Odds Dinâmicas Calculadas 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
@@ -346,15 +316,25 @@ def format_live_radar_card(game, favorite_team, situation):
         f"💡 <b>A DICA:</b> Pressão total. Oportunidade de valor.\n"
     )
 
+# ================= 🚨 CORREÇÃO CRÍTICA DO VERIFY GREEN =================
 def verify_green(pick, h_score, a_score, home, away):
     total = h_score + a_score; is_green = False
+    
     if "Vitória do" in pick:
         if home in pick and h_score > a_score: is_green = True
         elif away in pick and a_score > h_score: is_green = True
     elif "Over 1.5" in pick and total > 1: is_green = True
     elif "Menos" in pick and total < 3: is_green = True 
     elif "Ambas" in pick and h_score > 0 and a_score > 0: is_green = True
-    elif "Empate" in pick or "Dupla" in pick: is_green = True 
+    
+    # --- AQUI ESTAVA O ERRO: AGORA CORRIGIDO ---
+    elif "Empate ou Visitante" in pick:
+        if a_score >= h_score: is_green = True # Visitante ganha ou empata
+    elif "Empate ou Casa" in pick:
+        if h_score >= a_score: is_green = True # Casa ganha ou empata
+    elif "Empate" in pick: # Empate seco
+        if h_score == a_score: is_green = True
+    # -------------------------------------------
 
     if is_green:
         DAILY_STATS["green"] += 1
@@ -469,7 +449,7 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V267</b>\nOdds Dinâmicas & Reais.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V268</b>\nCorreção de Green/Red Aplicada.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -511,7 +491,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V267 DYNAMIC ODDS")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V268 GREEN BUGFIX")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
