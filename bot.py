@@ -1,4 +1,4 @@
-# ================= BOT V280 (PORTEIRO DE ELITE: ZERO VÁRZEA + COPA DO BRASIL) =================
+# ================= BOT V282 (FILTRO DE GIGANTES: SÓ PASSA A ELITE DO FUTEBOL) =================
 import os
 import logging
 import asyncio
@@ -26,14 +26,21 @@ logger = logging.getLogger(__name__)
 # ================= 🛡️ CACHE DE TABELA (LIVE) =================
 LIVE_STANDINGS = {}
 
+# ================= 💎 A LISTA VIP DE TIMES BRASILEIROS =================
+# Se for Copa do Brasil ou Estadual, só passa se um desses estiver em campo.
+BRAZIL_ELITE_TEAMS = [
+    "Flamengo", "Palmeiras", "São Paulo", "Corinthians", "Santos", 
+    "Grêmio", "Internacional", "Atlético-MG", "Cruzeiro", "Vasco", 
+    "Botafogo", "Fluminense", "Fortaleza", "Bahia", "Athletico-PR",
+    "Red Bull Bragantino", "Ceará", "Sport", "Vitória"
+]
+
 # ================= 📊 BACKUP DE RANKING =================
 REAL_STANDINGS_BACKUP = {
     "Arsenal": 1, "Manchester City": 2, "Liverpool": 3, "Aston Villa": 4,
-    "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3, "Girona": 4,
-    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Leipzig": 3,
-    "Inter Milan": 1, "Juventus": 2, "AC Milan": 3,
-    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5, "Sao Paulo": 6,
-    "River Plate": 1, "Boca Juniors": 2, "Racing Club": 3,
+    "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3,
+    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Inter Milan": 1, "Juventus": 2,
+    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5,
     "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
@@ -44,7 +51,6 @@ def get_current_date_data():
     if agora.hour < 5: data_referencia = agora - timedelta(days=1)
     else: data_referencia = agora
     
-    # API = Data Real | Display = Data Simulada (2026)
     try: data_display = data_referencia.replace(year=2026)
     except: data_display = data_referencia + timedelta(days=365)
     
@@ -87,7 +93,6 @@ async def news_loop(app: Application):
 
 # ================= 3. BUSCA TABELA AO VIVO =================
 async def fetch_league_standings():
-    # Só baixa tabela de ligas de pontos corridos RELEVANTES
     leagues = {
         'eng.1': 'Premier League', 'esp.1': 'La Liga', 'ger.1': 'Bundesliga',
         'ita.1': 'Serie A', 'fra.1': 'Ligue 1', 'bra.1': 'Brasileirão',
@@ -173,7 +178,7 @@ def format_nba_card(game):
         f"📊 <b>Linhas:</b> {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL ELITE (FILTRADO) =================
+# ================= 5. FUTEBOL COM FILTRO DE GIGANTES =================
 async def get_match_details(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
     details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0}}
@@ -201,24 +206,40 @@ async def get_match_details(league_code, event_id):
     except: pass
     return details
 
+def is_game_vip(league_slug, league_name, home, away):
+    """
+    O PORTEIRO DO BOT:
+    1. Ligas Internacionais de Elite: PASSA TUDO.
+    2. Brasil (Copas/Estaduais): SÓ PASSA SE TIVER GIGANTE.
+    """
+    
+    # 1. ELITE GLOBAL (Passa direto)
+    ELITE_SLUGS = [
+        'uefa.champions', 'conmebol.libertadores', 'uefa.europa', 'conmebol.sudamericana',
+        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'ksa.1', 'por.1', 'ned.1', 'tur.1', 'arg.1'
+    ]
+    if league_slug in ELITE_SLUGS: return True
+    if "Champions" in league_name or "Libertadores" in league_name or "Premier" in league_name: return True
+
+    # 2. BRASIL (Filtro de Gigantes)
+    # Se for Copa do Brasil, Nordeste ou Estadual, checa os times
+    if 'bra' in league_slug or 'Copa' in league_name or 'Brasil' in league_name:
+        # Normaliza nomes para busca
+        h_norm = home.lower(); a_norm = away.lower()
+        for giant in BRAZIL_ELITE_TEAMS:
+            g_norm = giant.lower()
+            if g_norm in h_norm or g_norm in a_norm:
+                return True # Tem gigante, pode passar
+        return False # Joinville x CSA -> Barrado
+
+    return False # Outras ligas aleatórias -> Barrado
+
 async def fetch_espn_soccer():
     api_date = get_current_date_data()[0]
     
-    # URL UNIVERSAL (SCOREPANEL)
+    # Busca Universal (Pega tudo e filtra depois)
     universal_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/scorepanel?dates={api_date}"
     
-    # 🔒 A LISTA VIP (O PORTEIRO)
-    # Somente jogos dessas ligas ou com esses nomes passam.
-    ALLOWED_LEAGUES_SLUGS = [
-        'uefa.champions', 'conmebol.libertadores', 'conmebol.sudamericana',
-        'bra.copa_do_brasil', 'bra.copa_nordeste', 'bra.1',
-        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'por.1', 'ned.1', 'ksa.1'
-    ]
-    ALLOWED_KEYWORDS = ["Copa do Brasil", "Libertadores", "Champions League", "Premier League", "LaLiga", "Bundesliga", "Serie A", "Saudi", "Nordeste"]
-    
-    # 🚫 LISTA NEGRA (VÁRZEA)
-    BLOCKED_KEYWORDS = ["Sub-20", "Sub-19", "Feminino", "Women", "Amador", "2.", "Segunda", "Serie B", "Serie C", "National League"]
-
     jogos = []
     ids_processados = set()
     br_tz = timezone(timedelta(hours=-3))
@@ -233,33 +254,26 @@ async def fetch_espn_soccer():
                     league_name = league_data.get('name', 'Futebol')
                     league_slug = league_data.get('slug', 'unknown')
                     
-                    # 1. VERIFICA SE É VÁRZEA (CRITÉRIO DE EXCLUSÃO)
-                    if any(bad in league_name for bad in BLOCKED_KEYWORDS):
-                        continue # Pula fora
+                    comp = event['competitions'][0]['competitors']
+                    home = comp[0]['team']['name']
+                    away = comp[1]['team']['name']
                     
-                    # 2. VERIFICA SE É VIP (CRITÉRIO DE INCLUSÃO)
-                    is_vip = False
-                    if league_slug in ALLOWED_LEAGUES_SLUGS: is_vip = True
-                    if any(good in league_name for good in ALLOWED_KEYWORDS): is_vip = True
-                    
-                    # SE PASSOU PELO PORTEIRO:
-                    if is_vip and event['id'] not in ids_processados:
-                        state = event['status']['type']['state']
-                        comp = event['competitions'][0]['competitors']
-                        t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
-                        t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
-                        home = t_home['team']['name']; away = t_away['team']['name']
-                        score_home = int(t_home['score']); score_away = int(t_away['score'])
-                        dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
-                        
-                        jogos.append({
-                            "id": event['id'], "league_code": league_slug, "match": f"{home} x {away}",
-                            "home": home, "away": away, "time": dt_br.strftime("%H:%M"),
-                            "league": league_name, "status": state,
-                            "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
-                            "score_home": score_home, "score_away": score_away
-                        })
-                        ids_processados.add(event['id'])
+                    # APLICA O FILTRO DE GIGANTES AQUI
+                    if is_game_vip(league_slug, league_name, home, away):
+                        if event['id'] not in ids_processados:
+                            t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
+                            t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
+                            
+                            dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                            
+                            jogos.append({
+                                "id": event['id'], "league_code": league_slug, "match": f"{home} x {away}",
+                                "home": home, "away": away, "time": dt_br.strftime("%H:%M"),
+                                "league": league_name, "status": event['status']['type']['state'],
+                                "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
+                                "score_home": int(t_home['score']), "score_away": int(t_away['score'])
+                            })
+                            ids_processados.add(event['id'])
         except Exception as e:
             logger.error(f"Erro no filtro: {e}")
 
@@ -550,14 +564,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V280</b>\nFiltro de Elite: Sem Várzea, Com Copa.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V282</b>\nFiltro de Gigantes Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     data_fmt = get_current_date_data()[1]
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando ELITE ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ELITE ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -592,7 +606,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V280 ELITE GATEKEEPER")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V282 ELITE FILTER")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
