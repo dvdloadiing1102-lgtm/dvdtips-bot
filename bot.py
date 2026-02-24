@@ -1,4 +1,4 @@
-# ================= BOT V282 (FILTRO DE GIGANTES: SÓ PASSA A ELITE DO FUTEBOL) =================
+# ================= BOT V283 (BACK TO BASICS: O SISTEMA QUE FUNCIONA) =================
 import os
 import logging
 import asyncio
@@ -26,21 +26,13 @@ logger = logging.getLogger(__name__)
 # ================= 🛡️ CACHE DE TABELA (LIVE) =================
 LIVE_STANDINGS = {}
 
-# ================= 💎 A LISTA VIP DE TIMES BRASILEIROS =================
-# Se for Copa do Brasil ou Estadual, só passa se um desses estiver em campo.
-BRAZIL_ELITE_TEAMS = [
-    "Flamengo", "Palmeiras", "São Paulo", "Corinthians", "Santos", 
-    "Grêmio", "Internacional", "Atlético-MG", "Cruzeiro", "Vasco", 
-    "Botafogo", "Fluminense", "Fortaleza", "Bahia", "Athletico-PR",
-    "Red Bull Bragantino", "Ceará", "Sport", "Vitória"
-]
-
 # ================= 📊 BACKUP DE RANKING =================
 REAL_STANDINGS_BACKUP = {
     "Arsenal": 1, "Manchester City": 2, "Liverpool": 3, "Aston Villa": 4,
     "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3,
     "Bayern Munich": 1, "Bayer Leverkusen": 2, "Inter Milan": 1, "Juventus": 2,
     "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5,
+    "River Plate": 1, "Boca Juniors": 2, "Racing Club": 3,
     "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
@@ -51,6 +43,7 @@ def get_current_date_data():
     if agora.hour < 5: data_referencia = agora - timedelta(days=1)
     else: data_referencia = agora
     
+    # API = Data Real | Display = 2026
     try: data_display = data_referencia.replace(year=2026)
     except: data_display = data_referencia + timedelta(days=365)
     
@@ -178,7 +171,7 @@ def format_nba_card(game):
         f"📊 <b>Linhas:</b> {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL COM FILTRO DE GIGANTES =================
+# ================= 5. FUTEBOL (SISTEMA TRATOR) =================
 async def get_match_details(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
     details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0}}
@@ -206,76 +199,56 @@ async def get_match_details(league_code, event_id):
     except: pass
     return details
 
-def is_game_vip(league_slug, league_name, home, away):
-    """
-    O PORTEIRO DO BOT:
-    1. Ligas Internacionais de Elite: PASSA TUDO.
-    2. Brasil (Copas/Estaduais): SÓ PASSA SE TIVER GIGANTE.
-    """
-    
-    # 1. ELITE GLOBAL (Passa direto)
-    ELITE_SLUGS = [
-        'uefa.champions', 'conmebol.libertadores', 'uefa.europa', 'conmebol.sudamericana',
-        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'ksa.1', 'por.1', 'ned.1', 'tur.1', 'arg.1'
-    ]
-    if league_slug in ELITE_SLUGS: return True
-    if "Champions" in league_name or "Libertadores" in league_name or "Premier" in league_name: return True
-
-    # 2. BRASIL (Filtro de Gigantes)
-    # Se for Copa do Brasil, Nordeste ou Estadual, checa os times
-    if 'bra' in league_slug or 'Copa' in league_name or 'Brasil' in league_name:
-        # Normaliza nomes para busca
-        h_norm = home.lower(); a_norm = away.lower()
-        for giant in BRAZIL_ELITE_TEAMS:
-            g_norm = giant.lower()
-            if g_norm in h_norm or g_norm in a_norm:
-                return True # Tem gigante, pode passar
-        return False # Joinville x CSA -> Barrado
-
-    return False # Outras ligas aleatórias -> Barrado
-
 async def fetch_espn_soccer():
     api_date = get_current_date_data()[0]
     
-    # Busca Universal (Pega tudo e filtra depois)
-    universal_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/scorepanel?dates={api_date}"
+    # LISTA DE LIGAS (VOLTAMOS AO MANUAL QUE FUNCIONA)
+    # Coloquei todas as variantes possíveis da Copa do Brasil pra não ter erro
+    leagues = [
+        'bra.copa_do_brasil', 'bra.copa', 'bra.cup', 
+        'uefa.champions', 'conmebol.libertadores', 
+        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'ksa.1',
+        'bra.1', 'arg.1', 'por.1', 'ned.1', 'tur.1',
+        'bra.copa_nordeste'
+    ]
     
     jogos = []
     ids_processados = set()
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=30) as client:
-        try:
-            r = await client.get(universal_url)
-            if r.status_code == 200:
+        for league in leagues:
+            try:
+                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
+                r = await client.get(url)
+                if r.status_code != 200: continue
                 data = r.json()
+                
+                # Se não tiver 'events', a liga tá vazia ou o código tá errado
+                if not data.get('events'): continue
+                
+                try: league_name = data['leagues'][0]['name']
+                except: league_name = league.upper()
+
                 for event in data.get('events', []):
-                    league_data = event.get('competitions', [{}])[0].get('league', {})
-                    league_name = league_data.get('name', 'Futebol')
-                    league_slug = league_data.get('slug', 'unknown')
-                    
-                    comp = event['competitions'][0]['competitors']
-                    home = comp[0]['team']['name']
-                    away = comp[1]['team']['name']
-                    
-                    # APLICA O FILTRO DE GIGANTES AQUI
-                    if is_game_vip(league_slug, league_name, home, away):
-                        if event['id'] not in ids_processados:
-                            t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
-                            t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
-                            
-                            dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
-                            
-                            jogos.append({
-                                "id": event['id'], "league_code": league_slug, "match": f"{home} x {away}",
-                                "home": home, "away": away, "time": dt_br.strftime("%H:%M"),
-                                "league": league_name, "status": event['status']['type']['state'],
-                                "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
-                                "score_home": int(t_home['score']), "score_away": int(t_away['score'])
-                            })
-                            ids_processados.add(event['id'])
-        except Exception as e:
-            logger.error(f"Erro no filtro: {e}")
+                    if event['id'] not in ids_processados:
+                        state = event['status']['type']['state']
+                        comp = event['competitions'][0]['competitors']
+                        t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
+                        t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
+                        home = t_home['team']['name']; away = t_away['team']['name']
+                        score_home = int(t_home['score']); score_away = int(t_away['score'])
+                        dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                        
+                        jogos.append({
+                            "id": event['id'], "league_code": league, "match": f"{home} x {away}",
+                            "home": home, "away": away, "time": dt_br.strftime("%H:%M"),
+                            "league": league_name, "status": state,
+                            "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
+                            "score_home": score_home, "score_away": score_away
+                        })
+                        ids_processados.add(event['id'])
+            except: pass
 
     jogos.sort(key=lambda x: x['time'])
     global TODAYS_GAMES; TODAYS_GAMES = jogos
@@ -367,7 +340,7 @@ async def generate_daily_ticket(app):
         else: break
     
     if len(ticket) >= 3:
-        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Jogos de Elite Selecionados 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
+        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Jogos Selecionados 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
         for i, c in enumerate(ticket, 1): msg += f"{i}️⃣ <b>{c['match']}</b>\n🎯 {c['pick']} (Odd: {c['odd']:.2f})\n\n"
         msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>\n💰 <i>Gestão: 0.5% da Banca</i>"
         try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
@@ -564,14 +537,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V282</b>\nFiltro de Gigantes Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V283</b>\nModo Trator Ativado (Busca Completa).", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     data_fmt = get_current_date_data()[1]
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ELITE ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -606,7 +579,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V282 ELITE FILTER")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V283 BACK TO BASICS")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
