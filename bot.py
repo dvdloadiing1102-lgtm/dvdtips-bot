@@ -1,4 +1,4 @@
-# ================= BOT V278 (FIX CRÍTICO: DATA REAL NA API + VISUAL 2026) =================
+# ================= BOT V280 (PORTEIRO DE ELITE: ZERO VÁRZEA + COPA DO BRASIL) =================
 import os
 import logging
 import asyncio
@@ -29,31 +29,26 @@ LIVE_STANDINGS = {}
 # ================= 📊 BACKUP DE RANKING =================
 REAL_STANDINGS_BACKUP = {
     "Arsenal": 1, "Manchester City": 2, "Liverpool": 3, "Aston Villa": 4,
-    "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3,
-    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Inter Milan": 1, "Juventus": 2,
+    "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3, "Girona": 4,
+    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Leipzig": 3,
+    "Inter Milan": 1, "Juventus": 2, "AC Milan": 3,
     "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5, "Sao Paulo": 6,
+    "River Plate": 1, "Boca Juniors": 2, "Racing Club": 3,
     "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
-# ================= 🧠 INTEGRIDADE TEMPORAL (O FIX DA COPA DO BRASIL) =================
-def get_api_date():
-    """Retorna a data REAL de hoje para a API encontrar os jogos."""
+# ================= CONFIGURAÇÃO DATA =================
+def get_current_date_data():
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    # Se for madrugada, ajusta para o dia "útil" anterior
-    if agora.hour < 5: 
-        data_real = agora - timedelta(days=1)
-    else: 
-        data_real = agora
-    return data_real.strftime("%Y%m%d")
-
-def get_display_date():
-    """Retorna a data SIMULADA (2026) para o usuário ler."""
-    br_tz = timezone(timedelta(hours=-3))
-    agora = datetime.now(br_tz)
-    try: data_fake = agora.replace(year=2026)
-    except: data_fake = agora + timedelta(days=365)
-    return data_fake.strftime("%d/%m/%Y")
+    if agora.hour < 5: data_referencia = agora - timedelta(days=1)
+    else: data_referencia = agora
+    
+    # API = Data Real | Display = Data Simulada (2026)
+    try: data_display = data_referencia.replace(year=2026)
+    except: data_display = data_referencia + timedelta(days=365)
+    
+    return data_referencia.strftime("%Y%m%d"), data_display.strftime("%d/%m/%Y")
 
 # ================= MEMÓRIA =================
 TODAYS_GAMES = []
@@ -92,6 +87,7 @@ async def news_loop(app: Application):
 
 # ================= 3. BUSCA TABELA AO VIVO =================
 async def fetch_league_standings():
+    # Só baixa tabela de ligas de pontos corridos RELEVANTES
     leagues = {
         'eng.1': 'Premier League', 'esp.1': 'La Liga', 'ger.1': 'Bundesliga',
         'ita.1': 'Serie A', 'fra.1': 'Ligue 1', 'bra.1': 'Brasileirão',
@@ -128,8 +124,7 @@ def generate_nba_narrative(home, away, spread, total):
     return analise
 
 async def fetch_nba_professional():
-    # NBA USA A DATA REAL AGORA TAMBÉM
-    api_date = get_api_date()
+    api_date = get_current_date_data()[0]
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={api_date}"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -178,10 +173,10 @@ def format_nba_card(game):
         f"📊 <b>Linhas:</b> {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL DETALHADO (COPA DO BRASIL ON) =================
+# ================= 5. FUTEBOL ELITE (FILTRADO) =================
 async def get_match_details(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
-    details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0, "home_poss": 0, "away_poss": 0}}
+    details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0}}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(url)
@@ -198,73 +193,88 @@ async def get_match_details(league_code, event_id):
                     for team_stat in data['boxscore']['teams']:
                         is_home = team_stat['team']['id'] == data['header']['competitions'][0]['competitors'][0]['id']
                         stats_list = team_stat.get('statistics', [])
-                        shots = 0; poss = 0
+                        shots = 0
                         for s in stats_list:
                             if s['name'] == 'totalShots': shots = int(s['displayValue'])
-                            if s['name'] == 'possessionPct': poss = int(s['displayValue'])
-                        if is_home: details['stats']['home_shots'] = shots; details['stats']['home_poss'] = poss
-                        else: details['stats']['away_shots'] = shots; details['stats']['away_poss'] = poss
+                        if is_home: details['stats']['home_shots'] = shots
+                        else: details['stats']['away_shots'] = shots
     except: pass
     return details
 
 async def fetch_espn_soccer():
-    # USA A DATA REAL AGORA!
-    api_date = get_api_date()
+    api_date = get_current_date_data()[0]
     
-    leagues = [
-        'bra.copa_do_brasil', 'bra.copa', # PRIORIDADE 1
-        'uefa.champions', 'conmebol.libertadores', 'bra.copa_nordeste',
-        'uefa.europa', 'ksa.1',
-        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1',
-        'bra.1', 'arg.1', 'por.1', 'ned.1', 'tur.1'
+    # URL UNIVERSAL (SCOREPANEL)
+    universal_url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/scorepanel?dates={api_date}"
+    
+    # 🔒 A LISTA VIP (O PORTEIRO)
+    # Somente jogos dessas ligas ou com esses nomes passam.
+    ALLOWED_LEAGUES_SLUGS = [
+        'uefa.champions', 'conmebol.libertadores', 'conmebol.sudamericana',
+        'bra.copa_do_brasil', 'bra.copa_nordeste', 'bra.1',
+        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'por.1', 'ned.1', 'ksa.1'
     ]
+    ALLOWED_KEYWORDS = ["Copa do Brasil", "Libertadores", "Champions League", "Premier League", "LaLiga", "Bundesliga", "Serie A", "Saudi", "Nordeste"]
+    
+    # 🚫 LISTA NEGRA (VÁRZEA)
+    BLOCKED_KEYWORDS = ["Sub-20", "Sub-19", "Feminino", "Women", "Amador", "2.", "Segunda", "Serie B", "Serie C", "National League"]
+
     jogos = []
+    ids_processados = set()
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=30) as client:
-        for league in leagues:
-            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
-            try:
-                r = await client.get(url)
-                if r.status_code != 200: continue
+        try:
+            r = await client.get(universal_url)
+            if r.status_code == 200:
                 data = r.json()
-                if not data.get('events'): continue
-                
-                try: league_name = data['leagues'][0]['name']
-                except: league_name = league.upper()
-
                 for event in data.get('events', []):
-                    state = event['status']['type']['state']
-                    comp = event['competitions'][0]['competitors']
-                    t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
-                    t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
-                    home = t_home['team']['name']; away = t_away['team']['name']
-                    score_home = int(t_home['score']); score_away = int(t_away['score'])
-                    dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                    league_data = event.get('competitions', [{}])[0].get('league', {})
+                    league_name = league_data.get('name', 'Futebol')
+                    league_slug = league_data.get('slug', 'unknown')
                     
-                    jogos.append({
-                        "id": event['id'], "league_code": league, "match": f"{home} x {away}", "home": home, "away": away,
-                        "time": dt_br.strftime("%H:%M"), "league": league_name, "status": state,
-                        "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
-                        "score_home": score_home, "score_away": score_away
-                    })
-            except: continue
-    
-    unicos = {j['match']: j for j in jogos}; lista_final = list(unicos.values())
-    lista_final.sort(key=lambda x: x['time'])
-    global TODAYS_GAMES; TODAYS_GAMES = lista_final
+                    # 1. VERIFICA SE É VÁRZEA (CRITÉRIO DE EXCLUSÃO)
+                    if any(bad in league_name for bad in BLOCKED_KEYWORDS):
+                        continue # Pula fora
+                    
+                    # 2. VERIFICA SE É VIP (CRITÉRIO DE INCLUSÃO)
+                    is_vip = False
+                    if league_slug in ALLOWED_LEAGUES_SLUGS: is_vip = True
+                    if any(good in league_name for good in ALLOWED_KEYWORDS): is_vip = True
+                    
+                    # SE PASSOU PELO PORTEIRO:
+                    if is_vip and event['id'] not in ids_processados:
+                        state = event['status']['type']['state']
+                        comp = event['competitions'][0]['competitors']
+                        t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
+                        t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
+                        home = t_home['team']['name']; away = t_away['team']['name']
+                        score_home = int(t_home['score']); score_away = int(t_away['score'])
+                        dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                        
+                        jogos.append({
+                            "id": event['id'], "league_code": league_slug, "match": f"{home} x {away}",
+                            "home": home, "away": away, "time": dt_br.strftime("%H:%M"),
+                            "league": league_name, "status": state,
+                            "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
+                            "score_home": score_home, "score_away": score_away
+                        })
+                        ids_processados.add(event['id'])
+        except Exception as e:
+            logger.error(f"Erro no filtro: {e}")
+
+    jogos.sort(key=lambda x: x['time'])
+    global TODAYS_GAMES; TODAYS_GAMES = jogos
     return TODAYS_GAMES
 
 def calculate_dynamic_odd(probability, league_code, is_super_fav):
     if probability <= 0: return 2.00
     fair_odd = 100 / probability
     multiplier = 1.0
-    # Ajuste para realismo
-    if league_code in ['arg.1', 'bra.1', 'bra.copa_do_brasil'] and not is_super_fav:
-        multiplier = 1.30 # Aumenta odds em jogos travados
-    elif league_code in ['ger.1', 'ksa.1']:
+    if 'arg' in str(league_code) or 'bra' in str(league_code) and not is_super_fav:
+        multiplier = 1.30
+    elif 'ger' in str(league_code) or 'ksa' in str(league_code):
         multiplier = 0.95
-        
     final_odd = (fair_odd + random.uniform(0.02, 0.08)) * multiplier
     if final_odd < 1.05: final_odd = 1.05
     return round(final_odd, 2)
@@ -275,16 +285,14 @@ def get_market_analysis(league_code, event_id, home, away):
     rank_home = standings.get(home, REAL_STANDINGS_BACKUP.get(home, 10))
     rank_away = standings.get(away, REAL_STANDINGS_BACKUP.get(away, 10))
     
-    # Ranking forçado para Copas
-    if 'copa' in league_code or 'champions' in league_code or 'libertadores' in league_code:
+    if 'copa' in str(league_code) or 'champions' in str(league_code) or 'libertadores' in str(league_code):
         if home in REAL_STANDINGS_BACKUP: rank_home = 1
         if away in REAL_STANDINGS_BACKUP: rank_away = 1
 
     SUPER_FAVORITOS = ["Al Hilal", "Al Nassr", "Al Ittihad", "Real Madrid", "Manchester City", "Bayern Munich", "Bayer Leverkusen", "Flamengo", "Palmeiras", "River Plate", "Fortaleza"]
     
-    # Filtro Homônimos
-    if "Liverpool" in home and league_code not in ['eng.1', 'uefa.champions']: pass 
-    elif "Liverpool" in away and league_code not in ['eng.1', 'uefa.champions']: pass
+    if "Liverpool" in home and 'eng' not in str(league_code) and 'uefa' not in str(league_code): pass 
+    elif "Liverpool" in away and 'eng' not in str(league_code) and 'uefa' not in str(league_code): pass
     else: SUPER_FAVORITOS.append("Liverpool")
 
     is_home_super = any(s in home for s in SUPER_FAVORITOS)
@@ -302,7 +310,7 @@ def get_market_analysis(league_code, event_id, home, away):
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
-    narrativa = "Duelo eliminatório/decisivo." if 'copa' in league_code else "Confronto equilibrado."
+    narrativa = "Duelo eliminatório/decisivo." if 'copa' in str(league_code) else "Confronto equilibrado."
     if rank_home < rank_away: narrativa = f"O {home} é favorito."
     elif rank_away < rank_home: narrativa = f"O {away} busca o resultado."
 
@@ -310,27 +318,23 @@ def get_market_analysis(league_code, event_id, home, away):
 
     if pa >= 70:
         strategy_icon = "🔥"; strategy_name = "Favorito Visitante"; extra_pick = f"Vitória do {away}"
-        narrativa = f"O {away} é muito superior."
+        narrativa = f"O {away} é tecnicamente muito superior."
     elif ph >= 75:
         strategy_icon = "🛡️"; strategy_name = "A Muralha"; extra_pick = f"Vitória do {home}"
-        narrativa = f"O {home} deve dominar em casa."
-    elif 'copa' in league_code:
-        strategy_icon = "🏆"; strategy_name = "Copeiro"; extra_pick = "Ambas Marcam: Não" # Jogos de copa costumam ser fechados
-    elif league_code in ['eng.1', 'ger.1'] and confidence < 60:
+        narrativa = f"O {home} joga em casa e deve dominar."
+    elif 'copa' in str(league_code):
+        strategy_icon = "🏆"; strategy_name = "Copeiro"; extra_pick = "Ambas Marcam: Não"
+    elif 'eng' in str(league_code) and confidence < 60:
         strategy_icon = "🚩"; strategy_name = "Rei dos Cantos"; extra_pick = "Over 9.5 Escanteios"
-    elif league_code in ['arg.1', 'bra.1', 'conmebol.libertadores'] and abs(ph-pa) < 15:
+    elif 'bra' in str(league_code) and abs(ph-pa) < 15:
         strategy_icon = "🟨"; strategy_name = "O Açougueiro"; extra_pick = "Over 5.5 Cartões"
     elif pa >= 40 and pa <= 55 and rank_away < rank_home and not is_home_super:
         strategy_icon = "🦓"; strategy_name = "Caçador de Zebras"; extra_pick = f"Handicap +1.0: {away}"
 
     is_any_super = is_home_super or is_away_super
-    if ph >= 55: 
-        main_pick = f"Vitória do {home}"; safe_odd = calculate_dynamic_odd(ph, league_code, is_any_super)
-    elif pa >= 55: 
-        main_pick = f"Vitória do {away}"; safe_odd = calculate_dynamic_odd(pa, league_code, is_any_super)
-    else: 
-        main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"
-        safe_odd = calculate_dynamic_odd(60, league_code, False)
+    if ph >= 55: main_pick = f"Vitória do {home}"; safe_odd = calculate_dynamic_odd(ph, str(league_code), is_any_super)
+    elif pa >= 55: main_pick = f"Vitória do {away}"; safe_odd = calculate_dynamic_odd(pa, str(league_code), is_any_super)
+    else: main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"; safe_odd = calculate_dynamic_odd(60, str(league_code), False)
 
     return main_pick, extra_pick, narrativa, f"{conf_bar} {confidence}%", safe_odd, strategy_icon, strategy_name
 
@@ -340,8 +344,7 @@ async def generate_daily_ticket(app):
     candidates = []
     for g in TODAYS_GAMES:
         main_pick, _, _, _, odd, _, _ = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
-        if 1.30 <= odd <= 1.95: 
-            candidates.append({'match': g['match'], 'pick': main_pick, 'odd': odd})
+        if 1.30 <= odd <= 1.95: candidates.append({'match': g['match'], 'pick': main_pick, 'odd': odd})
     
     random.shuffle(candidates)
     ticket = []; total_odd = 1.0
@@ -436,7 +439,7 @@ async def automation_routine(app: Application):
             ALERTED_SNIPER.clear(); PROCESSED_GAMES.clear(); ALERTED_LIVE.clear()
             DAILY_STATS = {"green": 0, "red": 0}
             jogos = await fetch_espn_soccer()
-            data_fmt = get_display_date() # DATA FAKE PARA O USUÁRIO LER
+            data_fmt = get_current_date_data()[1]
             if jogos:
                 header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
@@ -456,7 +459,7 @@ async def automation_routine(app: Application):
         if agora.hour == 10 and agora.minute == 0:
             nba_games = await fetch_nba_professional()
             if nba_games:
-                data_fmt = get_display_date()
+                data_fmt = get_current_date_data()[1]
                 header = f"🏀 <b>DVD TIPS | GRADE NBA</b> 🏀\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in nba_games: txt += format_nba_card(g)
@@ -547,14 +550,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V278</b>\nCopa do Brasil DETECTADA.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V280</b>\nFiltro de Elite: Sem Várzea, Com Copa.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
-    data_fmt = get_display_date()
+    data_fmt = get_current_date_data()[1]
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando grade ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando ELITE ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -589,7 +592,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V278 BRAZIL CUP UNLOCKED")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V280 ELITE GATEKEEPER")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
