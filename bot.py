@@ -1,4 +1,4 @@
-# ================= BOT V273 (REAL TIME: DESTRAVADO PARA O MUNDO REAL) =================
+# ================= BOT V275 (CORREÇÃO DE LIGAS: COPA DO BRASIL CONFIRMADA) =================
 import os
 import logging
 import asyncio
@@ -28,29 +28,26 @@ LIVE_STANDINGS = {}
 
 # ================= 📊 BACKUP DE SEGURANÇA (REFERÊNCIA TÉCNICA) =================
 REAL_STANDINGS_BACKUP = {
-    "Arsenal": 1, "Manchester City": 2, "Liverpool": 3, "Aston Villa": 4,
-    "Real Madrid": 1, "Girona": 2, "Barcelona": 3, "Atletico Madrid": 4,
-    "Bayer Leverkusen": 1, "Bayern Munich": 2, "Stuttgart": 3,
+    "Arsenal": 1, "Manchester City": 2, "Aston Villa": 3, "Liverpool": 4, "Chelsea": 5,
+    "Real Madrid": 1, "Barcelona": 2, "Villarreal": 3, "Atletico Madrid": 4,
+    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Borussia Dortmund": 3,
     "Inter Milan": 1, "AC Milan": 2, "Juventus": 3,
-    "PSG": 1, "Monaco": 2, "Brest": 3,
-    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4,
-    "River Plate": 1, "Boca Juniors": 5,
-    "Al Hilal": 1, "Al Nassr": 2
+    "Lens": 1, "Paris Saint-Germain": 2, "Monaco": 3,
+    "Palmeiras": 1, "Flamengo": 2, "Botafogo": 3, "Sao Paulo": 4, "Fortaleza": 5,
+    "River Plate": 1, "Boca Juniors": 4, "Racing Club": 5,
+    "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
-# ================= 📅 DATA REAL (AGORA É SÉRIO) =================
+# ================= CONFIGURAÇÃO DATA (REAL TIME) =================
 def get_current_date_data():
-    """Retorna a data DE HOJE no fuso horário do Brasil."""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    
-    # Se for madrugada (antes das 5h), mantém a grade do dia anterior
+    # Ajuste de madrugada: se for antes das 05h, pega o dia anterior (jogos da noite)
     if agora.hour < 5: 
         data_referencia = agora - timedelta(days=1)
     else: 
         data_referencia = agora
-        
-    # SEM FORÇAR 2026! DATA REAL.
+    
     return data_referencia.strftime("%Y%m%d"), data_referencia.strftime("%d/%m/%Y")
 
 # ================= MEMÓRIA =================
@@ -67,7 +64,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ================= 2. NEWS =================
 async def fetch_news():
-    feeds = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml"]
+    feeds = ["https://ge.globo.com/rss/ge/futebol/", "https://rss.uol.com.br/feed/esporte.xml", "https://www.espn.com.br/rss/nba/news"]
     noticias = []
     try:
         for url in feeds:
@@ -90,10 +87,11 @@ async def news_loop(app: Application):
 
 # ================= 3. BUSCA TABELA AO VIVO =================
 async def fetch_league_standings():
+    # Apenas ligas de pontos corridos aqui
     leagues = {
         'eng.1': 'Premier League', 'esp.1': 'La Liga', 'ger.1': 'Bundesliga',
         'ita.1': 'Serie A', 'fra.1': 'Ligue 1', 'bra.1': 'Brasileirão',
-        'arg.1': 'Argentino'
+        'arg.1': 'Argentino', 'ksa.1': 'Saudi Pro League'
     }
     global LIVE_STANDINGS
     async with httpx.AsyncClient(timeout=20) as client:
@@ -133,7 +131,6 @@ async def fetch_nba_professional():
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             r = await client.get(url)
-            # Backup sem data
             if r.status_code != 200 or not r.json().get('events'):
                 r = await client.get("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard")
             data = r.json()
@@ -156,7 +153,11 @@ async def fetch_nba_professional():
                 except: spread_num = 0
                 if spread_num <= -5: pick = f"Vitória do {team_home['team']['name']}"
                 elif spread_num >= 5: pick = f"Vitória do {team_away['team']['name']}"
-                else: pick = f"Vitória do {team_home['team']['name']}"
+                else: 
+                    try: 
+                        if float(ou_val) > 225: pick = "Over 225.5 Pontos"
+                        else: pick = f"Vitória do {team_home['team']['name']}"
+                    except: pick = f"Vitória do {team_home['team']['name']}"
 
                 analise = generate_nba_narrative(team_home['team']['name'], team_away['team']['name'], spread_val, ou_val)
                 jogos.append({
@@ -177,7 +178,7 @@ def format_nba_card(game):
         f"📊 <b>Linhas:</b> {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL DETALHADO =================
+# ================= 5. FUTEBOL DETALHADO (LISTA CORRIGIDA) =================
 async def get_match_details(league_code, event_id):
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
     details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0, "home_poss": 0, "away_poss": 0}}
@@ -208,21 +209,23 @@ async def get_match_details(league_code, event_id):
 
 async def fetch_espn_soccer():
     api_date, _ = get_current_date_data()
-    # LISTA DE LIGAS (PRIORIDADE TOTAL PARA OS JOGOS DE HOJE)
+    # LISTA DE LIGAS COM SLUGS CORRIGIDOS
     leagues = [
-        'uefa.champions',       # CHAMPIONS (Bayer, Atletico)
-        'conmebol.libertadores',# LIBERTA
-        'bra.copa_do_brasil',   # COPA DO BRASIL
-        'uefa.europa',          # EUROPA
-        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', # TOP 5
-        'bra.1', 'arg.1',       # BR/ARG
-        'por.1', 'ksa.1'        # PT/SAUDI
+        'bra.copa_do_brasil',   # COPA DO BRASIL (SLUG VERIFICADO)
+        'uefa.champions',       # CHAMPIONS LEAGUE
+        'conmebol.libertadores',# LIBERTADORES
+        'bra.copa_nordeste',    # COPA DO NORDESTE (EXTRA)
+        'uefa.europa',          # EUROPA LEAGUE
+        'ksa.1',                # ARABIA
+        'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', # TOP 5 EUROPA
+        'bra.1', 'arg.1',       # SULAMERICANOS
+        'por.1', 'ned.1', 'tur.1' 
     ]
     
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         for league in leagues:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
             try:
@@ -231,7 +234,6 @@ async def fetch_espn_soccer():
                 data = r.json()
                 if not data.get('events'): continue
                 
-                # Tenta pegar nome da liga
                 try: league_name = data['leagues'][0]['name']
                 except: league_name = league.upper()
 
@@ -269,37 +271,47 @@ def get_market_analysis(league_code, event_id, home, away):
     rank_home = standings.get(home, REAL_STANDINGS_BACKUP.get(home, 10))
     rank_away = standings.get(away, REAL_STANDINGS_BACKUP.get(away, 10))
     
-    # Se for Copa (sem ranking), usa nome para força
-    if league_code in ['uefa.champions', 'conmebol.libertadores', 'bra.copa_do_brasil']:
+    # Se for Copa (sem ranking), força ranking 1 para os grandes conhecidos
+    if league_code in ['bra.copa_do_brasil', 'uefa.champions', 'conmebol.libertadores', 'bra.copa_nordeste']:
         if home in REAL_STANDINGS_BACKUP: rank_home = 1
         if away in REAL_STANDINGS_BACKUP: rank_away = 1
 
-    diff = rank_away - rank_home
-    base_prob = 50 + (diff * 2.5) + 5
-    ph = min(max(int(base_prob), 20), 92)
-    pa = 100 - ph - random.randint(5, 10)
+    # SUPER FAVORITOS (CORREÇÃO DE AL HAZEM)
+    SUPER_FAVORITOS = ["Al Hilal", "Al Nassr", "Al Ittihad", "Real Madrid", "Manchester City", "Bayern Munich", "Bayer Leverkusen", "Flamengo", "Palmeiras"]
+    is_home_super = any(s in home for s in SUPER_FAVORITOS)
+    is_away_super = any(s in away for s in SUPER_FAVORITOS)
+
+    if is_away_super and not is_home_super:
+        ph = 15; pa = 80
+    elif is_home_super and not is_away_super:
+        ph = 85; pa = 10
+    else:
+        diff = rank_away - rank_home
+        base_prob = 50 + (diff * 2.5) + 5
+        ph = min(max(int(base_prob), 20), 92)
+        pa = 100 - ph - random.randint(5, 10)
+
     confidence = max(ph, pa)
-    
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
     narrativa = "Confronto decisivo."
     if rank_home < rank_away: narrativa = f"O {home} é favorito para vencer."
-    elif rank_away < rank_home: narrativa = f"O {away} chega forte."
+    elif rank_away < rank_home: narrativa = f"O {away} chega forte para buscar o resultado."
 
     strategy_icon = "🎯"; strategy_name = "Análise Tática"; extra_pick = "Over 1.5 Gols"
 
     if pa >= 70:
         strategy_icon = "🔥"; strategy_name = "Favorito Visitante"; extra_pick = f"Vitória do {away}"
-        narrativa = f"O {away} é tecnicamente superior."
+        narrativa = f"O {away} é tecnicamente muito superior."
     elif ph >= 75:
         strategy_icon = "🛡️"; strategy_name = "A Muralha"; extra_pick = f"Vitória do {home}"
         narrativa = f"O {home} joga em casa e deve dominar."
     elif league_code in ['eng.1', 'ger.1'] and confidence < 60:
         strategy_icon = "🚩"; strategy_name = "Rei dos Cantos"; extra_pick = "Over 9.5 Escanteios"
-    elif league_code in ['arg.1', 'bra.1', 'conmebol.libertadores'] and abs(ph-pa) < 15:
+    elif league_code in ['arg.1', 'bra.1', 'conmebol.libertadores', 'bra.copa_do_brasil'] and abs(ph-pa) < 15:
         strategy_icon = "🟨"; strategy_name = "O Açougueiro"; extra_pick = "Over 5.5 Cartões"
-    elif pa >= 40 and pa <= 55 and rank_away < rank_home:
+    elif pa >= 40 and pa <= 55 and rank_away < rank_home and not is_home_super:
         strategy_icon = "🦓"; strategy_name = "Caçador de Zebras"; extra_pick = f"Handicap +1.0: {away}"
 
     if ph >= 55: main_pick = f"Vitória do {home}"; safe_odd = calculate_dynamic_odd(ph)
@@ -323,7 +335,7 @@ async def generate_daily_ticket(app):
         else: break
     
     if len(ticket) >= 3:
-        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Jogos Reais de Hoje 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
+        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Jogos de Elite Selecionados 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
         for i, c in enumerate(ticket, 1): msg += f"{i}️⃣ <b>{c['match']}</b>\n🎯 {c['pick']} (Odd: {c['odd']:.2f})\n\n"
         msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>\n💰 <i>Gestão: 0.5% da Banca</i>"
         try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
@@ -360,7 +372,8 @@ def format_pressure_alert(game, team_pressure, shots):
     )
 
 def verify_green(pick, h_score, a_score, home, away):
-    total = h_score + a_score; is_green = False
+    total = h_score + a_score
+    is_green = False
     is_nba = total > 20
     
     if is_nba:
@@ -519,14 +532,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V273</b>\nModo Real Time Ativado.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V275</b>\nLigas Corrigidas: Copa do Brasil Ativa.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     _, data_fmt = get_current_date_data()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando grade real ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando grade completa ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -561,7 +574,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V273 REAL TIME")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V275 COPA BRASIL FIX")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
