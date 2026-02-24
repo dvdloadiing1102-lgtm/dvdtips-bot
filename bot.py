@@ -1,4 +1,4 @@
-# ================= BOT V271 (FULL DATA: ESTATÍSTICAS, JUIZ, ESTÁDIO E PRESSÃO) =================
+# ================= BOT V272 (ELITE MODE: CHAMPIONS, LIBERTADORES & COPA DO BRASIL) =================
 import os
 import logging
 import asyncio
@@ -28,12 +28,12 @@ LIVE_STANDINGS = {}
 
 # ================= 📊 BACKUP DE SEGURANÇA =================
 REAL_STANDINGS_BACKUP = {
-    "Arsenal": 1, "Manchester City": 2, "Aston Villa": 3, "Liverpool": 6, "Chelsea": 5,
-    "Real Madrid": 1, "Barcelona": 2, "Villarreal": 3, "Atletico Madrid": 4,
-    "Bayern Munich": 1, "Borussia Dortmund": 2, "Bayer Leverkusen": 6,
-    "Inter Milan": 1, "AC Milan": 2, "Napoli": 3, "Juventus": 5,
-    "Lens": 1, "Paris Saint-Germain": 2, "Monaco": 8, "Lyon": 3,
-    "Palmeiras": 1, "Flamengo": 2, "Botafogo": 3, "Sao Paulo": 4,
+    "Arsenal": 1, "Manchester City": 2, "Aston Villa": 3, "Liverpool": 4,
+    "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3,
+    "Bayern Munich": 1, "Bayer Leverkusen": 2, "Borussia Dortmund": 3,
+    "Inter Milan": 1, "Juventus": 2, "AC Milan": 3,
+    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Sao Paulo": 4, "Botafogo": 5,
+    "River Plate": 1, "Boca Juniors": 2, "Racing Club": 3,
     "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
@@ -84,10 +84,11 @@ async def news_loop(app: Application):
 
 # ================= 3. BUSCA TABELA AO VIVO =================
 async def fetch_league_standings():
+    # LISTA DE LIGAS COM TABELA DE PONTOS
     leagues = {
         'eng.1': 'Premier League', 'esp.1': 'La Liga', 'ger.1': 'Bundesliga',
         'ita.1': 'Serie A', 'fra.1': 'Ligue 1', 'bra.1': 'Brasileirão',
-        'arg.1': 'Argentino', 'ksa.1': 'Saudi Pro League'
+        'arg.1': 'Argentino', 'ksa.1': 'Saudi Pro League', 'por.1': 'Portugues'
     }
     global LIVE_STANDINGS
     async with httpx.AsyncClient(timeout=20) as client:
@@ -110,20 +111,13 @@ async def fetch_league_standings():
                     if temp_map: LIVE_STANDINGS[code] = temp_map
             except: pass
 
-# ================= 4. NBA (COM GREENS) =================
-NBA_BACKUP = {
-    "Lakers": "LeBron James (25.4 PTS)", "Celtics": "Jayson Tatum (27.1 PTS)",
-    "Nuggets": "Nikola Jokic (28.7 PTS)", "Bucks": "G. Antetokounmpo (30.4 PTS)",
-    "Mavericks": "Luka Doncic (33.4 PTS)", "Warriors": "Stephen Curry (27.5 PTS)"
-}
-
+# ================= 4. NBA =================
 def generate_nba_narrative(home, away, spread, total):
     try: spread_val = float(spread.split(' ')[1]) if spread != '-' and ' ' in spread else 0
     except: spread_val = 0
     analise = ""
-    if abs(spread_val) >= 9: analise += f"O {home if spread_val < 0 else away} é amplamente favorito. "
-    elif abs(spread_val) <= 4: analise += "Confronto equilibrado, decidido nos detalhes. "
-    else: analise += "Vantagem técnica para o favorito. "
+    if abs(spread_val) >= 9: analise += f"O {home if spread_val < 0 else away} é amplamente favorito."
+    else: analise += "Confronto equilibrado na NBA."
     return analise
 
 async def fetch_nba_professional():
@@ -143,7 +137,6 @@ async def fetch_nba_professional():
                 t1 = comp['competitors'][0]; t2 = comp['competitors'][1]
                 team_home = t1 if t1['homeAway'] == 'home' else t2
                 team_away = t2 if t2['homeAway'] == 'away' else t1
-                
                 s_home = int(team_home['score']); s_away = int(team_away['score'])
                 dt_br = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                 
@@ -164,7 +157,6 @@ async def fetch_nba_professional():
                     except: pick = f"Vitória do {team_home['team']['name']}"
 
                 analise = generate_nba_narrative(team_home['team']['name'], team_away['team']['name'], spread_val, ou_val)
-
                 jogos.append({
                     "match": f"{team_away['team']['name']} @ {team_home['team']['name']}",
                     "home": team_home['team']['name'], "away": team_away['team']['name'],
@@ -183,60 +175,54 @@ def format_nba_card(game):
         f"📊 <b>Linhas:</b> {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# ================= 5. FUTEBOL: FUNÇÃO DE DETALHES (A NOVA MÁGICA) =================
+# ================= 5. FUTEBOL DETALHADO (NOVA LISTA DE LIGAS) =================
 async def get_match_details(league_code, event_id):
-    """
-    Busca TUDO: Juiz, Estádio, Estatísticas ao Vivo.
-    """
     url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league_code}/summary?event={event_id}"
-    details = {
-        "referee": None, "stadium": None, 
-        "stats": {"home_shots": 0, "away_shots": 0, "home_poss": 0, "away_poss": 0}
-    }
-    
+    details = {"referee": None, "stadium": None, "stats": {"home_shots": 0, "away_shots": 0, "home_poss": 0, "away_poss": 0}}
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             r = await client.get(url)
             if r.status_code == 200:
                 data = r.json()
-                
-                # 1. Info do Jogo (Juiz/Estádio)
                 if 'gameInfo' in data:
                     gi = data['gameInfo']
                     if 'venue' in gi: details['stadium'] = gi['venue'].get('fullName')
                     if 'officials' in gi:
                         for off in gi['officials']:
                             if off.get('position', {}).get('name') == 'Referee':
-                                details['referee'] = off.get('displayName')
-                                break
-                
-                # 2. Estatísticas ao Vivo (Boxscore)
+                                details['referee'] = off.get('displayName'); break
                 if 'boxscore' in data and 'teams' in data['boxscore']:
                     for team_stat in data['boxscore']['teams']:
                         is_home = team_stat['team']['id'] == data['header']['competitions'][0]['competitors'][0]['id']
                         stats_list = team_stat.get('statistics', [])
-                        
                         shots = 0; poss = 0
                         for s in stats_list:
                             if s['name'] == 'totalShots': shots = int(s['displayValue'])
                             if s['name'] == 'possessionPct': poss = int(s['displayValue'])
-                        
-                        if is_home:
-                            details['stats']['home_shots'] = shots
-                            details['stats']['home_poss'] = poss
-                        else:
-                            details['stats']['away_shots'] = shots
-                            details['stats']['away_poss'] = poss
+                        if is_home: details['stats']['home_shots'] = shots; details['stats']['home_poss'] = poss
+                        else: details['stats']['away_shots'] = shots; details['stats']['away_poss'] = poss
     except: pass
     return details
 
 async def fetch_espn_soccer():
     api_date, _ = get_current_date_data()
-    leagues = ['ksa.1', 'ger.1', 'ita.1', 'fra.1', 'esp.1', 'arg.1', 'tur.1', 'por.1', 'ned.1', 'bra.1', 'bra.camp.paulista', 'eng.1', 'eng.2', 'uefa.europa']
+    # LISTA DE LIGAS ATUALIZADA (PRIORIDADE TOTAL PARA OS JOGOS DA IMAGEM)
+    leagues = [
+        'uefa.champions',       # CHAMPIONS LEAGUE (Bayer, Atletico, Inter)
+        'conmebol.libertadores',# LIBERTADORES (Botafogo, Palmeiras)
+        'bra.copa_do_brasil',   # COPA DO BRASIL (Fortaleza, America-RN)
+        'uefa.europa',          # EUROPA LEAGUE
+        'ksa.1',                # ARABIA (Al Hilal, Al Nassr)
+        'eng.1',                # PREMIER LEAGUE
+        'esp.1', 'ita.1', 'ger.1', 'fra.1', # TOP 5 EUROPA
+        'bra.1', 'arg.1',       # SULAMERICANOS
+        'por.1', 'ned.1', 'tur.1' # OUTROS IMPORTANTES
+    ]
+    
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
-    async with httpx.AsyncClient(timeout=20) as client:
+    async with httpx.AsyncClient(timeout=25) as client:
         for league in leagues:
             url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
             try:
@@ -244,7 +230,9 @@ async def fetch_espn_soccer():
                 if r.status_code != 200: continue
                 data = r.json()
                 if not data.get('events'): continue
-                league_name = data['leagues'][0].get('name', 'Futebol') if data.get('leagues') else 'Futebol'
+                
+                # Nome bonito da liga
+                league_name = data['leagues'][0]['name'].replace("English Premier League", "Premier League").replace("Spanish LALIGA", "La Liga")
 
                 for event in data.get('events', []):
                     state = event['status']['type']['state']
@@ -277,46 +265,49 @@ def calculate_dynamic_odd(probability):
 def get_market_analysis(league_code, event_id, home, away):
     random.seed(int(event_id))
     standings = LIVE_STANDINGS.get(league_code, {})
+    # Backup mais robusto para times conhecidos
     rank_home = standings.get(home, REAL_STANDINGS_BACKUP.get(home, 10))
     rank_away = standings.get(away, REAL_STANDINGS_BACKUP.get(away, 10))
     
-    if rank_home == 10 and rank_away == 10:
-        rank_home = random.randint(1, 18); rank_away = random.randint(1, 18)
+    # Se for Copa ou Champions (sem tabela de pontos corridos), usa Ranking fictício baseado em nome
+    if league_code in ['uefa.champions', 'conmebol.libertadores', 'bra.copa_do_brasil']:
+        if home in REAL_STANDINGS_BACKUP: rank_home = 1
+        if away in REAL_STANDINGS_BACKUP: rank_away = 1
 
     diff = rank_away - rank_home
     base_prob = 50 + (diff * 2.5) + 5
+    
     ph = min(max(int(base_prob), 20), 92)
     pa = 100 - ph - random.randint(5, 10)
     confidence = max(ph, pa)
+    
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
-    if rank_home == 1: narrativa = f"O líder {home} defende a ponta."
-    elif rank_away == 1: narrativa = f"{home} recebe o líder {away}."
-    elif diff > 10: narrativa = f"Favoritismo claro do {home} pela tabela."
-    else: narrativa = "Confronto direto e equilibrado."
+    narrativa = "Confronto decisivo."
+    if rank_home < rank_away: narrativa = f"O {home} é favorito para vencer."
+    elif rank_away < rank_home: narrativa = f"O {away} chega forte para buscar o resultado."
 
     strategy_icon = "🎯"; strategy_name = "Análise Tática"; extra_pick = "Over 1.5 Gols"
 
-    if league_code in ['eng.1', 'ger.1', 'ned.1'] and confidence < 65:
+    # LÓGICA CORRIGIDA: Prioridade para Favoritos Visitantes
+    if pa >= 70:
+        strategy_icon = "🔥"; strategy_name = "Favorito Visitante"; extra_pick = f"Vitória do {away}"
+        narrativa = f"O {away} é tecnicamente superior e deve vencer."
+    elif ph >= 75:
+        strategy_icon = "🛡️"; strategy_name = "A Muralha"; extra_pick = f"Vitória do {home}"
+        narrativa = f"O {home} é muito forte em seus domínios."
+    elif league_code in ['eng.1', 'ger.1'] and confidence < 60:
         strategy_icon = "🚩"; strategy_name = "Rei dos Cantos"; extra_pick = "Over 9.5 Escanteios"
-        narrativa = "Jogo intenso com tendência de cantos."
     elif league_code in ['arg.1', 'bra.1', 'conmebol.libertadores'] and abs(ph-pa) < 15:
         strategy_icon = "🟨"; strategy_name = "O Açougueiro"; extra_pick = "Over 5.5 Cartões"
-        narrativa = "Clássico tenso, promessa de cartões."
-    elif ph >= 80:
-        strategy_icon = "🛡️"; strategy_name = "A Muralha"; extra_pick = f"Baliza Inviolada: {home}"
-        narrativa = f"O {home} tem defesa sólida e deve dominar."
-    elif pa >= 75:
-        strategy_icon = "🔥"; strategy_name = "Favorito Visitante"; extra_pick = f"Vitória do {away}"
-        narrativa = f"O {away} é muito superior tecnicamente."
-    elif pa >= 40 and pa <= 55 and rank_away < rank_home:
+    # Só marca Zebra se o visitante NÃO for um gigante (Rank > 5)
+    elif pa >= 40 and pa <= 55 and rank_away < rank_home and rank_away > 5:
         strategy_icon = "🦓"; strategy_name = "Caçador de Zebras"; extra_pick = f"Handicap +1.0: {away}"
-        narrativa = f"Valor no {away}, que faz campanha superior."
 
     if ph >= 55: main_pick = f"Vitória do {home}"; safe_odd = calculate_dynamic_odd(ph)
     elif pa >= 55: main_pick = f"Vitória do {away}"; safe_odd = calculate_dynamic_odd(pa)
-    else: main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"; safe_odd = calculate_dynamic_odd(65 + random.randint(0,10))
+    else: main_pick = "Empate ou Visitante" if pa > ph else "Empate ou Casa"; safe_odd = calculate_dynamic_odd(65)
 
     return main_pick, extra_pick, narrativa, f"{conf_bar} {confidence}%", safe_odd, strategy_icon, strategy_name
 
@@ -335,7 +326,7 @@ async def generate_daily_ticket(app):
         else: break
     
     if len(ticket) >= 3:
-        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Estratégia Combinada 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
+        msg = "🎫 <b>BILHETE DE OURO (ODD 10+)</b> 🎫\n<i>Jogos de Elite Selecionados 🚀</i>\n➖➖➖➖➖➖➖➖➖➖\n"
         for i, c in enumerate(ticket, 1): msg += f"{i}️⃣ <b>{c['match']}</b>\n🎯 {c['pick']} (Odd: {c['odd']:.2f})\n\n"
         msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>\n💰 <i>Gestão: 0.5% da Banca</i>"
         try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
@@ -356,13 +347,11 @@ def format_morning_card(game, d1, d2, analise, conf, icon, strat_name, details):
 def format_live_radar_card(game, favorite_team, situation, stats=None):
     stats_txt = ""
     if stats and stats['home_shots'] > 0:
-        stats_txt = f"\n📊 <b>Estatísticas:</b>\n🔫 Chutes: {stats['home_shots']} x {stats['away_shots']}\n⚽ Posse: {stats['home_poss']}% x {stats['away_poss']}%\n"
-    
+        stats_txt = f"\n📊 <b>Stats:</b> 🔫 {stats['home_shots']}x{stats['away_shots']} (Chutes)\n"
     return (
         f"⚠️ <b>ALERTA DE OPORTUNIDADE (AO VIVO)</b> ⚠️\n➖➖➖➖➖➖➖➖➖➖\n⚔️ <b>{game['match']}</b>\n"
-        f"⏱️ <b>Tempo:</b> {game['clock']} (2º Tempo)\n⚽ <b>Placar:</b> {game['score_home']} - {game['score_away']}{stats_txt}\n"
+        f"⏱️ <b>Tempo:</b> {game['clock']}\n⚽ <b>Placar:</b> {game['score_home']} - {game['score_away']}{stats_txt}\n"
         f"➖➖➖➖➖➖➖➖➖➖\n📉 <b>SITUAÇÃO:</b> O Favorito ({favorite_team}) {situation}!\n"
-        f"💡 <b>A DICA:</b> Pressão total. Oportunidade de valor.\n"
     )
 
 def format_pressure_alert(game, team_pressure, shots):
@@ -428,9 +417,7 @@ async def automation_routine(app: Application):
                 header = f"🦁 <b>DVD TIPS | FUTEBOL HOJE</b> 🦁\n📅 <b>Data: {data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
                 txt = header
                 for g in jogos:
-                    # EXTRAI DETALHES COMPLETOS (JUIZ/ESTADIO)
                     details = await get_match_details(g['league_code'], g['id'])
-                    
                     d1, d2, analise, conf, _, icon, sname = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
                     card = format_morning_card(g, d1, d2, analise, conf, icon, sname, details)
                     if len(txt) + len(card) > 4000:
@@ -465,20 +452,15 @@ async def live_radar_routine(app: Application):
             await fetch_espn_soccer()
             for g in TODAYS_GAMES:
                 if g['status'] == 'in' and g['id'] not in ALERTED_LIVE:
-                    
-                    # BUSCA ESTATÍSTICAS AO VIVO (CHUTES/POSSE)
                     details = await get_match_details(g['league_code'], g['id'])
                     s = details['stats']
                     
-                    # 1. ALERTA DE PRESSÃO (NOVIDADE)
-                    # Se mandante tem > 12 chutes e não ganha
                     if s['home_shots'] >= 12 and g['score_home'] <= g['score_away']:
                         msg = format_pressure_alert(g, g['home'], s['home_shots'])
                         await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
                         ALERTED_LIVE.add(g['id'])
                         continue
 
-                    # 2. ALERTA DE FAVORITO TROPEÇANDO (CLÁSSICO)
                     if g.get('period', 0) >= 2:
                         _, _, _, _, ph, _, _ = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
                         msg = None
@@ -491,7 +473,6 @@ async def live_radar_routine(app: Application):
 
 async def result_monitor_routine(app: Application):
     while True:
-        # FUTEBOL
         if TODAYS_GAMES:
             for g in TODAYS_GAMES:
                 if g['status'] == 'post' and g['id'] not in PROCESSED_GAMES:
@@ -503,7 +484,6 @@ async def result_monitor_routine(app: Application):
                     except: pass
                     await asyncio.sleep(2)
         
-        # NBA
         if TODAYS_NBA:
             await fetch_nba_professional()
             for g in TODAYS_NBA:
@@ -514,7 +494,6 @@ async def result_monitor_routine(app: Application):
                         PROCESSED_GAMES.add(g['id'])
                     except: pass
                     await asyncio.sleep(2)
-
         await asyncio.sleep(300)
 
 async def live_sniper_routine(app: Application):
@@ -528,7 +507,6 @@ async def live_sniper_routine(app: Application):
                     h, m = map(int, g['time'].split(':'))
                     hora_jogo = agora.replace(hour=h, minute=m, second=0, microsecond=0)
                     minutos = (hora_jogo - agora).total_seconds() / 60.0
-                    
                     if 0 <= minutos <= 60:
                         _, _, _, _, odd, _, _ = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
                         if odd < 1.45:
@@ -548,14 +526,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V271</b>\nDados Completos: Juiz, Estádio e Pressão Ao Vivo.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V272</b>\nELITE MODE ON: Champions, Liberta, CopaBR.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     _, data_fmt = get_current_date_data()
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando dados completos ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando ELITE ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -563,7 +541,6 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         header = f"🦁 <b>DVD TIPS | FUTEBOL</b> 🦁\n📅 <b>{data_fmt}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         txt = header
         for g in jogos:
-            # CHAMA DETALHES NO MENU MANUAL TAMBÉM
             details = await get_match_details(g['league_code'], g['id'])
             d1, d2, analise, conf, _, icon, sname = get_market_analysis(g['league_code'], g['id'], g['home'], g['away'])
             card = format_morning_card(g, d1, d2, analise, conf, icon, sname, details)
@@ -591,7 +568,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V271 FULL DATA")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V272 ELITE MODE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
