@@ -1,4 +1,4 @@
-# ================= BOT V288 (DUAL ENGINE: ELITE PADRÃO + BRASIL VIA SCOREPANEL) =================
+# ================= BOT V290 (BRASILEIRÃO UNLOCKED: SÉRIE A NA LISTA DE ELITE) =================
 import os
 import logging
 import asyncio
@@ -31,23 +31,20 @@ REAL_STANDINGS_BACKUP = {
     "Arsenal": 1, "Manchester City": 2, "Liverpool": 3, "Aston Villa": 4,
     "Real Madrid": 1, "Barcelona": 2, "Atletico Madrid": 3,
     "Bayern Munich": 1, "Bayer Leverkusen": 2, "Inter Milan": 1, "Juventus": 2,
-    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5,
+    "Palmeiras": 1, "Flamengo": 2, "Atletico Mineiro": 3, "Botafogo": 4, "Fortaleza": 5, "Sao Paulo": 6,
     "River Plate": 1, "Boca Juniors": 2, "Racing Club": 3,
     "Al Hilal": 1, "Al Nassr": 2, "Al Ittihad": 3
 }
 
-# ================= CONFIGURAÇÃO DATA (API REAL / DISPLAY 2026) =================
+# ================= CONFIGURAÇÃO DATA =================
 def get_current_date_data():
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    
-    # Se for madrugada, usa data de ontem para pegar jogos da noite
     if agora.hour < 5: 
         data_api = agora - timedelta(days=1)
     else: 
         data_api = agora
     
-    # Data para exibição (Simulação 2026)
     try: data_display = data_api.replace(year=2026)
     except: data_display = data_api + timedelta(days=365)
     
@@ -207,19 +204,18 @@ async def get_match_details(league_code, event_id):
 async def fetch_espn_soccer():
     api_date = get_current_date_data()[0]
     
-    # MOTOR 1: ELITE GLOBAL (Busca Direta por Liga)
-    # Essas ligas funcionam bem na API padrão.
+    # 1. MOTOR ELITE (AGORA INCLUI BRASILEIRÃO!)
     elite_leagues = [
+        'bra.1', # BRASILEIRÃO SÉRIE A (Priority)
+        'bra.2', # BRASILEIRÃO SÉRIE B (Just in case)
         'uefa.champions', 'conmebol.libertadores', 'conmebol.sudamericana',
         'eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'ksa.1',
         'arg.1', 'por.1', 'ned.1', 'tur.1'
     ]
     
-    # MOTOR 2: BRASIL & COPAS (Busca Universal/Scorepanel)
-    # A "Outra API" que varre tudo e filtra por nome.
-    BRAZIL_TARGETS = ["Copa do Brasil", "Brasil", "Nordeste", "Estadual", "Potiguar", "Catarinense", "Paulista", "Carioca"]
-    # Palavras-chave para BLOQUEAR (Lixo)
-    BAD_FILTER = ["Sub-20", "Sub-19", "Women", "Feminino", "Amador", "2.", "Segunda"]
+    # 2. MOTOR UNIVERSAL (Scanner para Estaduais e Copas)
+    TARGET_WORDS = ["Brasil", "Copa", "Nordeste", "Estadual", "Potiguar", "Catarinense", "Paulista", "Carioca", "Mineiro", "Gaúcho", "Baiano", "Pernambucano", "Cearense", "Goiano"]
+    BAD_WORDS = ["Sub-20", "Sub-19", "Women", "Feminino", "Amador", "2."]
 
     jogos = []
     ids_processados = set()
@@ -227,21 +223,23 @@ async def fetch_espn_soccer():
     
     async with httpx.AsyncClient(timeout=30) as client:
         
-        # --- EXECUÇÃO MOTOR 1 (ELITE) ---
+        # A. Executa Motor Elite (Agora busca bra.1 explicitamente)
         for league in elite_leagues:
             try:
                 url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={api_date}"
                 r = await client.get(url)
                 if r.status_code == 200:
                     data = r.json()
+                    # Pega o nome correto da liga direto da API
+                    league_nice_name = data.get('leagues', [{}])[0].get('name', 'Futebol')
+                    
                     for event in data.get('events', []):
                         if event['id'] not in ids_processados:
-                            process_event(event, jogos, ids_processados, br_tz, league)
+                            process_event(event, jogos, ids_processados, br_tz, league, league_nice_name)
             except: pass
 
-        # --- EXECUÇÃO MOTOR 2 (BRASIL UNIVERSAL) ---
+        # B. Executa Motor Universal (Pega o que sobrou: Copas, Estaduais)
         try:
-            # Esta é a "Outra API" (Scorepanel)
             url_all = f"https://site.api.espn.com/apis/site/v2/sports/soccer/scorepanel?dates={api_date}"
             r = await client.get(url_all)
             if r.status_code == 200:
@@ -249,27 +247,26 @@ async def fetch_espn_soccer():
                 for event in data.get('events', []):
                     league_info = event.get('competitions', [{}])[0].get('league', {})
                     league_name = league_info.get('name', 'Futebol')
-                    league_slug = league_info.get('slug', 'universal')
                     
-                    # FILTRO INTELIGENTE: Pega se for "Copa do Brasil" ou "Nordeste", ignora se for "Sub-20"
-                    is_brazil_target = any(k in league_name for k in BRAZIL_TARGETS)
-                    is_garbage = any(b in league_name for b in BAD_FILTER)
+                    is_target = any(t in league_name for t in TARGET_WORDS)
+                    is_bad = any(b in league_name for b in BAD_WORDS)
                     
-                    if is_brazil_target and not is_garbage:
+                    if is_target and not is_bad:
                         if event['id'] not in ids_processados:
-                            # Força o slug para 'bra.1' para o detalhamento tentar achar stats depois
-                            process_event(event, jogos, ids_processados, br_tz, "bra.copa_do_brasil")
+                            # Passa 'bra.1' para tentar achar stats, mas usa o nome real da liga
+                            process_event(event, jogos, ids_processados, br_tz, "bra.1", league_name)
         except: pass
 
     jogos.sort(key=lambda x: x['time'])
     global TODAYS_GAMES; TODAYS_GAMES = jogos
     return TODAYS_GAMES
 
-def process_event(event, jogos, ids_processados, br_tz, league_slug):
+def process_event(event, jogos, ids_processados, br_tz, league_slug, league_name_fixed=None):
     try:
-        league_data = event.get('competitions', [{}])[0].get('league', {})
-        league_name = league_data.get('name', 'Futebol')
-        
+        # Se não veio nome fixo, tenta pegar do evento
+        if not league_name_fixed:
+            league_name_fixed = event.get('competitions', [{}])[0].get('league', {}).get('name', 'Futebol')
+            
         comp = event['competitions'][0]['competitors']
         t_home = comp[0] if comp[0]['homeAway'] == 'home' else comp[1]
         t_away = comp[1] if comp[1]['homeAway'] == 'away' else comp[0]
@@ -279,7 +276,8 @@ def process_event(event, jogos, ids_processados, br_tz, league_slug):
             "match": f"{t_home['team']['name']} x {t_away['team']['name']}",
             "home": t_home['team']['name'], "away": t_away['team']['name'], 
             "time": datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz).strftime("%H:%M"),
-            "league": league_name, "status": event['status']['type']['state'],
+            "league": league_name_fixed, # USA O NOME CORRETO
+            "status": event['status']['type']['state'],
             "period": event['status'].get('period', 0), "clock": event['status'].get('displayClock', '00:00'),
             "score_home": int(t_home['score']), "score_away": int(t_away['score'])
         })
@@ -291,7 +289,7 @@ def calculate_dynamic_odd(probability, league_code, is_super_fav):
     fair_odd = 100 / probability
     multiplier = 1.0
     if ('arg' in str(league_code) or 'bra' in str(league_code)) and not is_super_fav:
-        multiplier = 1.30 # Valoriza a odd em ligas difíceis
+        multiplier = 1.30 
     elif 'ger' in str(league_code) or 'ksa' in str(league_code):
         multiplier = 0.95
     final_odd = (fair_odd + random.uniform(0.02, 0.08)) * multiplier
@@ -304,7 +302,6 @@ def get_market_analysis(league_code, event_id, home, away):
     rank_home = standings.get(home, REAL_STANDINGS_BACKUP.get(home, 10))
     rank_away = standings.get(away, REAL_STANDINGS_BACKUP.get(away, 10))
     
-    # Se for Copa, força ranking para times conhecidos
     if 'copa' in str(league_code).lower() or 'champions' in str(league_code) or 'libertadores' in str(league_code):
         if home in REAL_STANDINGS_BACKUP: rank_home = 1
         if away in REAL_STANDINGS_BACKUP: rank_away = 1
@@ -567,14 +564,14 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V287</b>\nDual Engine: Elite + Arrastão Brasil.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL DVD TIPS V290</b>\nBrasileirão + Copa do Brasil Ativados.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     data_fmt = get_current_date_data()[1]
     
     if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Buscando grade DUPLA ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Buscando ELITE + BRASIL ({data_fmt})...</b>", parse_mode=ParseMode.HTML)
         await fetch_league_standings()
         jogos = await fetch_espn_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
@@ -609,7 +606,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text("✅ <b>NBA Postada!</b>")
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V287 DUAL ENGINE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V290 BRAZILIAN LEAGUE UNLOCKED")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
