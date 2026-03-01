@@ -1,4 +1,4 @@
-# ================= BOT V294 (FILTRO DE ELITE + TRAVA ANTI-JOGO VELHO) =================
+# ================= BOT V295 (LAYOUT LIMPO + FUNÇÕES RESTAURADAS + GRADE 2026) =================
 import os
 import logging
 import asyncio
@@ -23,11 +23,15 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= 🛡️ CACHE E DADOS =================
-LIVE_STANDINGS = {}
+# ================= 🛡️ CONFIGURAÇÃO =================
+VIP_TEAMS = [
+    "Flamengo", "Palmeiras", "Corinthians", "São Paulo", "Santos", "Grêmio", 
+    "Internacional", "Atlético-MG", "Cruzeiro", "Botafogo", "Fluminense", "Vasco",
+    "Bahia", "Fortaleza", "Athletico-PR", "Sport", "Ceará", "Vitória", "Remo", "Paysandu"
+]
 
 def get_api_dates():
-    """Pega a data REAL (Hoje)"""
+    """Data Real para API (Hoje)"""
     br_tz = timezone(timedelta(hours=-3))
     return datetime.now(br_tz)
 
@@ -43,62 +47,38 @@ def get_display_date_str():
 TODAYS_GAMES = []
 TODAYS_NBA = []
 
-# ================= 1. LISTA VIP DE TIMES (O FILTRO DE OURO) =================
-# Só mostra jogos do Brasil se um desses times estiver em campo OU se for explicitamente Série A
-VIP_TEAMS = [
-    "Flamengo", "Palmeiras", "Corinthians", "São Paulo", "Santos", "Grêmio", 
-    "Internacional", "Atlético-MG", "Cruzeiro", "Botafogo", "Fluminense", "Vasco",
-    "Bahia", "Fortaleza", "Athletico-PR", "Sport", "Ceará", "Vitória", "Remo", "Paysandu"
-]
-
-# ================= 2. ANÁLISE DE MERCADO =================
+# ================= 1. ANÁLISE DE MERCADO =================
 def calculate_dynamic_odd(probability):
     if probability <= 0: return 2.00
     fair_odd = 100 / probability
     return round(fair_odd + random.uniform(0.05, 0.15), 2)
 
 def get_market_analysis(home, away, league_name):
-    # Pesos
     h_weight = 50; a_weight = 30
     
-    # Bônus para gigantes
     if any(t in home for t in VIP_TEAMS): h_weight += 30
     if any(t in away for t in VIP_TEAMS): a_weight += 25
     
     total = h_weight + a_weight
-    ph = (h_weight / total) * 100
-    pa = (a_weight / total) * 100
-    
-    # Travas
+    ph = (h_weight / total) * 100; pa = (a_weight / total) * 100
     ph = max(20, min(ph, 85)); pa = max(15, min(pa, 80))
-    confidence = max(ph, pa)
-    
-    bars = int(confidence / 10)
-    conf_bar = "█" * bars + "░" * (10 - bars)
-    strategy_icon = "🎯"; strategy_name = "Análise Tática"
     
     if ph >= 70:
         pick = f"Vitória do {home}"; odd = calculate_dynamic_odd(ph)
-        narrativa = f"O {home} é muito forte em casa."
-        strategy_icon = "🛡️"; strategy_name = "Muralha em Casa"
+        narrativa = f"Favorito em casa."
     elif pa >= 65:
         pick = f"Vitória do {away}"; odd = calculate_dynamic_odd(pa)
-        narrativa = f"O {away} é superior tecnicamente."
-        strategy_icon = "🔥"; strategy_name = "Visitante Favorito"
+        narrativa = f"Visitante superior."
     else:
         pick = "Over 1.5 Gols"; odd = 1.45
-        narrativa = "Jogo equilibrado, tendência a gols."
+        narrativa = "Confronto equilibrado."
         
-    return pick, "Over 0.5 HT" if confidence > 70 else "Menos de 3.5 Gols", narrativa, f"{conf_bar} {int(confidence)}%", odd, strategy_icon, strategy_name
+    return pick, odd, narrativa
 
-# ================= 3. MOTORES DE BUSCA (COM FILTRO ANTI-LIXO) =================
-
+# ================= 2. MOTORES (GE + ESPN) =================
 async def fetch_ge_data():
-    """Motor Brasil (Globo Esporte) com Filtro VIP"""
     data_real = get_api_dates()
-    data_str = data_real.strftime("%Y-%m-%d")
-    url = f"https://api.globoesporte.globo.com/tabela/d1/api/tabela/jogos?data={data_str}"
-    
+    url = f"https://api.globoesporte.globo.com/tabela/d1/api/tabela/jogos?data={data_real.strftime('%Y-%m-%d')}"
     jogos = []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -106,63 +86,51 @@ async def fetch_ge_data():
             if r.status_code == 200:
                 lista = r.json()
                 for item in lista:
-                    # 1. Checa se o jogo já acabou (Evita jogos de ontem que a API ainda mostra)
-                    if item.get('realizado', False) is True: continue
-                    if item.get('placar_oficial_mandante') is not None: continue 
-
+                    if item.get('realizado', False) or item.get('placar_oficial_mandante'): continue
+                    
                     home = item['equipes']['mandante']['nome_popular']
                     away = item['equipes']['visitante']['nome_popular']
                     camp = item.get('campeonato', {}).get('nome', '')
                     
-                    # 2. FILTRO VIP: É Série A? OU Tem time grande?
                     is_serie_a = "Série A" in camp
-                    has_big_team = any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)
+                    has_big = any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)
                     
-                    if not (is_serie_a or has_big_team): continue # Pula time bosta
+                    if not (is_serie_a or has_big): continue
                     if "Sub-" in camp or "Feminino" in camp: continue
 
                     jogos.append({
-                        "match": f"{home} x {away}",
-                        "home": home, "away": away,
-                        "time": item.get('hora', '00:00'),
-                        "league": f"🏆 {camp}",
-                        "stadium": f"🏟️ {item.get('sede', {}).get('nome_popular', '')}"
+                        "match": f"{home} x {away}", "home": home, "away": away,
+                        "time": item.get('hora', '00:00'), "league": f"🇧🇷 {camp}",
+                        "source": "GE"
                     })
     except: pass
     return jogos
 
 async def fetch_espn_europe():
-    """Motor Europa (ESPN) com Filtro de Status"""
     data_real = get_api_dates()
-    data_str = data_real.strftime("%Y%m%d")
-    leagues = ['uefa.champions', 'eng.1', 'esp.1', 'ita.1', 'ger.1', 'ksa.1']
+    leagues = {'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier League', 'esp.1': '🇪🇸 La Liga', 
+               'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Saudi Pro'}
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=20) as client:
-        for league in leagues:
+        for code, name in leagues.items():
             try:
-                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard?dates={data_str}"
+                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={data_real.strftime('%Y%m%d')}"
                 r = await client.get(url)
                 data = r.json()
-                l_name = data.get('leagues', [{}])[0].get('name', 'Futebol Int.')
-                
                 for event in data.get('events', []):
-                    # 1. FILTRO DE STATUS: Só pega o que não acabou
-                    status = event['status']['type']['state']
-                    if status in ['post', 'ccc']: continue # Ignora Finalizado/Cancelado
-
+                    if event['status']['type']['state'] in ['post', 'ccc']: continue
+                    
                     comp = event['competitions'][0]['competitors']
                     home = comp[0]['team']['name']
                     away = comp[1]['team']['name']
                     dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     
                     jogos.append({
-                        "match": f"{home} x {away}",
-                        "home": home, "away": away,
-                        "time": dt.strftime("%H:%M"),
-                        "league": f"🏆 {l_name}",
-                        "stadium": ""
+                        "match": f"{home} x {away}", "home": home, "away": away,
+                        "time": dt.strftime("%H:%M"), "league": name,
+                        "source": "ESPN"
                     })
             except: pass
     return jogos
@@ -175,80 +143,95 @@ async def fetch_all_soccer():
     global TODAYS_GAMES; TODAYS_GAMES = todos
     return todos
 
-# ================= 4. LAYOUT E ROTINAS =================
+# ================= 3. NBA =================
+async def fetch_nba():
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={get_api_dates().strftime('%Y%m%d')}"
+    jogos = []
+    br_tz = timezone(timedelta(hours=-3))
+    async with httpx.AsyncClient(timeout=10) as c:
+        try:
+            r = await c.get(url)
+            data = r.json()
+            for e in data.get('events', []):
+                comp = e['competitions'][0]
+                h = comp['competitors'][0]; a = comp['competitors'][1]
+                t_home = h if h['homeAway']=='home' else a
+                t_away = a if a['homeAway']=='away' else h
+                dt = datetime.strptime(e['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                jogos.append(f"🏀 <b>NBA</b> | ⏰ {dt.strftime('%H:%M')}\n⚔️ <b>{t_away['team']['name']} @ {t_home['team']['name']}</b>\n")
+        except: pass
+    global TODAYS_NBA; TODAYS_NBA = jogos
+    return jogos
+
+# ================= 4. MENU E LAYOUT =================
 def format_card(game):
-    pick, extra, narrativa, conf, odd, icon, sname = get_market_analysis(game['home'], game['away'], game['league'])
+    pick, odd, narrativa = get_market_analysis(game['home'], game['away'], game['league'])
     return (
-        f"{game['league']}\n"
-        f"⚔️ <b>{game['match']}</b>\n"
-        f"⏰ {game['time']}\n{game['stadium']}\n"
-        f"🧠 <b>Estratégia:</b> {icon} {sname}\n"
-        f"📝 <b>Análise:</b> <i>{narrativa}</i>\n"
-        f"✅ <b>Palpite:</b> {pick}\n"
-        f"🛡️ <b>Extra:</b> {extra}\n"
-        f"📊 <b>Confiança:</b> {conf}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{game['league']} | ⏰ {game['time']}\n"
+        f"⚽ <b>{game['match']}</b>\n"
+        f"🎯 <b>{pick}</b> (Odd: {odd})\n"
+        f"👁️ <i>{narrativa}</i>\n"
+        f"➖➖➖➖➖➖➖➖➖➖\n"
     )
 
-async def generate_daily_ticket(app):
+async def generate_ticket(app):
     if not TODAYS_GAMES: return
-    candidates = []
+    cands = []
     for g in TODAYS_GAMES:
-        pick, _, _, _, odd, _, _ = get_market_analysis(g['home'], g['away'], g['league'])
-        if 1.35 <= odd <= 1.85: candidates.append({'match': g['match'], 'pick': pick, 'odd': odd})
-    
-    random.shuffle(candidates)
-    ticket = candidates[:4] # Top 4 jogos
-    
-    if ticket:
-        total_odd = 1.0
-        msg = "🎫 <b>BILHETE DE ELITE (V294)</b> 🎫\n<i>Filtro: Apenas Times Relevantes</i>\n➖➖➖➖➖➖➖➖➖➖\n"
-        for i, c in enumerate(ticket, 1):
-            total_odd *= c['odd']
-            msg += f"{i}️⃣ <b>{c['match']}</b>\n🎯 {c['pick']} (Odd: {c['odd']:.2f})\n\n"
-        msg += f"🔥 <b>ODD TOTAL: {total_odd:.2f}</b>"
-        try: await app.bot.send_message(chat_id=CHANNEL_ID, text=msg, parse_mode=ParseMode.HTML)
-        except: pass
+        p, o, _ = get_market_analysis(g['home'], g['away'], g['league'])
+        if 1.40 <= o <= 1.90: cands.append({'m': g['match'], 'p': p, 'o': o})
+    random.shuffle(cands)
+    sel = cands[:4]
+    if sel:
+        msg = "🎫 <b>BILHETE DE OURO</b> 🎫\n\n"
+        odd_t = 1.0
+        for c in sel:
+            odd_t *= c['o']
+            msg += f"✅ <b>{c['m']}</b>\n🎯 {c['p']} @ {c['o']}\n\n"
+        msg += f"🔥 <b>ODD FINAL: {odd_t:.2f}</b>"
+        await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
 
-async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    q = u.callback_query; await q.answer()
-    data_visual = get_display_date_str()
-    
-    if q.data == "fut_market":
-        msg = await q.message.reply_text(f"🔎 <b>Filtrando Elite e Jogos Ao Vivo ({data_visual})...</b>", parse_mode=ParseMode.HTML)
-        jogos = await fetch_all_soccer()
-        if not jogos: 
-            await msg.edit_text("❌ Nenhum jogo de Elite encontrado para hoje (ou todos já acabaram).")
-            return
-        
-        header = f"🦁 <b>DVD TIPS | GRADE VIP</b> 🦁\n📅 <b>{data_visual}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
-        txt = header
-        for g in jogos:
-            card = format_card(g)
-            if len(txt) + len(card) > 4000:
-                await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                txt = ""
-            txt += card
-        if txt: await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-        await msg.edit_text("✅ <b>Postado!</b>")
-
-    elif q.data == "daily_ticket":
-        await fetch_all_soccer()
-        await generate_daily_ticket(c)
-        await q.message.reply_text("✅ <b>Bilhete Gerado!</b>")
-
-def get_menu(): 
+def get_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ Grade VIP (Só Elite)", callback_data="fut_market")],
-        [InlineKeyboardButton("🎫 Bilhete Pronto", callback_data="daily_ticket")]
+        [InlineKeyboardButton("⚽ Futebol VIP", callback_data="fut")],
+        [InlineKeyboardButton("🎫 Bilhete Ouro", callback_data="ticket")],
+        [InlineKeyboardButton("🏀 Grade NBA", callback_data="nba")]
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V294</b>\nFiltro VIP Ativado: Sem jogos velhos, sem times pequenos.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V295</b>\nLayout Limpo + Grade 2026 + Funções ON.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
-# ================= SERVER =================
+async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    q = u.callback_query; await q.answer()
+    if q.data == "fut":
+        msg = await q.message.reply_text("🔎 <b>Buscando Jogos de Elite...</b>", parse_mode=ParseMode.HTML)
+        jogos = await fetch_all_soccer()
+        if not jogos: await msg.edit_text("❌ Grade vazia."); return
+        
+        txt = f"🦁 <b>GRADE VIP | {get_display_date_str()}</b> 🦁\n\n"
+        for g in jogos:
+            card = format_card(g)
+            if len(txt)+len(card) > 4000:
+                await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+            txt += card
+        if txt: await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await msg.delete()
+        
+    elif q.data == "ticket":
+        await fetch_all_soccer()
+        await generate_ticket(c)
+        await q.message.reply_text("✅ <b>Bilhete Gerado!</b>")
+        
+    elif q.data == "nba":
+        msg = await q.message.reply_text("🔎 <b>Buscando NBA...</b>", parse_mode=ParseMode.HTML)
+        jogos = await fetch_nba()
+        if not jogos: await msg.edit_text("❌ Sem jogos."); return
+        await c.bot.send_message(CHANNEL_ID, "".join(jogos), parse_mode=ParseMode.HTML)
+        await msg.delete()
+
+# ================= 5. MAIN =================
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V294 ELITE FILTER")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V295 CLEAN LAYOUT")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
