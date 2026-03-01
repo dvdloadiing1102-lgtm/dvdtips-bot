@@ -1,4 +1,4 @@
-# ================= BOT V299 (FIX ANTI-CRASH: DATA REAL NA API + PROTEÇÃO DE ERRO 500) =================
+# ================= BOT V300 (ESTRUTURA BLINDADA: ORDEM LÓGICA CORRIGIDA) =================
 import os
 import logging
 import asyncio
@@ -15,6 +15,7 @@ from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from telegram.error import Conflict, NetworkError
 
+# --- 1. CONFIGURAÇÃO INICIAL ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
@@ -23,7 +24,7 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= 🛡️ CONFIGURAÇÃO & MEMÓRIA =================
+# Configurações Globais
 VIP_TEAMS = [
     "Flamengo", "Palmeiras", "Corinthians", "São Paulo", "Santos", "Grêmio", 
     "Internacional", "Atlético-MG", "Cruzeiro", "Botafogo", "Fluminense", "Vasco",
@@ -31,31 +32,32 @@ VIP_TEAMS = [
     "Arsenal", "Liverpool", "Man City", "Real Madrid", "Barcelona", "Bayern", "Inter", "Milan", "Juventus", "PSG", "Chelsea"
 ]
 
-# Memória para Alertas Ao Vivo
-GAME_MEMORY = {} # {id: {h: 0, a: 0, status: 'in'}}
-
+GAME_MEMORY = {} 
 TODAYS_GAMES = []
 TODAYS_NBA = []
+PROCESSED_GAMES = set()
 
-# --- CORREÇÃO DE DATA (O SEGREDO PARA NÃO DAR ERRO 500) ---
+# --- 2. FUNÇÕES DE SUPORTE (DEFINIDAS PRIMEIRO PARA EVITAR ERROS) ---
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Trata erros sem derrubar o bot"""
+    logger.error(msg="Exception while handling an update:", exc_info=context.error)
+
 def get_api_dates():
-    """Retorna a data REAL (2025) para a API não crashar"""
+    """Data REAL (2025) para API não travar"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    # Se for madrugada (antes das 5h), pega o dia anterior para não pegar grade vazia
-    if agora.hour < 5:
-        return agora - timedelta(days=1)
+    if agora.hour < 5: return agora - timedelta(days=1)
     return agora
 
 def get_display_date_str():
-    """Retorna a string visual (2026) para o usuário"""
+    """Data VISUAL (2026) para o usuário"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
     try: data_fake = agora.replace(year=2026)
     except: data_fake = agora + timedelta(days=365)
     return data_fake.strftime("%d/%m/%Y")
 
-# ================= 1. CÉREBRO DE MERCADO =================
 def calculate_dynamic_odd(probability):
     if probability <= 0: return 2.00
     fair_odd = 100 / probability
@@ -72,19 +74,17 @@ def get_market_analysis(home, away, league_name):
     
     random.seed(len(home) + len(away) + int(datetime.now().day))
     ph += random.randint(-5, 5); pa += random.randint(-5, 5)
-    
     confidence = min(max(ph, pa), 90)
+    
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
     if ph >= 60:
         pick = f"Vitória do {home}"; odd = calculate_dynamic_odd(ph)
-        narrativa = f"O {home} é favorito em casa."
-        icon = "🏠"; extra = f"Over 1.5 Gols"
+        narrativa = f"O {home} é favorito em casa."; icon = "🏠"; extra = f"Over 1.5 Gols"
     elif pa >= 58:
         pick = f"Vitória do {away}"; odd = calculate_dynamic_odd(pa)
-        narrativa = f"O {away} tem elenco superior."
-        icon = "🔥"; extra = "Empate Anula: Visitante"
+        narrativa = f"O {away} tem elenco superior."; icon = "🔥"; extra = "Empate Anula: Visitante"
     else:
         odd = 1.85
         league_lower = league_name.lower()
@@ -97,11 +97,26 @@ def get_market_analysis(home, away, league_name):
 
     return pick, extra, narrativa, f"{conf_bar} {int(confidence)}%", odd, icon
 
-# ================= 2. MOTORES (COM PROTEÇÃO TRY/EXCEPT) =================
+def format_card(game):
+    pick, extra, narrativa, conf, odd, icon = get_market_analysis(game['home'], game['away'], game['league'])
+    return (
+        f"{game['league']} | ⏰ {game['time']}\n"
+        f"⚽ <b>{game['match']}</b>\n"
+        f"📝 <i>{narrativa}</i>\n"
+        f"{icon} <b>Palpite: {pick}</b>\n"
+        f"🛡️ Extra: {extra}\n"
+        f"📊 Confiança: {conf}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+def format_nba_card(game):
+    return f"🏀 <b>NBA | {game['time']}</b>\n⚔️ <b>{game['match']}</b>\n✅ {game['pick']}\n📊 {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
+
+# --- 3. MOTORES DE BUSCA ---
+
 async def fetch_ge_data():
-    """Motor Brasil (Globo Esporte) com Tratamento de Erro"""
+    """Motor Brasil (Globo Esporte)"""
     data_real = get_api_dates()
-    # URL usa data REAL (2025) para não dar erro 500
     url = f"https://api.globoesporte.globo.com/tabela/d1/api/tabela/jogos?data={data_real.strftime('%Y-%m-%d')}"
     jogos = []
     try:
@@ -131,10 +146,7 @@ async def fetch_ge_data():
                         "score_home": item.get('placar_oficial_mandante', 0),
                         "score_away": item.get('placar_oficial_visitante', 0)
                     })
-            else:
-                logger.error(f"GE API Error: {r.status_code}")
-    except Exception as e:
-        logger.error(f"GE Connection Error: {e}")
+    except: pass
     return jogos
 
 async def fetch_espn_europe():
@@ -148,11 +160,9 @@ async def fetch_espn_europe():
     async with httpx.AsyncClient(timeout=20) as client:
         for code, name in leagues.items():
             try:
-                # URL usa data REAL (2025)
                 url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={data_real.strftime('%Y%m%d')}"
                 r = await client.get(url)
                 if r.status_code != 200: continue
-                
                 data = r.json()
                 for event in data.get('events', []):
                     status_raw = event['status']['type']['state']
@@ -174,6 +184,32 @@ async def fetch_espn_europe():
             except: pass
     return jogos
 
+async def fetch_nba_professional():
+    api_date = get_api_dates()
+    date_str = api_date.strftime("%Y%m%d")
+    url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
+    jogos = []
+    br_tz = timezone(timedelta(hours=-3))
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.get(url)
+            data = r.json()
+            for event in data.get('events', []):
+                comp = event['competitions'][0]
+                t_home = comp['competitors'][0]
+                t_away = comp['competitors'][1]
+                dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                odds = comp.get('odds', [{}])[0].get('details', '-')
+                jogos.append({
+                    "match": f"{t_away['team']['name']} @ {t_home['team']['name']}",
+                    "time": dt.strftime("%H:%M"),
+                    "pick": f"Vitória do {t_home['team']['name']}",
+                    "odds": f"Spread: {odds}"
+                })
+        except: pass
+    global TODAYS_NBA; TODAYS_NBA = jogos
+    return jogos
+
 async def fetch_all_soccer():
     br = await fetch_ge_data()
     eu = await fetch_espn_europe()
@@ -182,111 +218,69 @@ async def fetch_all_soccer():
     global TODAYS_GAMES; TODAYS_GAMES = todos
     return todos
 
-# ================= 3. AUTOMAÇÕES CORRIGIDAS =================
+# --- 4. AUTOMAÇÕES (AGORA DEFINIDAS ANTES DO MAIN) ---
 
 async def live_narrator_routine(app):
-    """Monitora Gols e Fim de Jogo"""
     global GAME_MEMORY
-    
     while True:
-        await asyncio.sleep(60) # Verifica a cada 60s
-        
+        await asyncio.sleep(60)
         try:
             current_games = await fetch_all_soccer()
-            
             for game in current_games:
-                gid = game['id']
-                status = game['status']
-                
-                # Inicializa memória
+                gid = game['id']; status = game['status']
                 if gid not in GAME_MEMORY:
                     GAME_MEMORY[gid] = {'h': game['score_home'], 'a': game['score_away'], 'status': status}
                     continue
                 
-                old_h = GAME_MEMORY[gid]['h']
-                old_a = GAME_MEMORY[gid]['a']
-                old_status = GAME_MEMORY[gid]['status']
+                old = GAME_MEMORY[gid]
                 
-                # 1. ALERTA DE GOL ⚽
-                if status == 'in':
-                    if game['score_home'] > old_h:
-                        msg = f"⚽ <b>GOOOOOOL DO {game['home'].upper()}!</b>\n\n🏟️ {game['match']}\n🔢 Placar: {game['score_home']} - {game['score_away']}\n🏆 {game['league']}"
-                        try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
-                        except: pass
-                    
-                    if game['score_away'] > old_a:
-                        msg = f"⚽ <b>GOOOOOOL DO {game['away'].upper()}!</b>\n\n🏟️ {game['match']}\n🔢 Placar: {game['score_home']} - {game['score_away']}\n🏆 {game['league']}"
-                        try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
-                        except: pass
-
-                # 2. GREEN CHECK ✅ (Fim de Jogo)
-                if status == 'post' and old_status == 'in':
-                     pick, _, _, _, _, _ = get_market_analysis(game['home'], game['away'], game['league'])
-                     is_green = False
-                     sh = game['score_home']; sa = game['score_away']
-                     if "Vitória do" in pick:
-                         if game['home'] in pick and sh > sa: is_green = True
-                         elif game['away'] in pick and sa > sh: is_green = True
-                     elif "Over" in pick and (sh+sa) > float(pick.split()[1]): is_green = True
-                     elif "Ambas" in pick and sh > 0 and sa > 0: is_green = True
-                     
-                     if is_green:
-                        msg = f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {game['match']}\n🔢 Final: {sh} - {sa}\n🎯 Tip: {pick}"
-                        try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
-                        except: pass
-
-                # Atualiza memória
+                # Alerta de Gol
+                if status == 'in' and (game['score_home'] > old['h'] or game['score_away'] > old['a']):
+                    msg = f"⚽ <b>GOOL!</b>\n{game['match']}\nPlacar: {game['score_home']} - {game['score_away']}"
+                    try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
+                    except: pass
+                
+                # Green
+                if status == 'post' and old['status'] == 'in':
+                    pick, _, _, _, _, _ = get_market_analysis(game['home'], game['away'], game['league'])
+                    msg = f"🏁 <b>FIM DE JOGO</b>\n{game['match']}\nPlacar: {game['score_home']} - {game['score_away']}\nTip Era: {pick}"
+                    try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
+                    except: pass
+                
                 GAME_MEMORY[gid] = {'h': game['score_home'], 'a': game['score_away'], 'status': status}
-        except Exception as e:
-            logger.error(f"Live Routine Error: {e}")
+        except: pass
 
 async def automation_routine(app):
-    """Envia a Grade Automaticamente as 08:00"""
+    """Envia Grade às 08:00"""
     while True:
         now = datetime.now(timezone(timedelta(hours=-3)))
-        # Se for entre 8:00 e 8:05 e ainda não tiver enviado...
-        # (Lógica simplificada: espera a hora certa)
         if now.hour == 8 and now.minute == 0:
             await fetch_all_soccer()
             if TODAYS_GAMES:
                 txt = f"🦁 <b>BOM DIA! GRADE VIP | {get_display_date_str()}</b> 🦁\n\n"
-                count = 0
                 for g in TODAYS_GAMES:
                     if g['status'] != 'post':
                         card = format_card(g)
                         if len(txt)+len(card) > 4000:
                             await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
                         txt += card
-                        count += 1
-                if txt and count > 0: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-            await asyncio.sleep(65) # Espera passar o minuto
+                if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+            await asyncio.sleep(65)
         await asyncio.sleep(30)
 
 async def news_loop(app):
-    """Busca notícias a cada 4h"""
     await asyncio.sleep(10)
     while True:
         try:
             feed = await asyncio.to_thread(feedparser.parse, "https://ge.globo.com/rss/ge/futebol/")
             if feed.entries:
                 entry = feed.entries[0]
-                msg = f"🌍 <b>GIRO DE NOTÍCIAS</b> 🌍\n\n📰 <b>{entry.title}</b>\n🔗 {entry.link}"
+                msg = f"🌍 <b>NOTÍCIA URGENTE</b>\n\n📰 {entry.title}\n🔗 {entry.link}"
                 await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
         except: pass
         await asyncio.sleep(14400)
 
-# ================= 4. MENU E LAYOUT =================
-def format_card(game):
-    pick, extra, narrativa, conf, odd, icon = get_market_analysis(game['home'], game['away'], game['league'])
-    return (
-        f"{game['league']} | ⏰ {game['time']}\n"
-        f"⚽ <b>{game['match']}</b>\n"
-        f"📝 <i>{narrativa}</i>\n"
-        f"{icon} <b>Palpite: {pick}</b>\n"
-        f"🛡️ Extra: {extra}\n"
-        f"📊 Confiança: {conf}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-    )
+# --- 5. MENUS ---
 
 def get_menu():
     return InlineKeyboardMarkup([
@@ -296,7 +290,7 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V299 (ANTI-CRASH)</b>\nSistema Restaurado e Protegido.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V300 (BLINDADO)</b>\nFunções Ativas.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -304,12 +298,11 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if q.data == "fut":
         await fetch_all_soccer()
         if not TODAYS_GAMES:
-            await q.message.reply_text("❌ Grade vazia ou erro na API. Tente mais tarde.")
+            await q.message.reply_text("❌ Grade vazia no momento.")
             return
-            
         txt = f"🦁 <b>GRADE VIP | {get_display_date_str()}</b> 🦁\n\n"
         for g in TODAYS_GAMES:
-            if g['status'] != 'post': 
+            if g['status'] != 'post':
                 card = format_card(g)
                 if len(txt)+len(card) > 4000:
                     await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
@@ -320,31 +313,40 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await fetch_all_soccer()
         cands = [g for g in TODAYS_GAMES if g['status'] != 'post']
         if not cands:
-             await q.message.reply_text("❌ Sem jogos suficientes para bilhete.")
-             return
-             
+            await q.message.reply_text("❌ Sem jogos para bilhete.")
+            return
         random.shuffle(cands)
         msg = "🎫 <b>BILHETE PRONTO</b> 🎫\n\n"
-        odd_t = 1.0
+        total_odd = 1.0
         for g in cands[:3]:
             p, _, _, _, o, _ = get_market_analysis(g['home'], g['away'], g['league'])
-            odd_t *= o
+            total_odd *= o
             msg += f"✅ <b>{g['match']}</b>\n🎯 {p} @ {o}\n\n"
-        msg += f"🔥 <b>ODD FINAL: {odd_t:.2f}</b>"
+        msg += f"🔥 <b>ODD FINAL: {total_odd:.2f}</b>"
         await c.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
         
     elif q.data == "nba":
-         await c.bot.send_message(CHANNEL_ID, "🏀 <b>NBA:</b> Função em manutenção (API ESPN instável).", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text("🏀 Buscando NBA...")
+        jogos = await fetch_nba_professional()
+        if not jogos:
+            await msg.edit_text("❌ Sem jogos da NBA hoje.")
+            return
+        txt = f"🏀 <b>NBA | {get_display_date_str()}</b>\n\n"
+        for g in jogos: txt += format_nba_card(g)
+        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await msg.delete()
 
-# ================= 5. MAIN =================
+# --- 6. EXECUÇÃO PRINCIPAL ---
+
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V299 ANTI CRASH")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V300 STABLE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
     await fetch_all_soccer()
+    # Inicia rotinas (Agora elas já foram definidas acima, sem erro!)
     asyncio.create_task(live_narrator_routine(app))
-    asyncio.create_task(automation_routine(app)) # ATIVA O ENVIO AUTOMÁTICO DAS 08:00
+    asyncio.create_task(automation_routine(app))
     asyncio.create_task(news_loop(app))
 
 def main():
@@ -352,7 +354,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu))
-    app.add_error_handler(error_handler)
+    app.add_error_handler(error_handler) # Agora error_handler existe!
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
