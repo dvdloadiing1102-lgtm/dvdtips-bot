@@ -1,4 +1,4 @@
-# ================= BOT V295 (LAYOUT LIMPO + FUNÇÕES RESTAURADAS + GRADE 2026) =================
+# ================= BOT V296 (BRAIN UNLOCKED: MERCADOS VARIADOS + VISUAL PRO) =================
 import os
 import logging
 import asyncio
@@ -23,7 +23,7 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================= 🛡️ CONFIGURAÇÃO =================
+# ================= 🛡️ CONFIGURAÇÃO VIP =================
 VIP_TEAMS = [
     "Flamengo", "Palmeiras", "Corinthians", "São Paulo", "Santos", "Grêmio", 
     "Internacional", "Atlético-MG", "Cruzeiro", "Botafogo", "Fluminense", "Vasco",
@@ -31,12 +31,10 @@ VIP_TEAMS = [
 ]
 
 def get_api_dates():
-    """Data Real para API (Hoje)"""
     br_tz = timezone(timedelta(hours=-3))
     return datetime.now(br_tz)
 
 def get_display_date_str():
-    """Data Visual (2026)"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
     try: data_fake = agora.replace(year=2026)
@@ -47,33 +45,95 @@ def get_display_date_str():
 TODAYS_GAMES = []
 TODAYS_NBA = []
 
-# ================= 1. ANÁLISE DE MERCADO =================
+# ================= 1. ANÁLISE DE MERCADO AVANÇADA =================
 def calculate_dynamic_odd(probability):
     if probability <= 0: return 2.00
     fair_odd = 100 / probability
     return round(fair_odd + random.uniform(0.05, 0.15), 2)
 
 def get_market_analysis(home, away, league_name):
-    h_weight = 50; a_weight = 30
+    # 1. Definição de Pesos (Favoritismo)
+    h_weight = 50; a_weight = 40 # Casa tem vantagem natural
     
-    if any(t in home for t in VIP_TEAMS): h_weight += 30
-    if any(t in away for t in VIP_TEAMS): a_weight += 25
+    # Peso de Camisa
+    if any(t in home for t in VIP_TEAMS): h_weight += 25
+    if any(t in away for t in VIP_TEAMS): a_weight += 20
     
+    # Cálculo Probabilidade
     total = h_weight + a_weight
-    ph = (h_weight / total) * 100; pa = (a_weight / total) * 100
-    ph = max(20, min(ph, 85)); pa = max(15, min(pa, 80))
+    ph = (h_weight / total) * 100
+    pa = (a_weight / total) * 100
     
-    if ph >= 70:
-        pick = f"Vitória do {home}"; odd = calculate_dynamic_odd(ph)
-        narrativa = f"Favorito em casa."
-    elif pa >= 65:
-        pick = f"Vitória do {away}"; odd = calculate_dynamic_odd(pa)
-        narrativa = f"Visitante superior."
-    else:
-        pick = "Over 1.5 Gols"; odd = 1.45
-        narrativa = "Confronto equilibrado."
+    # Ajustes finos aleatórios (Simula momento do time)
+    random.seed(len(home) + len(away)) # Seed fixa pelo nome pra não mudar toda hora
+    ph += random.randint(-5, 5)
+    pa += random.randint(-5, 5)
+
+    confidence = max(ph, pa)
+    confidence = min(confidence, 92) # Teto de 92%
+    
+    bars = int(confidence / 10)
+    conf_bar = "█" * bars + "░" * (10 - bars)
+    
+    # 2. SELEÇÃO DE MERCADO (INTELIGÊNCIA DO BOT)
+    pick = ""
+    extra = ""
+    narrativa = ""
+    icon = "🎯"
+    
+    # Cenário A: Favorito Claro (Vitória Seca)
+    if ph >= 62:
+        pick = f"Vitória do {home}"
+        odd = calculate_dynamic_odd(ph)
+        narrativa = f"O {home} é muito forte em seus domínios."
+        icon = "🏠"
+        extra = f"Over 1.5 Gols do {home}"
+    elif pa >= 58:
+        pick = f"Vitória do {away}"
+        odd = calculate_dynamic_odd(pa)
+        narrativa = f"O {away} tem elenco superior e deve vencer."
+        icon = "🔥"
+        extra = "Empate Anula: Visitante"
         
-    return pick, odd, narrativa
+    # Cenário B: Jogo Equilibrado (Mercados Alternativos)
+    else:
+        diff = abs(ph - pa)
+        odd = 1.90
+        
+        # Ligas de Gols/Cantos (Inglaterra, Alemanha, Holanda)
+        if any(x in league_name for x in ['Premier', 'Bundesliga', 'Eredivisie', 'Champions']):
+            if random.choice([True, False]):
+                pick = "Over 2.5 Gols"
+                narrativa = "Dois ataques potentes, jogo para gols."
+                icon = "⚽"
+                extra = "Ambas Marcam: Sim"
+            else:
+                pick = "Over 9.5 Escanteios"
+                narrativa = "Jogo lá e cá, tendência de muitos cantos."
+                icon = "🚩"
+                extra = "Over 4.5 Cantos HT"
+                
+        # Ligas de Cartões/Pegadas (Brasil, Argentina, Libertadores, Italia)
+        elif any(x in league_name for x in ['Brasil', 'Série A', 'Libertadores', 'Sul-Americana', 'Serie A', 'La Liga']):
+            if diff < 5: # Muito parelho
+                pick = "Empate"
+                narrativa = "Jogo truncado, cheiro de empate."
+                icon = "⚖️"
+                extra = "Menos de 2.5 Gols"
+            else:
+                pick = "Over 5.5 Cartões"
+                narrativa = "Clássico/Jogo pegado. Arbitragem rigorosa."
+                icon = "🟨"
+                extra = "Expulsão: Sim (Risco)"
+        
+        # Genérico (Resto)
+        else:
+            pick = "Ambas Marcam: Sim"
+            narrativa = "Defesas instáveis."
+            icon = "🥅"
+            extra = "Over 1.5 Gols"
+
+    return pick, extra, narrativa, f"{conf_bar} {int(confidence)}%", odd, icon
 
 # ================= 2. MOTORES (GE + ESPN) =================
 async def fetch_ge_data():
@@ -86,7 +146,7 @@ async def fetch_ge_data():
             if r.status_code == 200:
                 lista = r.json()
                 for item in lista:
-                    if item.get('realizado', False) or item.get('placar_oficial_mandante'): continue
+                    if item.get('realizado', False): continue
                     
                     home = item['equipes']['mandante']['nome_popular']
                     away = item['equipes']['visitante']['nome_popular']
@@ -108,8 +168,8 @@ async def fetch_ge_data():
 
 async def fetch_espn_europe():
     data_real = get_api_dates()
-    leagues = {'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier League', 'esp.1': '🇪🇸 La Liga', 
-               'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Saudi Pro'}
+    leagues = {'uefa.champions': '🇪🇺 Champions League', 'eng.1': '🇬🇧 Premier League', 'esp.1': '🇪🇸 La Liga', 
+               'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Sauditão'}
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
@@ -163,27 +223,29 @@ async def fetch_nba():
     global TODAYS_NBA; TODAYS_NBA = jogos
     return jogos
 
-# ================= 4. MENU E LAYOUT =================
+# ================= 4. MENU E LAYOUT (RESTAURADO) =================
 def format_card(game):
-    pick, odd, narrativa = get_market_analysis(game['home'], game['away'], game['league'])
+    pick, extra, narrativa, conf, odd, icon = get_market_analysis(game['home'], game['away'], game['league'])
     return (
         f"{game['league']} | ⏰ {game['time']}\n"
-        f"⚽ <b>{game['match']}</b>\n"
-        f"🎯 <b>{pick}</b> (Odd: {odd})\n"
-        f"👁️ <i>{narrativa}</i>\n"
-        f"➖➖➖➖➖➖➖➖➖➖\n"
+        f"⚔️ <b>{game['match']}</b>\n"
+        f"📝 <i>{narrativa}</i>\n"
+        f"{icon} <b>Palpite: {pick}</b>\n"
+        f"🛡️ Extra: {extra}\n"
+        f"📊 Confiança: {conf}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
 async def generate_ticket(app):
     if not TODAYS_GAMES: return
     cands = []
     for g in TODAYS_GAMES:
-        p, o, _ = get_market_analysis(g['home'], g['away'], g['league'])
-        if 1.40 <= o <= 1.90: cands.append({'m': g['match'], 'p': p, 'o': o})
+        p, _, _, _, o, _ = get_market_analysis(g['home'], g['away'], g['league'])
+        if 1.50 <= o <= 2.10: cands.append({'m': g['match'], 'p': p, 'o': o})
     random.shuffle(cands)
-    sel = cands[:4]
+    sel = cands[:3] # Tripla Forte
     if sel:
-        msg = "🎫 <b>BILHETE DE OURO</b> 🎫\n\n"
+        msg = "🎫 <b>TRIPLA DE RESPEITO (V296)</b> 🎫\n\n"
         odd_t = 1.0
         for c in sel:
             odd_t *= c['o']
@@ -193,22 +255,24 @@ async def generate_ticket(app):
 
 def get_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ Futebol VIP", callback_data="fut")],
-        [InlineKeyboardButton("🎫 Bilhete Ouro", callback_data="ticket")],
-        [InlineKeyboardButton("🏀 Grade NBA", callback_data="nba")]
+        [InlineKeyboardButton("⚽ Grade VIP", callback_data="fut")],
+        [InlineKeyboardButton("🎫 Bilhete Pronto", callback_data="ticket")],
+        [InlineKeyboardButton("🏀 NBA", callback_data="nba")]
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V295</b>\nLayout Limpo + Grade 2026 + Funções ON.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V296</b>\nInteligência de Mercado Restaurada!", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
+    data_visual = get_display_date_str()
+    
     if q.data == "fut":
-        msg = await q.message.reply_text("🔎 <b>Buscando Jogos de Elite...</b>", parse_mode=ParseMode.HTML)
+        msg = await q.message.reply_text(f"🔎 <b>Analisando Mercados ({data_visual})...</b>", parse_mode=ParseMode.HTML)
         jogos = await fetch_all_soccer()
         if not jogos: await msg.edit_text("❌ Grade vazia."); return
         
-        txt = f"🦁 <b>GRADE VIP | {get_display_date_str()}</b> 🦁\n\n"
+        txt = f"🦁 <b>DVD TIPS | GRADE VIP</b> 🦁\n📅 <b>{data_visual}</b>\n➖➖➖➖➖➖➖➖➖➖➖➖\n\n"
         for g in jogos:
             card = format_card(g)
             if len(txt)+len(card) > 4000:
@@ -229,9 +293,8 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await c.bot.send_message(CHANNEL_ID, "".join(jogos), parse_mode=ParseMode.HTML)
         await msg.delete()
 
-# ================= 5. MAIN =================
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V295 CLEAN LAYOUT")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V296 FULL BRAIN")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
