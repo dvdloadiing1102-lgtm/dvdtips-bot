@@ -280,7 +280,7 @@ def format_card(game):
     pick, extra, narrativa, conf, odd, icon = get_market_analysis(game['home'], game['away'], game['league'])
     return (
         f"{game['league']} | ⏰ {game['time']}\n"
-        f"⚔️ <b>{game['match']}</b>\n"
+        f"⚽ <b>{game['match']}</b>\n"
         f"📝 <i>{narrativa}</i>\n"
         f"{icon} <b>Palpite: {pick}</b>\n"
         f"🛡️ Extra: {extra}\n"
