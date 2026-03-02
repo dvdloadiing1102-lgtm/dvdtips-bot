@@ -1,4 +1,4 @@
-# ================= BOT V328 (ALERTAS AO VIVO + RADAR DE PRESSÃO + CORREÇÕES VIGENTES) =================
+# ================= BOT V329 (ESTABILIDADE: GRADE GARANTIDA + ALERTAS FIXOS) =================
 import os
 import logging
 import asyncio
@@ -24,6 +24,7 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# LISTA VIP (Para destaque, não mais para exclusão total)
 VIP_FILTER = [
     "flamengo", "palmeiras", "corinthians", "são paulo", "santos", "grêmio",
     "internacional", "atlético-mg", "cruzeiro", "botafogo", "fluminense", "vasco",
@@ -36,14 +37,14 @@ VIP_FILTER = [
 TODAYS_GAMES = []
 TODAYS_NBA = []
 TODAYS_UFC = []
-GAME_MEMORY = {} # Memória essencial para alertas
+GAME_MEMORY = {} 
 
 # --- 2. HELPERS MATEMÁTICOS ---
 
 def american_to_decimal(american_str):
     try:
-        if "EV" in str(american_str).upper(): return 2.00
         val = float(american_str)
+        if val == 0: return 1.0
         if val < 0: return round((100 / abs(val)) + 1, 2)
         else: return round((val / 100) + 1, 2)
     except: return 0.0
@@ -68,7 +69,9 @@ def is_vip(team_name):
 # --- 3. EXTRAÇÃO DE DADOS ---
 
 def parse_odds_string(details_str, home_name, away_name):
-    """Retorna pick, odd decimal e se é favorito"""
+    """
+    Retorna: Pick, Odd Decimal, Ícone, Is_Favorite
+    """
     pick = "Aguardando Odds"
     odd_decimal = 0.0
     icon = "⏳"
@@ -77,7 +80,7 @@ def parse_odds_string(details_str, home_name, away_name):
     if not details_str or details_str == '-': return pick, odd_decimal, icon, is_favorite
 
     try:
-        if "EV" in details_str.upper(): return "Jogo Equilibrado", 1.90, "⚖️", False
+        if "EV" in str(details_str).upper(): return "Jogo Equilibrado", 1.90, "⚖️", False
 
         parts = details_str.split(' ')
         abbr = parts[0]
@@ -85,17 +88,21 @@ def parse_odds_string(details_str, home_name, away_name):
         
         odd_decimal = american_to_decimal(number_str)
         
+        # Tenta identificar por sigla
         team_focused = None
         type_team = ""
+        
         if abbr.lower() in home_name.lower()[:4]:
             team_focused = home_name; type_team = "HOME"
         elif abbr.lower() in away_name.lower()[:4]:
             team_focused = away_name; type_team = "AWAY"
         else:
-            if "-" in number_str: # Favorito genérico
+            # Se não bate a sigla, mas tem '-', assume que é o favorito da linha
+            if "-" in number_str:
                 return f"Favorito: {abbr}", odd_decimal, "🔥", True
             return pick, odd_decimal, icon, False
 
+        # Lógica do Sinal (-)
         if "-" in number_str:
             pick = f"Vitória do {team_focused}"
             icon = "🏠" if type_team == "HOME" else "🔥"
@@ -147,9 +154,6 @@ def format_ufc_card(fight):
     red_odd = american_to_decimal(fight['red_odds'])
     blue_odd = american_to_decimal(fight['blue_odds'])
     
-    red_icon = "👑" if red_odd > 0 and red_odd < blue_odd else ""
-    blue_icon = "👑" if blue_odd > 0 and blue_odd < red_odd else ""
-    
     odds_str = "⚠️ Aguardando Odds"
     if red_odd > 0: odds_str = f"💰 {fight['red']}: @{red_odd}\n💰 {fight['blue']}: @{blue_odd}"
 
@@ -158,27 +162,31 @@ def format_ufc_card(fight):
         f"📍 {safe_html(fight['venue'])}\n"
         f"ℹ️ {card_status} | {fight['weight']}\n"
         f"{title_str}"
-        f"🔴 {safe_html(fight['red'])} {red_icon}\n"
+        f"🔴 {safe_html(fight['red'])}\n"
         f"          Vs\n"
-        f"🔵 {safe_html(fight['blue'])} {blue_icon}\n"
+        f"🔵 {safe_html(fight['blue'])}\n"
         f"{odds_str}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# --- 5. MOTORES DE BUSCA ---
+# --- 5. MOTORES DE BUSCA (COM PROTEÇÃO DE LISTA VAZIA) ---
 
 async def fetch_espn_soccer():
     date_str = get_api_date_str()
+    logger.info(f"🔍 SOCCER: {date_str}")
     leagues = {
         'bra.1': '🇧🇷 Brasileirão', 'bra.copa_do_brasil': '🏆 Copa do Brasil',
         'bra.camp.paulista': '🇧🇷 Paulistão', 'bra.camp.carioca': '🇧🇷 Carioca',
         'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier', 'esp.1': '🇪🇸 La Liga', 
         'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Sauditão'
     }
+    
     found_games = []
+    games_all = [] # Backup sem filtro VIP
+    
     br_tz = timezone(timedelta(hours=-3))
     
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         for code, name in leagues.items():
             try:
                 url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={date_str}"
@@ -187,7 +195,7 @@ async def fetch_espn_soccer():
                     data = r.json()
                     for event in data.get('events', []):
                         status_key = event['status']['type']['state']
-                        display_clock = event['status']['type']['detail'] # Ex: "80'"
+                        display_clock = event['status']['type']['detail']
                         
                         if status_key == 'pre': status = 'agendado'
                         elif status_key == 'in': status = 'in'
@@ -205,7 +213,7 @@ async def fetch_espn_soccer():
                         
                         dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                         
-                        found_games.append({
+                        game_obj = {
                             "raw": event,
                             "id": event['id'],
                             "home": home, "away": away,
@@ -216,15 +224,34 @@ async def fetch_espn_soccer():
                             "venue": venue,
                             "tv": tv_str,
                             "score_home": sh, "score_away": sa
-                        })
+                        }
+                        
+                        # Salva na lista geral
+                        games_all.append(game_obj)
+                        
+                        # Salva na lista VIP se passar no filtro
+                        if 'bra' in code:
+                            if is_vip(home) or is_vip(away): found_games.append(game_obj)
+                        else:
+                            found_games.append(game_obj) # Estrangeiros aceita tudo
+                            
             except: pass
     
-    found_games.sort(key=lambda x: x['time'])
-    global TODAYS_GAMES; TODAYS_GAMES = found_games
-    return found_games
+    # LÓGICA DE SALVAMENTO:
+    # Se achou VIPs, mostra VIPs. Se não achou NENHUM VIP, mostra TUDO.
+    if found_games:
+        TODAYS_GAMES_FINAL = found_games
+    else:
+        TODAYS_GAMES_FINAL = games_all
+        
+    TODAYS_GAMES_FINAL.sort(key=lambda x: x['time'])
+    global TODAYS_GAMES; TODAYS_GAMES = TODAYS_GAMES_FINAL
+    
+    logger.info(f"📊 Jogos Carregados: {len(TODAYS_GAMES)}")
+    return TODAYS_GAMES
 
 async def fetch_espn_nba():
-    # Lógica NBA (Igual V326)
+    # Lógica NBA (Padrão)
     date_str = get_api_date_str()
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
     jogos = []
@@ -246,7 +273,7 @@ async def fetch_espn_nba():
                     dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     odds = comp.get('odds', [{}])[0].get('details', '-')
                     
-                    pick = f"Vitória do {t_home['team']['name']}" 
+                    pick = f"Vitória do {t_home['team']['name']}"
                     if odds != '-' and len(odds.split(' ')) > 1:
                         fav_abbr = odds.split(' ')[0]
                         if fav_abbr in t_away['team']['abbreviation']:
@@ -265,7 +292,7 @@ async def fetch_espn_nba():
     return jogos
 
 async def fetch_espn_ufc():
-    # Lógica UFC (Igual V326)
+    # Lógica UFC
     url = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
     lutas = []
     br_tz = timezone(timedelta(hours=-3))
@@ -282,7 +309,6 @@ async def fetch_espn_ufc():
                         red = fighters[0]['athlete']['fullName']
                         blue = fighters[1]['athlete']['fullName']
                         
-                        r_odd = 0; b_odd = 0 # Placeholder
                         weight_class = comp_inner.get('type', {}).get('abbreviation', 'MMA')
                         is_title = comp_inner.get('type', {}).get('slug', '') == 'title-fight'
                         card_segment = comp_inner.get('card', 'main') 
@@ -294,121 +320,63 @@ async def fetch_espn_ufc():
                             "weight": weight_class,
                             "title": is_title,
                             "card": card_segment,
-                            "red_odds": "-200", "blue_odds": "+150" # Demo para teste, API real pode variar
+                            "red_odds": "-200", "blue_odds": "+150" # Placeholder
                         })
     except: pass
     global TODAYS_UFC; TODAYS_UFC = lutas
     return lutas
 
-# --- 6. NARRADOR AO VIVO (SISTEMA DE ALERTAS) ---
+# --- 6. NARRADOR AO VIVO ---
 
 async def live_narrator_routine(app):
-    """
-    Monitora Gol, Green/Red e Oportunidades
-    """
     global GAME_MEMORY
-    logger.info("🎙️ Sistema de Alertas Ativado")
-    
+    logger.info("🎙️ Narrador Ativo")
     while True:
-        await asyncio.sleep(60) # Checa a cada minuto
+        await asyncio.sleep(60)
         try:
+            # Busca silenciosa para atualizar dados
             current_games = await fetch_espn_soccer()
             
             for game in current_games:
-                gid = game['id']
-                status = game['status']
-                home = game['home']
-                away = game['away']
-                sh = game['score_home']
-                sa = game['score_away']
-                clock = game['clock'] # Ex: "75'"
+                gid = game['id']; status = game['status']
+                sh = game['score_home']; sa = game['score_away']
                 
-                # Inicializa memória
                 if gid not in GAME_MEMORY:
                     GAME_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
                     continue
-                
                 old = GAME_MEMORY[gid]
                 
-                # --- 1. ALERTA DE GOL ⚽ ---
+                # Gol
                 if status == 'in' and (sh > old['h'] or sa > old['a']):
-                    scorer_team = home if sh > old['h'] else away
-                    msg = (
-                        f"⚽ <b>GOOOOOOL DO {scorer_team.upper()}!</b>\n\n"
-                        f"🏟️ {game['match']}\n"
-                        f"⏱️ {clock}\n"
-                        f"🔢 Placar: {sh} - {sa}"
-                    )
+                    scorer = game['home'] if sh > old['h'] else game['away']
+                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {game['clock']}\n🔢 Placar: {sh} - {sa}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
-
-                # --- 2. RADAR DE OPORTUNIDADE 🔥 (Pressão no Final) ---
-                # Lógica: Favorito empatando ou perdendo depois dos 70min
-                if status == 'in' and "7" in clock or "8" in clock or "9" in clock: # Simplificação de minutos
-                    # Se não mandou alerta ainda
-                    if 'alerted' not in old: 
-                        home_is_vip = is_vip(home)
-                        away_is_vip = is_vip(away)
-                        
-                        opportunity = False
-                        fav_team = ""
-                        
-                        # Favorito Casa Empatando/Perdendo
-                        if home_is_vip and not away_is_vip and sh <= sa:
-                            opportunity = True; fav_team = home
-                        
-                        # Favorito Fora Empatando/Perdendo
-                        elif away_is_vip and not home_is_vip and sa <= sh:
-                            opportunity = True; fav_team = away
-                            
-                        if opportunity:
-                            msg = (
-                                f"🔥 <b>ALERTA DE PRESSÃO!</b>\n\n"
-                                f"⚠️ O <b>{fav_team}</b> precisa do resultado!\n"
-                                f"🏟️ {game['match']}\n"
-                                f"⏱️ {clock} | Placar: {sh} - {sa}\n"
-                                f"💡 <i>Grande chance de gol no final. Fique atento!</i>"
-                            )
-                            try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
-                            except: pass
-                            old['alerted'] = True # Marca para não repetir
-
-                # --- 3. ALERTA DE GREEN/RED ✅❌ ---
+                
+                # Green/Red
                 if status == 'post' and old['status'] == 'in':
-                    # Recalcula a pick para saber se bateu
                     odds_list = game['raw']['competitions'][0].get('odds', [])
                     details = odds_list[0].get('details', '-') if odds_list else '-'
-                    pick, _, _, is_fav = parse_odds_string(details, home, away)
+                    pick, _, _, is_fav = parse_odds_string(details, game['home'], game['away'])
                     
-                    # Validação simples de Green
                     is_green = False
                     if "Vitória do" in pick:
-                        if home in pick and sh > sa: is_green = True
-                        elif away in pick and sa > sh: is_green = True
+                        if game['home'] in pick and sh > sa: is_green = True
+                        elif game['away'] in pick and sa > sh: is_green = True
                     
                     res_icon = "✅ GREEN" if is_green else "❌ RED"
-                    # Só manda se tiver uma pick válida (fav)
-                    if is_fav: 
-                        msg = (
-                            f"{res_icon} <b>FINALIZADO</b>\n\n"
-                            f"⚽ {game['match']}\n"
-                            f"🔢 Placar Final: {sh} - {sa}\n"
-                            f"🎯 Pick: {pick}"
-                        )
+                    if is_fav:
+                        msg = f"{res_icon} <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 Placar Final: {sh} - {sa}\n🎯 Pick: {pick}"
                         try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                         except: pass
 
-                # Atualiza memória
-                GAME_MEMORY[gid] = old # Mantém flag 'alerted'
-                GAME_MEMORY[gid]['h'] = sh
-                GAME_MEMORY[gid]['a'] = sa
-                GAME_MEMORY[gid]['status'] = status
-                
+                GAME_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
         except: pass
 
 async def automation_routine(app):
     while True:
         now = datetime.now(timezone(timedelta(hours=-3)))
+        
         if now.hour == 8 and now.minute == 0:
             await fetch_espn_soccer()
             if TODAYS_GAMES:
@@ -417,13 +385,31 @@ async def automation_routine(app):
                     if g['status'] != 'post':
                         card = format_card(g, g['raw'])
                         if len(txt)+len(card) > 4000:
-                            await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+                            try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+                            except: pass
+                            txt = ""
                         txt += card
-                if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+                if txt: 
+                    try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+                    except: pass
             await asyncio.sleep(65)
+            
         elif now.hour == 16 and now.minute == 0:
-             # NBA
-             pass
+            await fetch_espn_nba()
+            if TODAYS_NBA:
+                txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
+                for g in TODAYS_NBA:
+                    card = format_nba_card(g)
+                    if len(txt)+len(card) > 4000:
+                        try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+                        except: pass
+                        txt = ""
+                    txt += card
+                if txt:
+                    try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+                    except: pass
+            await asyncio.sleep(65)
+
         await asyncio.sleep(30)
 
 async def news_loop(app):
@@ -452,24 +438,28 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(f"🦁 <b>PAINEL V328 (ALERTAS ON)</b>\nGol/Green/Red: ON\nRadar Pressão: ON", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text(f"🦁 <b>PAINEL V329 (ESTÁVEL)</b>\nLista Garantida: ON\nAlertas: ON", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut":
-        msg = await q.message.reply_text(f"🔎 Consultando ESPN...")
+        msg = await q.message.reply_text(f"🔎 Buscando grade...")
         await fetch_espn_soccer()
+        
         if not TODAYS_GAMES:
-            await msg.edit_text("❌ Sem jogos.")
+            await msg.edit_text(f"❌ <b>ZERO JOGOS ENCONTRADOS.</b>\nVerifique se há jogos hoje.", parse_mode=ParseMode.HTML)
             return
+        
         txt = f"🦁 <b>GRADE VIP | {get_display_date()}</b> 🦁\n\n"
         for g in TODAYS_GAMES:
             card = format_card(g, g['raw'])
             if len(txt)+len(card) > 4000:
-                await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+                await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML); txt = ""
             txt += card
-        if txt: await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        
+        # MANDA NO CHAT DO USUÁRIO (q.message.chat_id)
+        if txt: await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML)
         await msg.delete()
 
     elif q.data == "ticket":
@@ -480,11 +470,11 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
             odds_list = g['raw']['competitions'][0].get('odds', [])
             details = odds_list[0].get('details', '-') if odds_list else '-'
             p, odd, _, is_fav = parse_odds_string(details, g['home'], g['away'])
-            if is_fav and odd >= 1.20 and odd <= 2.20:
+            if is_fav and odd >= 1.15 and odd <= 2.20:
                 valid_cands.append({'match': g['match'], 'pick': p, 'odd': odd})
         
         if len(valid_cands) < 3:
-            await q.message.reply_text("❌ Não há jogos seguros suficientes para Bilhete.")
+            await q.message.reply_text("❌ Sem jogos seguros o suficiente para bilhete.")
             return
         random.shuffle(valid_cands)
         msg = "🎫 <b>BILHETE DE OURO</b> 🎫\n\n"
@@ -493,29 +483,38 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
             t_odd *= vc['odd']
             msg += f"✅ <b>{vc['match']}</b>\n🎯 {vc['pick']} (@{vc['odd']:.2f})\n\n"
         msg += f"🔥 <b>ODD FINAL: {t_odd:.2f}</b>"
-        await c.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
+        await c.bot.send_message(q.message.chat_id, msg, parse_mode=ParseMode.HTML)
 
     elif q.data == "nba":
+        msg = await q.message.reply_text("🏀 Buscando NBA...")
         jogos = await fetch_espn_nba()
+        if not jogos:
+            await msg.edit_text("❌ Sem NBA hoje.")
+            return
         txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
         for g in jogos: txt += format_nba_card(g)
-        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML)
+        await msg.delete()
         
     elif q.data == "ufc":
+        msg = await q.message.reply_text("🥊 Buscando UFC...")
         lutas = await fetch_espn_ufc()
+        if not lutas:
+            await msg.edit_text("❌ Sem UFC.")
+            return
         txt = "🥊 <b>CARD UFC</b> 🥊\n\n"
         for fight in lutas: txt += format_ufc_card(fight)
-        await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+        await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML)
+        await msg.delete()
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V328 ALERTS")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V329 STABLE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO V328...")
+    logger.info("🚀 INICIANDO V329...")
     await fetch_espn_soccer()
-    # AQUI ESTÃO OS ALERTAS
-    asyncio.create_task(live_narrator_routine(app)) 
+    asyncio.create_task(live_narrator_routine(app))
     asyncio.create_task(automation_routine(app))
     asyncio.create_task(news_loop(app))
 
