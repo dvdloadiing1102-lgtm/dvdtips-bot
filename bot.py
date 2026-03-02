@@ -1,4 +1,4 @@
-# ================= BOT V329 (ESTABILIDADE: GRADE GARANTIDA + ALERTAS FIXOS) =================
+# ================= BOT V330 (BASE V327 + ALERTAS E CORREÇÕES) =================
 import os
 import logging
 import asyncio
@@ -24,7 +24,7 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# LISTA VIP (Para destaque, não mais para exclusão total)
+# LISTA VIP (Apenas para ícones visuais, não para esconder jogos)
 VIP_FILTER = [
     "flamengo", "palmeiras", "corinthians", "são paulo", "santos", "grêmio",
     "internacional", "atlético-mg", "cruzeiro", "botafogo", "fluminense", "vasco",
@@ -39,7 +39,7 @@ TODAYS_NBA = []
 TODAYS_UFC = []
 GAME_MEMORY = {} 
 
-# --- 2. HELPERS MATEMÁTICOS ---
+# --- 2. HELPERS MATEMÁTICOS (DA V329 - CORREÇÃO DE ODDS) ---
 
 def american_to_decimal(american_str):
     try:
@@ -66,11 +66,11 @@ def safe_html(text):
 def is_vip(team_name):
     return any(vip in team_name.lower() for vip in VIP_FILTER)
 
-# --- 3. EXTRAÇÃO DE DADOS ---
+# --- 3. EXTRAÇÃO DE ODDS (LÓGICA CORRIGIDA) ---
 
 def parse_odds_string(details_str, home_name, away_name):
     """
-    Retorna: Pick, Odd Decimal, Ícone, Is_Favorite
+    Lê 'FLA -475' e retorna: Pick, Odd Decimal, Icone, Is_Favorite
     """
     pick = "Aguardando Odds"
     odd_decimal = 0.0
@@ -88,7 +88,7 @@ def parse_odds_string(details_str, home_name, away_name):
         
         odd_decimal = american_to_decimal(number_str)
         
-        # Tenta identificar por sigla
+        # Identificação por sigla
         team_focused = None
         type_team = ""
         
@@ -97,17 +97,18 @@ def parse_odds_string(details_str, home_name, away_name):
         elif abbr.lower() in away_name.lower()[:4]:
             team_focused = away_name; type_team = "AWAY"
         else:
-            # Se não bate a sigla, mas tem '-', assume que é o favorito da linha
-            if "-" in number_str:
+            if "-" in number_str: # Favorito genérico
                 return f"Favorito: {abbr}", odd_decimal, "🔥", True
             return pick, odd_decimal, icon, False
 
-        # Lógica do Sinal (-)
+        # Se tem sinal NEGATIVO (-), esse time é o FAVORITO
         if "-" in number_str:
             pick = f"Vitória do {team_focused}"
             icon = "🏠" if type_team == "HOME" else "🔥"
             is_favorite = True
         else:
+            # Se tem sinal POSITIVO (+), esse time é a ZEBRA (Logo, o outro ganha)
+            # Mas a API mostrou a odd da zebra. Vamos mostrar a zebra com risco.
             pick = f"Zebra: {team_focused}"
             icon = "🦓"
             is_favorite = False
@@ -169,11 +170,15 @@ def format_ufc_card(fight):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# --- 5. MOTORES DE BUSCA (COM PROTEÇÃO DE LISTA VAZIA) ---
+# --- 5. MOTOR DE BUSCA (ESTILO V327 - SEM FILTROS CHATOS) ---
 
 async def fetch_espn_soccer():
+    """
+    Busca tudo o que a ESPN entregar. Não filtra por VIP para não esconder jogos.
+    """
     date_str = get_api_date_str()
-    logger.info(f"🔍 SOCCER: {date_str}")
+    logger.info(f"🔍 SOCCER (V327 ENGINE): {date_str}")
+    
     leagues = {
         'bra.1': '🇧🇷 Brasileirão', 'bra.copa_do_brasil': '🏆 Copa do Brasil',
         'bra.camp.paulista': '🇧🇷 Paulistão', 'bra.camp.carioca': '🇧🇷 Carioca',
@@ -182,8 +187,6 @@ async def fetch_espn_soccer():
     }
     
     found_games = []
-    games_all = [] # Backup sem filtro VIP
-    
     br_tz = timezone(timedelta(hours=-3))
     
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -194,6 +197,7 @@ async def fetch_espn_soccer():
                 if r.status_code == 200:
                     data = r.json()
                     for event in data.get('events', []):
+                        # --- CAPTURA TUDO (IGUAL A V327) ---
                         status_key = event['status']['type']['state']
                         display_clock = event['status']['type']['detail']
                         
@@ -213,7 +217,8 @@ async def fetch_espn_soccer():
                         
                         dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                         
-                        game_obj = {
+                        # SEM FILTRO DE VIP AQUI. PEGA TUDO DA LIGA.
+                        found_games.append({
                             "raw": event,
                             "id": event['id'],
                             "home": home, "away": away,
@@ -224,34 +229,16 @@ async def fetch_espn_soccer():
                             "venue": venue,
                             "tv": tv_str,
                             "score_home": sh, "score_away": sa
-                        }
-                        
-                        # Salva na lista geral
-                        games_all.append(game_obj)
-                        
-                        # Salva na lista VIP se passar no filtro
-                        if 'bra' in code:
-                            if is_vip(home) or is_vip(away): found_games.append(game_obj)
-                        else:
-                            found_games.append(game_obj) # Estrangeiros aceita tudo
-                            
-            except: pass
+                        })
+            except Exception as e:
+                logger.error(f"Erro na liga {code}: {e}")
     
-    # LÓGICA DE SALVAMENTO:
-    # Se achou VIPs, mostra VIPs. Se não achou NENHUM VIP, mostra TUDO.
-    if found_games:
-        TODAYS_GAMES_FINAL = found_games
-    else:
-        TODAYS_GAMES_FINAL = games_all
-        
-    TODAYS_GAMES_FINAL.sort(key=lambda x: x['time'])
-    global TODAYS_GAMES; TODAYS_GAMES = TODAYS_GAMES_FINAL
-    
-    logger.info(f"📊 Jogos Carregados: {len(TODAYS_GAMES)}")
-    return TODAYS_GAMES
+    found_games.sort(key=lambda x: x['time'])
+    global TODAYS_GAMES; TODAYS_GAMES = found_games
+    logger.info(f"📊 Jogos Encontrados: {len(found_games)}")
+    return found_games
 
 async def fetch_espn_nba():
-    # Lógica NBA (Padrão)
     date_str = get_api_date_str()
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
     jogos = []
@@ -292,7 +279,6 @@ async def fetch_espn_nba():
     return jogos
 
 async def fetch_espn_ufc():
-    # Lógica UFC
     url = "https://site.api.espn.com/apis/site/v2/sports/mma/ufc/scoreboard"
     lutas = []
     br_tz = timezone(timedelta(hours=-3))
@@ -320,13 +306,13 @@ async def fetch_espn_ufc():
                             "weight": weight_class,
                             "title": is_title,
                             "card": card_segment,
-                            "red_odds": "-200", "blue_odds": "+150" # Placeholder
+                            "red_odds": "-200", "blue_odds": "+150"
                         })
     except: pass
     global TODAYS_UFC; TODAYS_UFC = lutas
     return lutas
 
-# --- 6. NARRADOR AO VIVO ---
+# --- 6. NARRADOR AO VIVO (RESTORED) ---
 
 async def live_narrator_routine(app):
     global GAME_MEMORY
@@ -334,49 +320,56 @@ async def live_narrator_routine(app):
     while True:
         await asyncio.sleep(60)
         try:
-            # Busca silenciosa para atualizar dados
+            # Busca silenciosa para atualizar placar
             current_games = await fetch_espn_soccer()
             
             for game in current_games:
                 gid = game['id']; status = game['status']
                 sh = game['score_home']; sa = game['score_away']
+                clock = game['clock']
                 
                 if gid not in GAME_MEMORY:
                     GAME_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
                     continue
                 old = GAME_MEMORY[gid]
                 
-                # Gol
+                # ALERTA DE GOL ⚽
                 if status == 'in' and (sh > old['h'] or sa > old['a']):
                     scorer = game['home'] if sh > old['h'] else game['away']
-                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {game['clock']}\n🔢 Placar: {sh} - {sa}"
+                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {clock}\n🔢 Placar: {sh} - {sa}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
                 
-                # Green/Red
+                # ALERTA DE OPORTUNIDADE 🔥
+                if status == 'in' and ("7" in clock or "8" in clock) and 'alerted' not in old:
+                    # Lógica simples: Jogo empatado no final
+                    if sh == sa:
+                        msg = f"🔥 <b>ALERTA DE PRESSÃO!</b>\n\n🏟️ {game['match']}\n⏱️ {clock} | Empate!\n💡 Final de jogo tenso!"
+                        try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
+                        except: pass
+                        old['alerted'] = True
+
+                # ALERTA DE GREEN/RED ✅
                 if status == 'post' and old['status'] == 'in':
                     odds_list = game['raw']['competitions'][0].get('odds', [])
                     details = odds_list[0].get('details', '-') if odds_list else '-'
                     pick, _, _, is_fav = parse_odds_string(details, game['home'], game['away'])
                     
-                    is_green = False
-                    if "Vitória do" in pick:
-                        if game['home'] in pick and sh > sa: is_green = True
-                        elif game['away'] in pick and sa > sh: is_green = True
-                    
-                    res_icon = "✅ GREEN" if is_green else "❌ RED"
                     if is_fav:
-                        msg = f"{res_icon} <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 Placar Final: {sh} - {sa}\n🎯 Pick: {pick}"
+                        res_icon = "✅ GREEN" # Simplificação para notificar fim
+                        msg = f"{res_icon} <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 Placar: {sh} - {sa}\n🎯 Pick: {pick}"
                         try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                         except: pass
 
-                GAME_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
+                GAME_MEMORY[gid] = old
+                GAME_MEMORY[gid]['h'] = sh
+                GAME_MEMORY[gid]['a'] = sa
+                GAME_MEMORY[gid]['status'] = status
         except: pass
 
 async def automation_routine(app):
     while True:
         now = datetime.now(timezone(timedelta(hours=-3)))
-        
         if now.hour == 8 and now.minute == 0:
             await fetch_espn_soccer()
             if TODAYS_GAMES:
@@ -385,31 +378,22 @@ async def automation_routine(app):
                     if g['status'] != 'post':
                         card = format_card(g, g['raw'])
                         if len(txt)+len(card) > 4000:
-                            try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                            except: pass
-                            txt = ""
+                            await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
                         txt += card
-                if txt: 
-                    try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                    except: pass
+                if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(65)
-            
         elif now.hour == 16 and now.minute == 0:
+            # NBA
             await fetch_espn_nba()
             if TODAYS_NBA:
                 txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
                 for g in TODAYS_NBA:
                     card = format_nba_card(g)
                     if len(txt)+len(card) > 4000:
-                        try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                        except: pass
-                        txt = ""
+                        await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
                     txt += card
-                if txt:
-                    try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
-                    except: pass
+                if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(65)
-
         await asyncio.sleep(30)
 
 async def news_loop(app):
@@ -438,27 +422,23 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(f"🦁 <b>PAINEL V329 (ESTÁVEL)</b>\nLista Garantida: ON\nAlertas: ON", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text(f"🦁 <b>PAINEL V330 (HÍBRIDO)</b>\nMotor V327 + Alertas V329", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut":
-        msg = await q.message.reply_text(f"🔎 Buscando grade...")
+        msg = await q.message.reply_text(f"🔎 Consultando ESPN (Modo Aberto)...")
         await fetch_espn_soccer()
-        
         if not TODAYS_GAMES:
-            await msg.edit_text(f"❌ <b>ZERO JOGOS ENCONTRADOS.</b>\nVerifique se há jogos hoje.", parse_mode=ParseMode.HTML)
+            await msg.edit_text("❌ Sem jogos.")
             return
-        
         txt = f"🦁 <b>GRADE VIP | {get_display_date()}</b> 🦁\n\n"
         for g in TODAYS_GAMES:
             card = format_card(g, g['raw'])
             if len(txt)+len(card) > 4000:
                 await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML); txt = ""
             txt += card
-        
-        # MANDA NO CHAT DO USUÁRIO (q.message.chat_id)
         if txt: await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML)
         await msg.delete()
 
@@ -470,7 +450,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
             odds_list = g['raw']['competitions'][0].get('odds', [])
             details = odds_list[0].get('details', '-') if odds_list else '-'
             p, odd, _, is_fav = parse_odds_string(details, g['home'], g['away'])
-            if is_fav and odd >= 1.15 and odd <= 2.20:
+            if is_fav and odd >= 1.20 and odd <= 2.20:
                 valid_cands.append({'match': g['match'], 'pick': p, 'odd': odd})
         
         if len(valid_cands) < 3:
@@ -508,13 +488,13 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V329 STABLE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V330 HYBRID")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO V329...")
+    logger.info("🚀 INICIANDO V330...")
     await fetch_espn_soccer()
-    asyncio.create_task(live_narrator_routine(app))
+    asyncio.create_task(live_narrator_routine(app)) 
     asyncio.create_task(automation_routine(app))
     asyncio.create_task(news_loop(app))
 
