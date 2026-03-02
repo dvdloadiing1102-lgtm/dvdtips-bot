@@ -1,4 +1,4 @@
-# ================= BOT V306 (MODO SIMULADOR: FORÇA VISUALIZAÇÃO DA GRADE) =================
+# ================= BOT V307 (VERDADE ABSOLUTA: SEM DADOS FALSOS) =================
 import os
 import logging
 import asyncio
@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from telegram.error import Conflict, NetworkError
 
 # --- 1. CONFIGURAÇÃO ---
 load_dotenv()
@@ -28,34 +27,28 @@ VIP_TEAMS = [
     "Flamengo", "Palmeiras", "Corinthians", "São Paulo", "Santos", "Grêmio", 
     "Internacional", "Atlético-MG", "Cruzeiro", "Botafogo", "Fluminense", "Vasco",
     "Bahia", "Fortaleza", "Athletico-PR", "Sport", "Ceará", "Vitória", "Remo", "Paysandu",
-    "Arsenal", "Liverpool", "Man City", "Real Madrid", "Barcelona", "Bayern", "Inter", "Milan", "Juventus", "PSG", "Chelsea",
-    "Dortmund", "Benfica", "Porto", "Napoli", "Roma", "Lazio", "Atletico Madrid"
+    "Arsenal", "Liverpool", "Man City", "Real Madrid", "Barcelona", "Bayern", "Inter", "Milan", "Juventus", "PSG", "Chelsea"
 ]
 
 TODAYS_GAMES = []
 TODAYS_NBA = []
 GAME_MEMORY = {}
 
-# --- 2. HELPERS ---
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="ERRO:", exc_info=context.error)
+# --- 2. FUNÇÕES DE DATA (SEM TRUQUES) ---
 
-def get_magic_api_date():
-    """DATA DE 2025 (DATA REAL ONDE OS JOGOS EXISTEM)"""
+def get_real_server_date():
+    """Retorna a data EXATA do servidor (2026) sem voltar no tempo"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    if agora.hour < 5: agora = agora - timedelta(days=1)
-    try: data = agora.replace(year=2025)
-    except: data = agora.replace(year=2025, day=28)
-    return data
+    return agora
 
 def get_visual_date_str():
-    """DATA DE 2026 (VISUAL)"""
-    br_tz = timezone(timedelta(hours=-3))
-    agora = datetime.now(br_tz)
-    return agora.strftime("%d/%m/%Y")
+    return get_real_server_date().strftime("%d/%m/%Y")
+
+# --- 3. ANÁLISE DE MERCADO ---
 
 def get_market_analysis(home, away, league_name):
+    # Lógica mantida para quando houver jogos reais
     h_weight = 50; a_weight = 35
     if any(t in home for t in VIP_TEAMS): h_weight += 20
     if any(t in away for t in VIP_TEAMS): a_weight += 15
@@ -104,11 +97,13 @@ def format_card(game):
 def format_nba_card(game):
     return f"🏀 <b>NBA | {game['time']}</b>\n⚔️ <b>{game['match']}</b>\n✅ {game['pick']}\n📊 {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
 
-# --- 3. MOTOR DE BUSCA (ESPN UNIFICADA) ---
+# --- 4. MOTORES DE BUSCA (DATA REAL) ---
+
 async def fetch_espn_data():
-    data_api = get_magic_api_date()
-    data_str = data_api.strftime('%Y%m%d')
-    logger.info(f"🔍 BUSCANDO NA DATA REAL (2025): {data_str}")
+    # DATA REAL DO SERVIDOR (2026)
+    data_real = get_real_server_date()
+    data_str = data_real.strftime('%Y%m%d')
+    logger.info(f"🔍 BUSCANDO DADOS REAIS PARA: {data_str}")
 
     leagues = {
         'bra.1': '🇧🇷 Brasileirão', 'bra.copa_do_brasil': '🏆 Copa do Brasil',
@@ -125,41 +120,44 @@ async def fetch_espn_data():
             try:
                 url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={data_str}"
                 r = await client.get(url)
-                if r.status_code != 200: continue
-                data = r.json()
                 
-                for event in data.get('events', []):
-                    # --- CORREÇÃO DO BUG VISUAL ---
-                    # Como pegamos dados de 2025, o status real é 'post' (finalizado).
-                    # Mas para o SIMULADOR de 2026, forçamos 'agendado' para aparecer na lista.
-                    status = 'agendado' 
-                    
-                    comp = event['competitions'][0]['competitors']
-                    dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
-                    home = comp[0]['team']['name']; away = comp[1]['team']['name']
+                # Se der 200 OK, processa. Se der erro (pq não tem 2026), ignora.
+                if r.status_code == 200:
+                    data = r.json()
+                    for event in data.get('events', []):
+                        status_raw = event['status']['type']['state']
+                        if status_raw == 'pre': status = 'agendado'
+                        elif status_raw == 'in': status = 'in'
+                        else: status = 'post'
+                        
+                        comp = event['competitions'][0]['competitors']
+                        dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
+                        home = comp[0]['team']['name']; away = comp[1]['team']['name']
 
-                    # Filtro Estadual (Só times VIP)
-                    if 'bra' in code:
-                        if not (any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)):
-                            continue 
-                    
-                    jogos.append({
-                        "id": event['id'],
-                        "match": f"{home} x {away}", "home": home, "away": away,
-                        "time": dt.strftime("%H:%M"), "league": name,
-                        "status": status, # Agora é sempre agendado visualmente
-                        "score_home": int(comp[0]['score']), "score_away": int(comp[1]['score'])
-                    })
-            except: pass
+                        if 'bra' in code:
+                            if not (any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)):
+                                continue 
+                        
+                        jogos.append({
+                            "id": event['id'],
+                            "match": f"{home} x {away}", "home": home, "away": away,
+                            "time": dt.strftime("%H:%M"), "league": name,
+                            "status": status,
+                            "score_home": int(comp[0]['score']), "score_away": int(comp[1]['score'])
+                        })
+                else:
+                    logger.warning(f"⚠️ API ESPN ({code}) retornou {r.status_code} para {data_str}")
+            except Exception as e:
+                logger.error(f"❌ Erro na liga {code}: {e}")
     
     jogos.sort(key=lambda x: x['time'])
     global TODAYS_GAMES; TODAYS_GAMES = jogos
-    logger.info(f"📊 {len(jogos)} jogos carregados para exibição.")
+    logger.info(f"📊 Jogos REAIS encontrados: {len(jogos)}")
     return jogos
 
 async def fetch_nba_professional():
-    data_api = get_magic_api_date()
-    date_str = data_api.strftime("%Y%m%d")
+    data_real = get_real_server_date()
+    date_str = data_real.strftime("%Y%m%d")
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -183,7 +181,10 @@ async def fetch_nba_professional():
     global TODAYS_NBA; TODAYS_NBA = jogos
     return jogos
 
-# --- 4. ROTINAS E MENU ---
+# --- 5. ROTINAS E COMANDOS ---
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(msg="ERRO:", exc_info=context.error)
 
 async def automation_routine(app):
     while True:
@@ -193,10 +194,11 @@ async def automation_routine(app):
             if TODAYS_GAMES:
                 txt = f"🦁 <b>BOM DIA! GRADE VIP | {get_visual_date_str()}</b> 🦁\n\n"
                 for g in TODAYS_GAMES:
-                    card = format_card(g) # Sem filtro de status, mostra tudo
-                    if len(txt)+len(card) > 4000:
-                        await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
-                    txt += card
+                    if g['status'] != 'post':
+                        card = format_card(g)
+                        if len(txt)+len(card) > 4000:
+                            await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+                        txt += card
                 if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
             await asyncio.sleep(65)
         await asyncio.sleep(30)
@@ -221,33 +223,36 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V306 (SIMULADOR)</b>\nModo 2026 Ativo.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V307 (REALIDADE)</b>\nBuscando apenas dados confirmados de 2026.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
+    
     if q.data == "fut":
-        msg = await q.message.reply_text("🔎 Carregando grade simulada...")
+        msg = await q.message.reply_text("🔎 Buscando dados reais para hoje...")
         await fetch_espn_data()
+        
         if not TODAYS_GAMES:
-            await msg.edit_text("❌ Nenhum jogo encontrado na base de dados.")
+            # MENSAGEM HONESTA
+            await msg.edit_text(f"❌ <b>Sem dados confirmados.</b>\n\nNão encontrei jogos oficiais cadastrados para {get_visual_date_str()} nas APIs públicas.\n\nIsso pode ocorrer se a tabela de 2026 ainda não foi liberada pelos organizadores.", parse_mode=ParseMode.HTML)
             return
         
         txt = f"🦁 <b>GRADE VIP | {get_visual_date_str()}</b> 🦁\n\n"
         for g in TODAYS_GAMES:
-            # REMOVIDO O FILTRO 'if status != post' PARA FORÇAR EXIBIÇÃO
-            card = format_card(g)
-            if len(txt)+len(card) > 4000:
-                await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
-            txt += card
+            if g['status'] != 'post':
+                card = format_card(g)
+                if len(txt)+len(card) > 4000:
+                    await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+                txt += card
         if txt: await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
         await msg.delete()
 
     elif q.data == "ticket":
         await fetch_espn_data()
-        if not TODAYS_GAMES:
-            await q.message.reply_text("❌ Sem dados.")
+        cands = [g for g in TODAYS_GAMES if g['status'] != 'post']
+        if not cands:
+            await q.message.reply_text("❌ Sem jogos reais disponíveis para bilhete.")
             return
-        cands = TODAYS_GAMES[:] # Copia lista
         random.shuffle(cands)
         msg = "🎫 <b>BILHETE PRONTO</b> 🎫\n\n"
         total_odd = 1.0
@@ -262,7 +267,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg = await q.message.reply_text("🏀 Buscando NBA...")
         jogos = await fetch_nba_professional()
         if not jogos:
-            await msg.edit_text("❌ Sem jogos da NBA.")
+            await msg.edit_text("❌ Sem jogos da NBA confirmados.")
             return
         txt = f"🏀 <b>NBA | {get_visual_date_str()}</b>\n\n"
         for g in jogos: txt += format_nba_card(g)
@@ -270,11 +275,11 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V306 SIMULATOR")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V307 REALITY CHECK")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO V306...")
+    logger.info("🚀 INICIANDO V307...")
     await fetch_espn_data()
     asyncio.create_task(automation_routine(app))
     asyncio.create_task(news_loop(app))
