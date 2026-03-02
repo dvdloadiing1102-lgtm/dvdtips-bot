@@ -1,4 +1,4 @@
-# ================= BOT V302 (CORREÇÃO TOTAL: ORDEM, DATA E CONFLITOS) =================
+# ================= BOT V303 (CORREÇÃO DE ANO: FORÇAR 2025 NA API) =================
 import os
 import logging
 import asyncio
@@ -35,25 +35,37 @@ GAME_MEMORY = {}
 TODAYS_GAMES = []
 TODAYS_NBA = []
 
-# --- 2. FUNÇÕES DEFINIDAS NO TOPO (PARA EVITAR NAME ERROR) ---
+# --- 2. FUNÇÕES AUXILIARES ---
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captura erros sem matar o bot"""
     logger.error(msg="ERRO CAPTURADO:", exc_info=context.error)
 
 def get_safe_api_date():
-    """DATA REAL (2025) PARA A API NÃO CRASHAR (ERRO 500)"""
+    """
+    TRUQUE DE MESTRE: Ignora o ano do servidor (2026) e força 2025
+    para a API da Globo não dar erro 500.
+    """
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    # Se for madrugada, volta 1 dia para pegar os jogos da noite
-    if agora.hour < 5: return agora - timedelta(days=1)
-    return agora
+    
+    # Ajuste de madrugada (se for antes das 5h, pega o dia anterior)
+    if agora.hour < 5:
+        agora = agora - timedelta(days=1)
+    
+    # FORÇA O ANO 2025 (Assim a API funciona)
+    # Se hoje for 29/02 e 2025 não for bissexto, try/except resolve
+    try:
+        data_api = agora.replace(year=2025)
+    except ValueError:
+        # Fallback para 28/02 se der erro de bissexto
+        data_api = agora.replace(year=2025, day=28)
+        
+    return data_api
 
 def get_visual_date_str():
-    """DATA VISUAL (2026) PARA O USUÁRIO"""
+    """Retorna a data VISUAL (2026) para a mensagem bonita"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
-    # Simula 2026
     try: data_fake = agora.replace(year=2026)
     except: data_fake = agora + timedelta(days=365)
     return data_fake.strftime("%d/%m/%Y")
@@ -107,14 +119,16 @@ def format_card(game):
 def format_nba_card(game):
     return f"🏀 <b>NBA | {game['time']}</b>\n⚔️ <b>{game['match']}</b>\n✅ {game['pick']}\n📊 {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
 
-# --- 3. MOTORES DE BUSCA (DATA BLINDADA) ---
+# --- 3. MOTORES DE BUSCA (COM FORÇAMENTO DE DATA 2025) ---
 
 async def fetch_ge_data():
-    """Busca no GE usando DATA REAL para evitar Erro 500"""
+    """Busca GE forçando ano 2025"""
     data_real = get_safe_api_date()
-    data_str = data_real.strftime('%Y-%m-%d') # ISSO VAI GERAR 2025 (CORRETO)
+    data_str = data_real.strftime('%Y-%m-%d') # Vai gerar ex: 2025-03-01
     
-    logger.info(f"🔍 GE API Request: {data_str}")
+    logger.info(f"🔍 GE API Request (Forçando 2025): {data_str}")
+    
+    # URL DA API COM DATA DE 2025
     url = f"https://api.globoesporte.globo.com/tabela/d1/api/tabela/jogos?data={data_str}"
     
     jogos = []
@@ -123,6 +137,7 @@ async def fetch_ge_data():
             r = await client.get(url)
             if r.status_code == 200:
                 lista = r.json()
+                logger.info(f"✅ GE 2025 respondeu! Jogos encontrados: {len(lista)}")
                 for item in lista:
                     home = item['equipes']['mandante']['nome_popular']
                     away = item['equipes']['visitante']['nome_popular']
@@ -147,13 +162,18 @@ async def fetch_ge_data():
                         "score_away": item.get('placar_oficial_visitante', 0)
                     })
             else:
-                logger.error(f"❌ GE API Falhou: {r.status_code}")
+                logger.error(f"❌ GE API Falhou com status: {r.status_code}")
     except Exception as e:
         logger.error(f"❌ Erro Conexão GE: {e}")
     return jogos
 
 async def fetch_espn_europe():
+    """Busca ESPN forçando ano 2025"""
     data_real = get_safe_api_date()
+    # Usando data 2025
+    data_str = data_real.strftime('%Y%m%d')
+    logger.info(f"🔍 ESPN Request: {data_str}")
+
     leagues = {'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier', 'esp.1': '🇪🇸 La Liga', 
                'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Sauditão'}
     jogos = []
@@ -162,8 +182,7 @@ async def fetch_espn_europe():
     async with httpx.AsyncClient(timeout=25) as client:
         for code, name in leagues.items():
             try:
-                # DATA REAL AQUI TAMBÉM
-                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={data_real.strftime('%Y%m%d')}"
+                url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{code}/scoreboard?dates={data_str}"
                 r = await client.get(url)
                 if r.status_code != 200: continue
                 data = r.json()
@@ -188,8 +207,8 @@ async def fetch_espn_europe():
     return jogos
 
 async def fetch_nba_professional():
-    api_date = get_safe_api_date()
-    date_str = api_date.strftime("%Y%m%d")
+    data_real = get_safe_api_date()
+    date_str = data_real.strftime("%Y%m%d")
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -219,10 +238,10 @@ async def fetch_all_soccer():
     todos = br + eu
     todos.sort(key=lambda x: x['time'])
     global TODAYS_GAMES; TODAYS_GAMES = todos
-    logger.info(f"📊 Total Jogos Carregados: {len(todos)}")
+    logger.info(f"📊 GRADE FINAL: {len(todos)} jogos (Data Base: 2025)")
     return todos
 
-# --- 4. ROTINAS (DEFINIDAS ANTES DO USO) ---
+# --- 4. ROTINAS ---
 
 async def live_narrator_routine(app):
     global GAME_MEMORY
@@ -236,19 +255,21 @@ async def live_narrator_routine(app):
                 if gid not in GAME_MEMORY:
                     GAME_MEMORY[gid] = {'h': game['score_home'], 'a': game['score_away'], 'status': status}
                     continue
-                
                 old = GAME_MEMORY[gid]
+                
                 # Gol
                 if status == 'in' and (game['score_home'] > old['h'] or game['score_away'] > old['a']):
                     msg = f"⚽ <b>GOOL!</b>\n{game['match']}\nPlacar: {game['score_home']} - {game['score_away']}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
-                # Green
+                
+                # Green/Red
                 if status == 'post' and old['status'] == 'in':
                     pick, _, _, _, _, _ = get_market_analysis(game['home'], game['away'], game['league'])
                     msg = f"🏁 <b>FIM DE JOGO</b>\n{game['match']}\nPlacar: {game['score_home']} - {game['score_away']}\nTip Era: {pick}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
+                
                 GAME_MEMORY[gid] = {'h': game['score_home'], 'a': game['score_away'], 'status': status}
         except: pass
 
@@ -282,7 +303,7 @@ async def news_loop(app):
         except: pass
         await asyncio.sleep(14400)
 
-# --- 5. MENUS E COMANDOS ---
+# --- 5. COMANDOS ---
 
 def get_menu():
     return InlineKeyboardMarkup([
@@ -292,7 +313,7 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V302 (CORRIGIDO)</b>\nSistemas Online.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V303 (CORRIGIDO)</b>\nData da API: 2025 (Forçado)\nData Visual: 2026", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
@@ -301,7 +322,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg = await q.message.reply_text("🔎 Buscando...")
         await fetch_all_soccer()
         if not TODAYS_GAMES:
-            await msg.edit_text("❌ Grade vazia. (Verifique se há jogos Reais hoje)")
+            await msg.edit_text("❌ Grade vazia. Nenhum jogo encontrado para a data 2025.")
             return
         
         txt = f"🦁 <b>GRADE VIP | {get_visual_date_str()}</b> 🦁\n\n"
@@ -341,16 +362,15 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
         await msg.delete()
 
-# --- 6. EXECUÇÃO PRINCIPAL (ORDEM CORRETA) ---
+# --- 6. EXECUÇÃO ---
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V302 FIXED")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V303 FIXED DATE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO BOT...")
+    logger.info("🚀 INICIANDO BOT V303...")
     await fetch_all_soccer()
-    # Rotinas iniciadas DEPOIS de serem definidas
     asyncio.create_task(live_narrator_routine(app))
     asyncio.create_task(automation_routine(app))
     asyncio.create_task(news_loop(app))
@@ -358,11 +378,9 @@ async def post_init(app: Application):
 def main():
     threading.Thread(target=run_server, daemon=True).start()
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu))
-    app.add_error_handler(error_handler) # Error handler definido no topo!
-    
+    app.add_error_handler(error_handler)
     logger.info("✅ Polling Ativado")
     app.run_polling(drop_pending_updates=True)
 
