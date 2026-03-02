@@ -1,4 +1,4 @@
-# ================= BOT V304 (FIX DEFINITIVO: MÁQUINA DO TEMPO AUTOMÁTICA) =================
+# ================= BOT V305 (MIGRAÇÃO TOTAL: BRASIL VIA ESPN - ADEUS GE) =================
 import os
 import logging
 import asyncio
@@ -21,7 +21,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 10000))
 
-# Logs detalhados para vermos a "mágica" acontecendo
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -36,37 +35,23 @@ GAME_MEMORY = {}
 TODAYS_GAMES = []
 TODAYS_NBA = []
 
-# --- 2. FUNÇÕES DE SUPORTE ---
+# --- 2. FUNÇÕES AUXILIARES ---
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="ERRO NO BOT:", exc_info=context.error)
+    logger.error(msg="ERRO CAPTURADO:", exc_info=context.error)
 
 def get_magic_api_date():
-    """
-    A MÁQUINA DO TEMPO:
-    Pega a data do servidor (ex: 2026) e subtrai 1 ano (2025)
-    para a API da Globo funcionar sem dar Erro 500.
-    """
+    """DATA MÁGICA: Força 2025 para a API responder"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
+    if agora.hour < 5: agora = agora - timedelta(days=1)
     
-    # Se for madrugada, volta um dia
-    if agora.hour < 5:
-        agora = agora - timedelta(days=1)
-    
-    # TRUQUE: Subtrai 1 ano da data atual do servidor
-    # Se o servidor diz 2026, a gente pede 2025.
-    try:
-        ano_magico = agora.year - 1
-        data_api = agora.replace(year=ano_magico)
-    except ValueError:
-        # Caso seja 29 de fevereiro e o ano anterior não seja bissexto
-        data_api = agora.replace(year=agora.year - 1, day=28)
-        
+    try: data_api = agora.replace(year=2025)
+    except: data_api = agora.replace(year=2025, day=28)
     return data_api
 
 def get_visual_date_str():
-    """Data que aparece para o usuário (Mantém a sua simulação de 2026)"""
+    """DATA VISUAL (2026)"""
     br_tz = timezone(timedelta(hours=-3))
     agora = datetime.now(br_tz)
     return agora.strftime("%d/%m/%Y")
@@ -120,62 +105,34 @@ def format_card(game):
 def format_nba_card(game):
     return f"🏀 <b>NBA | {game['time']}</b>\n⚔️ <b>{game['match']}</b>\n✅ {game['pick']}\n📊 {game['odds']}\n━━━━━━━━━━━━━━━━━━━━\n"
 
-# --- 3. MOTORES DE BUSCA (DATA AJUSTADA) ---
+# --- 3. MOTORES DE BUSCA (AGORA SÓ ESPN - A QUE FUNCIONA) ---
 
-async def fetch_ge_data():
-    """Motor Brasil com Data Mágica"""
-    data_api = get_magic_api_date() # Pega 2025 se estivermos em 2026
-    data_str = data_api.strftime('%Y-%m-%d')
-    
-    # URL usa a data "do passado" (2025) para funcionar
-    url = f"https://api.globoesporte.globo.com/tabela/d1/api/tabela/jogos?data={data_str}"
-    
-    logger.info(f"🔍 GE REQUEST: Pedindo dados de {data_str} (Para evitar erro 500)")
-    
-    jogos = []
-    try:
-        async with httpx.AsyncClient(timeout=25) as client:
-            r = await client.get(url)
-            if r.status_code == 200:
-                lista = r.json()
-                logger.info(f"✅ SUCESSO GE! {len(lista)} jogos encontrados.")
-                for item in lista:
-                    home = item['equipes']['mandante']['nome_popular']
-                    away = item['equipes']['visitante']['nome_popular']
-                    camp = item.get('campeonato', {}).get('nome', '')
-                    
-                    status = "agendado"
-                    if item.get('realizado', False): status = "post"
-                    elif item.get('placar_oficial_mandante') is not None: status = "in"
-                    
-                    is_serie_a = "Série A" in camp
-                    has_big = any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)
-                    
-                    if not (is_serie_a or has_big): continue
-                    if "Sub-" in camp or "Feminino" in camp: continue
-
-                    jogos.append({
-                        "id": f"ge_{item['id']}",
-                        "match": f"{home} x {away}", "home": home, "away": away,
-                        "time": item.get('hora', '00:00'), "league": f"🇧🇷 {camp}",
-                        "status": status,
-                        "score_home": item.get('placar_oficial_mandante', 0),
-                        "score_away": item.get('placar_oficial_visitante', 0)
-                    })
-            else:
-                logger.error(f"❌ GE API REJEITOU: {r.status_code}")
-    except Exception as e:
-        logger.error(f"❌ Erro Conexão GE: {e}")
-    return jogos
-
-async def fetch_espn_europe():
-    """Motor Europa com Data Mágica"""
+async def fetch_espn_data():
+    """
+    MOTOR UNIFICADO: Busca Brasil e Europa na ESPN (Única API Viva)
+    """
     data_api = get_magic_api_date()
     data_str = data_api.strftime('%Y%m%d')
-    logger.info(f"🔍 ESPN REQUEST: {data_str}")
+    logger.info(f"🔍 ESPN FULL SCAN: {data_str}")
 
-    leagues = {'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier', 'esp.1': '🇪🇸 La Liga', 
-               'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'ksa.1': '🇸🇦 Sauditão'}
+    # Ligas do Brasil + Europa
+    leagues = {
+        # Brasil (Substituindo o GE)
+        'bra.1': '🇧🇷 Brasileirão',
+        'bra.copa_do_brasil': '🏆 Copa do Brasil',
+        'bra.camp.paulista': '🇧🇷 Paulistão',
+        'bra.camp.carioca': '🇧🇷 Carioca',
+        'bra.camp.mineiro': '🇧🇷 Mineiro',
+        'bra.camp.gaucho': '🇧🇷 Gaúcho',
+        # Europa
+        'uefa.champions': '🇪🇺 UCL', 
+        'eng.1': '🇬🇧 Premier', 
+        'esp.1': '🇪🇸 La Liga', 
+        'ita.1': '🇮🇹 Serie A', 
+        'ger.1': '🇩🇪 Bundesliga', 
+        'ksa.1': '🇸🇦 Sauditão'
+    }
+    
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
     
@@ -186,6 +143,7 @@ async def fetch_espn_europe():
                 r = await client.get(url)
                 if r.status_code != 200: continue
                 data = r.json()
+                
                 for event in data.get('events', []):
                     status_raw = event['status']['type']['state']
                     if status_raw == 'pre': status = 'agendado'
@@ -195,15 +153,26 @@ async def fetch_espn_europe():
                     comp = event['competitions'][0]['competitors']
                     dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     
+                    home = comp[0]['team']['name']
+                    away = comp[1]['team']['name']
+
+                    # Filtro Simples: Se for Estadual/Brasil, checa se é time conhecido
+                    if 'bra' in code:
+                        if not (any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)):
+                            continue # Pula times muito pequenos do estadual
+                    
                     jogos.append({
                         "id": event['id'],
-                        "match": f"{comp[0]['team']['name']} x {comp[1]['team']['name']}",
-                        "home": comp[0]['team']['name'], "away": comp[1]['team']['name'],
+                        "match": f"{home} x {away}",
+                        "home": home, "away": away,
                         "time": dt.strftime("%H:%M"), "league": name,
                         "status": status,
                         "score_home": int(comp[0]['score']), "score_away": int(comp[1]['score'])
                     })
             except: pass
+    
+    # Ordena por horário
+    jogos.sort(key=lambda x: x['time'])
     return jogos
 
 async def fetch_nba_professional():
@@ -233,15 +202,13 @@ async def fetch_nba_professional():
     return jogos
 
 async def fetch_all_soccer():
-    br = await fetch_ge_data()
-    eu = await fetch_espn_europe()
-    todos = br + eu
-    todos.sort(key=lambda x: x['time'])
+    # AGORA CHAMA SÓ A ESPN UNIFICADA
+    todos = await fetch_espn_data()
     global TODAYS_GAMES; TODAYS_GAMES = todos
-    logger.info(f"📊 GRADE CARREGADA: {len(todos)} jogos.")
+    logger.info(f"📊 GRADE CARREGADA (ESPN): {len(todos)} jogos.")
     return todos
 
-# --- 4. ROTINAS E COMANDOS ---
+# --- 4. ROTINAS ---
 
 async def live_narrator_routine(app):
     global GAME_MEMORY
@@ -306,12 +273,12 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V304 (MÁQUINA DO TEMPO)</b>\nErro 500 Resolvido.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text("🦁 <b>PAINEL V305 (ESPN TOTAL)</b>\nMigração Completa.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     if q.data == "fut":
-        msg = await q.message.reply_text("🔎 Buscando...")
+        msg = await q.message.reply_text("🔎 Buscando na ESPN...")
         await fetch_all_soccer()
         if not TODAYS_GAMES:
             await msg.edit_text("❌ Grade vazia.")
@@ -352,7 +319,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V304 TIME MACHINE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V305 ESPN ONLY")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
