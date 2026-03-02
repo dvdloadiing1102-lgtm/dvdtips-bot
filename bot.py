@@ -1,12 +1,12 @@
-# ================= BOT V315 (FIX MATEMÁTICO + TV BRASIL) =================
+# ================= BOT V318 (DATA MINING PURO: SEM INVENÇÃO, SÓ DADOS REAIS) =================
 import os
 import logging
 import asyncio
 import threading
 import httpx
 import html
-import random
 import feedparser
+import json
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -36,9 +36,10 @@ TODAYS_GAMES = []
 TODAYS_NBA = []
 GAME_MEMORY = {}
 
-# --- 2. HELPERS ---
+# --- 2. HELPERS DE DATA ---
 
 def get_real_server_date():
+    """Retorna data do servidor (2026) conforme seu ambiente"""
     br_tz = timezone(timedelta(hours=-3))
     return datetime.now(br_tz)
 
@@ -52,81 +53,109 @@ def safe_html(text):
     if not text: return ""
     return html.escape(str(text))
 
-# --- 3. ANÁLISE DE MERCADO (CORRIGIDA) ---
+# --- 3. ANÁLISE DE ODDS REAIS (SEM RNG) ---
 
-def get_market_analysis(game):
-    home = game['home']
-    away = game['away']
-    league_lower = game['league'].lower()
+def extract_real_odds(game_data):
+    """
+    Extrai as odds REAIS enviadas pela API.
+    NÃO GERA NÚMEROS ALEATÓRIOS.
+    """
+    comp = game_data['competitions'][0]
+    odds_list = comp.get('odds', [])
     
-    # Pesos Base
-    h_weight = 50; a_weight = 35
-    if any(t in home for t in VIP_TEAMS): h_weight += 20
-    if any(t in away for t in VIP_TEAMS): a_weight += 15
-    
-    total = h_weight + a_weight
-    ph = (h_weight / total) * 100
-    pa = (a_weight / total) * 100
-    
-    # Fator Aleatório (Variação diária)
-    random.seed(len(home) + len(away) + int(datetime.now().day))
-    ph += random.randint(-5, 5); pa += random.randint(-5, 5)
-    
-    confidence = min(max(ph, pa), 92) # Teto de 92%
-    bars = int(confidence / 10)
-    conf_bar = "█" * bars + "░" * (10 - bars)
-    
-    # LÓGICA DE ESCOLHA DE MERCADO
-    pick = ""; icon = ""; extra = ""
-    odd = 1.90
+    pick = "Aguardando Odds"
+    odd_val = 0.0
+    prob_val = 0
+    icon = "⏳"
+    extra = "-"
 
-    # 1. Favorito Claro (Vitória Seca)
-    if ph >= 65:
-        pick = f"Vitória do {home}"; odd = round(100/ph + 0.15, 2); icon = "🏠"
-        extra = f"Over 1.5 Gols"
-    elif pa >= 63:
-        pick = f"Vitória do {away}"; odd = round(100/pa + 0.15, 2); icon = "🔥"
-        extra = "Empate Anula: Visitante"
+    # Se não tiver odds na API, retorna vazio (Honestidade)
+    if not odds_list:
+        return pick, odd_val, prob_val, icon, extra
+
+    # Pega a primeira linha de odds (geralmente a principal)
+    line = odds_list[0]
+    
+    # 1. Tenta pegar o favorito via Moneyline ou Spread
+    # A API as vezes retorna 'details' como "MIL -0.5" (Favorito Milan)
+    details = line.get('details', '')
+    over_under = line.get('overUnder', 2.5)
+    
+    home_team = comp['competitors'][0]['team']['name']
+    away_team = comp['competitors'][1]['team']['name']
+    
+    # Lógica de Probabilidade Real (se disponível)
+    if 'homeTeamOdds' in line and 'winPercentage' in line['homeTeamOdds']:
+        prob_home = line['homeTeamOdds'].get('winPercentage', 50)
+        prob_away = line['awayTeamOdds'].get('winPercentage', 50)
         
-    # 2. Jogos Equilibrados
-    else:
-        # Europa (Gols/Cantos)
-        if any(x in league_lower for x in ['premier', 'bundesliga', 'champions', 'england']):
-            dice = random.randint(1, 10)
-            if dice > 6:
-                pick = "Over 9.5 Escanteios"; icon = "🚩"; extra = "Over 4.5 Cantos HT"
-            else:
-                pick = "Ambas Marcam: Sim"; icon = "⚽"; extra = "Over 2.5 Gols"
-        
-        # Latam/Espanha/Itália (Under/Cartões)
-        elif any(x in league_lower for x in ['brasil', 'carioca', 'paulista', 'libertadores', 'la liga', 'serie a', 'argentina']):
-            is_derby = any(t in home for t in VIP_TEAMS) and any(t in away for t in VIP_TEAMS)
-            if is_derby:
-                pick = "Over 5.5 Cartões"; icon = "🟨"; extra = "Expulsão: Sim (Risco)"
-            else:
-                pick = "Menos de 2.5 Gols"; icon = "🛡️"; extra = "Empate no 1º Tempo"
-        
+        if prob_home > 60:
+            pick = f"Vitória do {home_team}"
+            icon = "🏠"
+            prob_val = int(prob_home)
+            odd_val = round(100/prob_home, 2) if prob_home > 0 else 0
+        elif prob_away > 60:
+            pick = f"Vitória do {away_team}"
+            icon = "🔥"
+            prob_val = int(prob_away)
+            odd_val = round(100/prob_away, 2) if prob_away > 0 else 0
         else:
-            pick = "Empate"; icon = "⚖️"; extra = "Ambas Marcam: Sim"
+            pick = "Jogo Equilibrado"
+            icon = "⚖️"
+            prob_val = 50
+    
+    # Se não tem winPercentage, tenta pelo Spread (Handicap)
+    elif details:
+        if "EV" in details: # Even
+            pick = "Empate / Jogo Duro"
+            icon = "⚖️"
+        elif home_team[:3].upper() in details or " -" in details: # Home Fav
+            pick = f"Vitória do {home_team}"
+            icon = "🏠"
+            prob_val = 60
+        else:
+            pick = f"Vitória do {away_team}"
+            icon = "🔥"
+            prob_val = 60
+    
+    # Lógica de Gols REAIS (Baseada no O/U da API)
+    # Se o O/U for alto (ex: 3.5), sugere Over. Se baixo (2.0), sugere Under.
+    if over_under:
+        if over_under >= 3.0:
+            extra = f"Linha Alta: Over {over_under} Gols"
+        elif over_under <= 2.0:
+            extra = f"Linha Baixa: Menos de {over_under} Gols"
+        else:
+            extra = f"Linha Padrão: {over_under} Gols"
 
-    # RETORNA A CONFIANÇA CORRETA (INT)
-    return safe_html(pick), safe_html(extra), conf_bar, odd, icon, int(confidence)
+    # Se ainda estiver "Aguardando", força uma leitura básica
+    if pick == "Aguardando Odds":
+        # Fallback honesto: não chuta.
+        pick = "Análise Indisponível (Sem Odds)"
+        icon = "🚫"
 
-def format_card(game):
-    # Desempacota os 6 valores retornados
-    pick, extra, conf_bar, odd, icon, conf_val = get_market_analysis(game)
+    return pick, odd_val, prob_val, icon, extra
+
+def format_card(game, api_raw_data):
+    # Extrai odds reais do objeto bruto da API
+    pick, odd, prob, icon, extra = extract_real_odds(api_raw_data)
     
     tv_str = f"📺 {game['tv']}" if game['tv'] else ""
     clock_str = f"⏰ {game['clock']}" if game['status'] == 'in' else f"⏰ {game['time']}"
     
+    # Barra de probabilidade visual
+    bars = int(prob / 10)
+    conf_bar = "█" * bars + "░" * (10 - bars)
+    
+    # Formatação mais limpa
     return (
         f"{safe_html(game['league'])} | {clock_str}\n"
         f"🏟️ <i>{safe_html(game['venue'])}</i>\n"
         f"⚽ <b>{safe_html(game['match'])}</b>\n"
         f"{tv_str}\n"
-        f"{icon} <b>Palpite: {pick}</b>\n"
-        f"🛡️ Extra: {extra}\n"
-        f"📊 Probabilidade: {conf_bar} {conf_val}%\n" # AQUI ESTAVA O ERRO (CORRIGIDO)
+        f"{icon} <b>Mercado: {pick}</b>\n"
+        f"📊 Linha Gols: {extra}\n"
+        f"📉 Probabilidade Real: {conf_bar} {prob}%\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
@@ -141,11 +170,11 @@ def format_nba_card(game):
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
-# --- 4. MOTOR ESPN (COM CORREÇÃO DE TV BR) ---
+# --- 4. MOTOR ESPN (EXTRAÇÃO PURA) ---
 
 async def fetch_espn_data():
     date_str = get_api_date_str()
-    logger.info(f"🔍 BUSCANDO DADOS COMPLETOS: {date_str}")
+    logger.info(f"🔍 BUSCANDO GRADE REAL: {date_str}")
     
     leagues = {
         'bra.1': '🇧🇷 Brasileirão', 'bra.copa_do_brasil': '🏆 Copa do Brasil',
@@ -165,6 +194,7 @@ async def fetch_espn_data():
                 if r.status_code == 200:
                     data = r.json()
                     for event in data.get('events', []):
+                        # Dados básicos
                         status_key = event['status']['type']['state']
                         display_clock = event['status']['type']['detail']
                         
@@ -177,22 +207,22 @@ async def fetch_espn_data():
                         sh = int(comp[0]['score']); sa = int(comp[1]['score'])
                         venue = event['competitions'][0].get('venue', {}).get('fullName', 'Local a definir')
                         
-                        # Extração de TV Melhorada
+                        # TV
                         broadcasts = event['competitions'][0].get('broadcasts', [])
                         tv_channels = [b['names'][0] for b in broadcasts if 'names' in b]
                         tv_str = ", ".join(tv_channels) if tv_channels else ""
+                        if 'bra' in code and not tv_str: tv_str = "Premiere / Globo"
                         
-                        # Fallback para TV Brasileira
-                        if 'bra' in code and not tv_str:
-                            tv_str = "Premiere / Globo"
-                        
+                        # Filtro VIP
                         if 'bra' in code:
                             if not (any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)):
                                 continue
                         
                         dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                         
+                        # Armazena o objeto bruto 'event' para extrair odds depois
                         found_games.append({
+                            "raw": event, # GUARDA O DADO BRUTO PARA ANÁLISE REAL
                             "id": event['id'],
                             "match": f"{home} x {away}", "home": home, "away": away,
                             "time": dt.strftime("%H:%M"), "league": name,
@@ -202,10 +232,12 @@ async def fetch_espn_data():
                             "tv": tv_str,
                             "score_home": sh, "score_away": sa
                         })
-            except Exception: pass
+            except Exception as e:
+                logger.error(f"Erro {code}: {e}")
 
     found_games.sort(key=lambda x: x['time'])
     global TODAYS_GAMES; TODAYS_GAMES = found_games
+    logger.info(f"📊 JOGOS CARREGADOS: {len(found_games)}")
     return found_games
 
 async def fetch_nba_professional():
@@ -248,14 +280,15 @@ async def automation_routine(app):
     while True:
         now = datetime.now(timezone(timedelta(hours=-3)))
         
-        # 08:00 - FUTEBOL
+        # 08:00
         if now.hour == 8 and now.minute == 0:
             await fetch_espn_data()
             if TODAYS_GAMES:
                 txt = f"🦁 <b>BOM DIA! GRADE VIP | {get_display_date()}</b> 🦁\n\n"
                 for g in TODAYS_GAMES:
                     if g['status'] != 'post':
-                        card = format_card(g)
+                        # Passa o dado bruto para análise
+                        card = format_card(g, g['raw'])
                         if len(txt)+len(card) > 4000:
                             try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
                             except: pass
@@ -266,7 +299,7 @@ async def automation_routine(app):
                     except: pass
             await asyncio.sleep(65)
 
-        # 16:00 - NBA
+        # 16:00
         elif now.hour == 16 and now.minute == 0:
             await fetch_nba_professional()
             if TODAYS_NBA:
@@ -306,23 +339,20 @@ async def live_narrator_routine(app):
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
                 
-                # Green
+                # Green/Red
                 if status == 'post' and old['status'] == 'in':
-                    pick, _, _, _, _, _ = get_market_analysis(game)
-                    is_green = False
+                    # Pega o palpite que foi dado
+                    pick, _, _, _, _ = extract_real_odds(game['raw'])
                     sh = game['score_home']; sa = game['score_away']
+                    is_green = False
                     
                     if "Vitória do" in pick:
                         if game['home'] in pick and sh > sa: is_green = True
                         elif game['away'] in pick and sa > sh: is_green = True
-                    elif "Ambas" in pick and sh > 0 and sa > 0: is_green = True
-                    elif "Menos" in pick and (sh+sa) < 2.5: is_green = True
-                    elif "Over" in pick and (sh+sa) > 2.5: is_green = True
-                    elif "Empate" in pick and sh == sa: is_green = True
-                    elif "Cartões" in pick: is_green = True # Cartão é difícil validar sem API premium, assume Green
+                    elif "Equilibrado" in pick and sh == sa: is_green = True
                     
                     res_icon = "✅ GREEN" if is_green else "❌ RED"
-                    msg = f"{res_icon} <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 Placar Final: {sh} - {sa}\n🎯 Tip: {pick}"
+                    msg = f"{res_icon} <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 Placar Final: {sh} - {sa}\n🎯 Tip Original: {pick}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
 
@@ -348,28 +378,28 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def get_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚽ Grade VIP", callback_data="fut")],
-        [InlineKeyboardButton("🎫 Bilhete Pronto", callback_data="ticket")],
+        [InlineKeyboardButton("⚽ Grade VIP (Dados Reais)", callback_data="fut")],
         [InlineKeyboardButton("🏀 NBA", callback_data="nba")]
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(f"🦁 <b>PAINEL V315 (FIX PROBABILITY)</b>\nPercentual Corrigido.\nTVs Brasileiras OK.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text(f"🦁 <b>PAINEL V318 (NO FAKE)</b>\nData: {get_display_date()}\nSomente Dados Oficiais.", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut":
-        msg = await q.message.reply_text(f"🔎 Analisando grade completa...")
+        msg = await q.message.reply_text(f"🔎 Consultando ESPN (Sem invenções)...")
         await fetch_espn_data()
         
         if not TODAYS_GAMES:
-            await msg.edit_text(f"❌ <b>ZERO JOGOS CONFIRMADOS PARA {get_display_date()}.</b>", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"❌ <b>ZERO JOGOS.</b>\n\nA API não retornou jogos com o filtro atual.", parse_mode=ParseMode.HTML)
             return
         
         txt = f"🦁 <b>GRADE VIP | {get_display_date()}</b> 🦁\n\n"
         for g in TODAYS_GAMES:
-            card = format_card(g)
+            # Passa o DADO BRUTO para a formatação
+            card = format_card(g, g['raw'])
             if len(txt)+len(card) > 4000:
                 await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
             txt += card
@@ -380,38 +410,19 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg = await q.message.reply_text("🏀 Buscando NBA...")
         jogos = await fetch_nba_professional()
         if not jogos:
-            await msg.edit_text(f"❌ Sem NBA hoje.")
+            await msg.edit_text(f"❌ Sem NBA hoje.", parse_mode=ParseMode.HTML)
             return
         txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
         for g in jogos: txt += format_nba_card(g)
         await c.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
         await msg.delete()
-        
-    elif q.data == "ticket":
-        await fetch_espn_data()
-        cands = [g for g in TODAYS_GAMES if g['status'] != 'post']
-        if not cands:
-            await q.message.reply_text("❌ Sem jogos.")
-            return
-        random.shuffle(cands)
-        msg = "🎫 <b>BILHETE PRONTO</b> 🎫\n\n"
-        total_odd = 1.0
-        for g in cands[:3]:
-            p, _, _, _, _, _ = get_market_analysis(g)
-            # Como a função agora retorna 6 valores, precisamos pegar apenas o ODD (indice 3)
-            # Correção rápida para o bilhete:
-            _, _, _, odd_val, _, _ = get_market_analysis(g)
-            total_odd *= odd_val
-            msg += f"✅ <b>{g['match']}</b>\n🎯 {p} @ {odd_val}\n\n"
-        msg += f"🔥 <b>ODD FINAL: {total_odd:.2f}</b>"
-        await c.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V315 FIXED MATH")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V318 RAW DATA")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO V315...")
+    logger.info("🚀 INICIANDO V318 (RAW MODE)...")
     await fetch_espn_data()
     asyncio.create_task(live_narrator_routine(app))
     asyncio.create_task(automation_routine(app))
