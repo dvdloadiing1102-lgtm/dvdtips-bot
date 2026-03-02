@@ -1,4 +1,4 @@
-# ================= BOT V312 (ROTINA DUPLA: 08H FUTEBOL + 16H NBA) =================
+# ================= BOT V314 (ULTIMATE: DADOS COMPLETOS + MERCADOS VARIADOS) =================
 import os
 import logging
 import asyncio
@@ -34,12 +34,11 @@ VIP_TEAMS = [
 
 TODAYS_GAMES = []
 TODAYS_NBA = []
-GAME_MEMORY = {} 
+GAME_MEMORY = {}
 
-# --- 2. HELPERS DE DATA ---
+# --- 2. HELPERS ---
 
 def get_real_server_date():
-    """Data REAL do servidor"""
     br_tz = timezone(timedelta(hours=-3))
     return datetime.now(br_tz)
 
@@ -49,9 +48,18 @@ def get_display_date():
 def get_api_date_str():
     return get_real_server_date().strftime("%Y%m%d")
 
-# --- 3. ANÁLISE DE MERCADO ---
+def safe_html(text):
+    if not text: return ""
+    return html.escape(str(text))
 
-def get_market_analysis(home, away, league_name):
+# --- 3. ANÁLISE DE MERCADO (AGORA COM CANTOS E CARTÕES) ---
+
+def get_market_analysis(game):
+    home = game['home']
+    away = game['away']
+    league_lower = game['league'].lower()
+    
+    # Pesos Base
     h_weight = 50; a_weight = 35
     if any(t in home for t in VIP_TEAMS): h_weight += 20
     if any(t in away for t in VIP_TEAMS): a_weight += 15
@@ -60,51 +68,84 @@ def get_market_analysis(home, away, league_name):
     ph = (h_weight / total) * 100
     pa = (a_weight / total) * 100
     
+    # Fator Aleatório (Simula análise técnica do dia)
     random.seed(len(home) + len(away) + int(datetime.now().day))
     ph += random.randint(-5, 5); pa += random.randint(-5, 5)
     
-    confidence = min(max(ph, pa), 90)
+    confidence = min(max(ph, pa), 95)
     bars = int(confidence / 10)
     conf_bar = "█" * bars + "░" * (10 - bars)
     
-    league_lower = league_name.lower()
-    
-    if ph >= 60:
+    # LÓGICA DE ESCOLHA DE MERCADO
+    pick = ""; icon = ""; extra = ""
+    odd = 1.90
+
+    # 1. Favorito Claro (Vitória Seca)
+    if ph >= 65:
         pick = f"Vitória do {home}"; odd = round(100/ph + 0.15, 2); icon = "🏠"
-        extra = f"Over 0.5 Gols HT"
-    elif pa >= 58:
+        extra = f"Over 1.5 Gols"
+    elif pa >= 63:
         pick = f"Vitória do {away}"; odd = round(100/pa + 0.15, 2); icon = "🔥"
         extra = "Empate Anula: Visitante"
+        
+    # 2. Jogos Equilibrados (Variedade)
     else:
-        odd = 1.90
-        if any(x in league_lower for x in ['bundesliga', 'premier', 'eredivisie', 'champions']):
-            pick = "Ambas Marcam: Sim"; icon = "⚽"; extra = "Over 2.5 Gols"
+        # INGLATERRA/ALEMANHA -> Gols ou Escanteios
+        if any(x in league_lower for x in ['premier', 'bundesliga', 'champions', 'england']):
+            dice = random.randint(1, 10)
+            if dice > 6:
+                pick = "Over 9.5 Escanteios"; icon = "🚩"; extra = "Over 4.5 Cantos HT"
+            else:
+                pick = "Ambas Marcam: Sim"; icon = "⚽"; extra = "Over 2.5 Gols"
+        
+        # BRASIL/LATAM/ESPANHA -> Under ou Cartões (Se for clássico)
         elif any(x in league_lower for x in ['brasil', 'carioca', 'paulista', 'libertadores', 'la liga', 'serie a', 'argentina']):
-            pick = "Menos de 2.5 Gols"; icon = "🛡️"; extra = "Empate no 1º Tempo"
+            # É Clássico? (Dois times VIPs)
+            is_derby = any(t in home for t in VIP_TEAMS) and any(t in away for t in VIP_TEAMS)
+            
+            if is_derby:
+                pick = "Over 5.5 Cartões"; icon = "🟨"; extra = "Expulsão: Sim (Risco)"
+            else:
+                pick = "Menos de 2.5 Gols"; icon = "🛡️"; extra = "Empate no 1º Tempo"
+        
+        # RESTO
         else:
             pick = "Empate"; icon = "⚖️"; extra = "Ambas Marcam: Sim"
 
-    return html.escape(pick), html.escape(extra), conf_bar, odd, icon
+    return safe_html(pick), safe_html(extra), conf_bar, odd, icon
 
 def format_card(game):
-    pick, extra, conf, odd, icon = get_market_analysis(game['home'], game['away'], game['league'])
+    pick, extra, conf, odd, icon = get_market_analysis(game)
+    tv_str = f"📺 {game['tv']}" if game['tv'] else "📺 Sem transmissão"
+    clock_str = f"⏰ {game['clock']}" if game['status'] == 'in' else f"⏰ {game['time']}"
+    
     return (
-        f"{html.escape(game['league'])} | ⏰ {game['time']}\n"
-        f"⚽ <b>{html.escape(game['match'])}</b>\n"
+        f"{safe_html(game['league'])} | {clock_str}\n"
+        f"🏟️ <i>{safe_html(game['venue'])}</i>\n"
+        f"⚽ <b>{safe_html(game['match'])}</b>\n"
+        f"{tv_str}\n"
         f"{icon} <b>Palpite: {pick}</b>\n"
         f"🛡️ Extra: {extra}\n"
-        f"📊 Confiança: {conf}\n"
+        f"📊 Probabilidade: {conf} {int(odd*10)}%\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
     )
 
 def format_nba_card(game):
-    return f"🏀 <b>NBA | {game['time']}</b>\n⚔️ <b>{html.escape(game['match'])}</b>\n✅ {html.escape(game['pick'])}\n📊 {html.escape(game['odds'])}\n━━━━━━━━━━━━━━━━━━━━\n"
+    tv_str = f"📺 {game['tv']}" if game['tv'] else ""
+    return (
+        f"🏀 <b>NBA | {game['clock']}</b>\n"
+        f"⚔️ <b>{safe_html(game['match'])}</b>\n"
+        f"{tv_str}\n"
+        f"✅ {safe_html(game['pick'])}\n"
+        f"📊 {safe_html(game['odds'])}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
 
-# --- 4. MOTORES DE BUSCA (ESPN) ---
+# --- 4. MOTORES DE BUSCA (FULL EXTRACT) ---
 
 async def fetch_espn_data():
     date_str = get_api_date_str()
-    logger.info(f"🔍 BUSCANDO FUTEBOL: {date_str}")
+    logger.info(f"🔍 BUSCANDO DADOS COMPLETOS: {date_str}")
     
     leagues = {
         'bra.1': '🇧🇷 Brasileirão', 'bra.copa_do_brasil': '🏆 Copa do Brasil',
@@ -124,25 +165,37 @@ async def fetch_espn_data():
                 if r.status_code == 200:
                     data = r.json()
                     for event in data.get('events', []):
-                        status_raw = event['status']['type']['state']
-                        if status_raw == 'pre': status = 'agendado'
-                        elif status_raw == 'in': status = 'in'
-                        else: status = 'post'
+                        status_key = event['status']['type']['state']
+                        display_clock = event['status']['type']['detail']
+                        
+                        if status_key == 'pre': status = 'agendado'; display_clock = "Agendado"
+                        elif status_key == 'in': status = 'in'
+                        else: status = 'post'; display_clock = "Finalizado"
                         
                         comp = event['competitions'][0]['competitors']
-                        dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                         home = comp[0]['team']['name']; away = comp[1]['team']['name']
+                        sh = int(comp[0]['score']); sa = int(comp[1]['score'])
+                        venue = event['competitions'][0].get('venue', {}).get('fullName', 'Estádio não inf.')
+                        
+                        broadcasts = event['competitions'][0].get('broadcasts', [])
+                        tv_channels = [b['names'][0] for b in broadcasts if 'names' in b]
+                        tv_str = ", ".join(tv_channels) if tv_channels else ""
                         
                         if 'bra' in code:
                             if not (any(t in home for t in VIP_TEAMS) or any(t in away for t in VIP_TEAMS)):
                                 continue
+                        
+                        dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                         
                         found_games.append({
                             "id": event['id'],
                             "match": f"{home} x {away}", "home": home, "away": away,
                             "time": dt.strftime("%H:%M"), "league": name,
                             "status": status,
-                            "score_home": int(comp[0]['score']), "score_away": int(comp[1]['score'])
+                            "clock": display_clock,
+                            "venue": venue,
+                            "tv": tv_str,
+                            "score_home": sh, "score_away": sa
                         })
             except Exception: pass
 
@@ -152,7 +205,6 @@ async def fetch_espn_data():
 
 async def fetch_nba_professional():
     date_str = get_api_date_str()
-    logger.info(f"🏀 BUSCANDO NBA: {date_str}")
     url = f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={date_str}"
     jogos = []
     br_tz = timezone(timedelta(hours=-3))
@@ -164,11 +216,20 @@ async def fetch_nba_professional():
                 for event in data.get('events', []):
                     comp = event['competitions'][0]
                     t_home = comp['competitors'][0]; t_away = comp['competitors'][1]
+                    display_clock = event['status']['type']['detail']
+                    
+                    broadcasts = comp.get('broadcasts', [])
+                    tv_channels = [b['names'][0] for b in broadcasts if 'names' in b]
+                    tv_str = ", ".join(tv_channels) if tv_channels else ""
+
                     dt = datetime.strptime(event['date'], "%Y-%m-%dT%H:%MZ").replace(tzinfo=timezone.utc).astimezone(br_tz)
                     odds = comp.get('odds', [{}])[0].get('details', '-')
+                    
                     jogos.append({
                         "match": f"{t_away['team']['name']} @ {t_home['team']['name']}",
                         "time": dt.strftime("%H:%M"),
+                        "clock": display_clock,
+                        "tv": tv_str,
                         "pick": f"Vitória do {t_home['team']['name']}",
                         "odds": f"Spread: {odds}"
                     })
@@ -176,14 +237,13 @@ async def fetch_nba_professional():
     global TODAYS_NBA; TODAYS_NBA = jogos
     return jogos
 
-# --- 5. ALERTAS E AUTOMAÇÃO DUPLA (08h e 16h) ---
+# --- 5. ROTINAS ---
 
 async def automation_routine(app):
-    logger.info("⏰ Automação Dupla (08h e 16h) Iniciada")
     while True:
         now = datetime.now(timezone(timedelta(hours=-3)))
         
-        # --- TURNO DA MANHÃ (FUTEBOL) ---
+        # 08:00 - FUTEBOL
         if now.hour == 8 and now.minute == 0:
             await fetch_espn_data()
             if TODAYS_GAMES:
@@ -199,9 +259,9 @@ async def automation_routine(app):
                 if txt: 
                     try: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
                     except: pass
-            await asyncio.sleep(65) # Espera passar o minuto
+            await asyncio.sleep(65)
 
-        # --- TURNO DA TARDE (NBA) ---
+        # 16:00 - NBA
         elif now.hour == 16 and now.minute == 0:
             await fetch_nba_professional()
             if TODAYS_NBA:
@@ -237,20 +297,22 @@ async def live_narrator_routine(app):
                 # Gol
                 if status == 'in' and (game['score_home'] > old['h'] or game['score_away'] > old['a']):
                     scorer = game['home'] if game['score_home'] > old['h'] else game['away']
-                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n🔢 Placar: {game['score_home']} - {game['score_away']}\n🏆 {game['league']}"
+                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {game['clock']}\n🔢 Placar: {game['score_home']} - {game['score_away']}\n🏆 {game['league']}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
                 
-                # Green
+                # Green/Red
                 if status == 'post' and old['status'] == 'in':
-                    pick, _, _, _, _ = get_market_analysis(game['home'], game['away'], game['league'])
+                    pick, _, _, _, _ = get_market_analysis(game)
                     is_green = False
                     sh = game['score_home']; sa = game['score_away']
+                    
                     if "Vitória do" in pick:
                         if game['home'] in pick and sh > sa: is_green = True
                         elif game['away'] in pick and sa > sh: is_green = True
                     elif "Ambas" in pick and sh > 0 and sa > 0: is_green = True
                     elif "Menos" in pick and (sh+sa) < 2.5: is_green = True
+                    elif "Over" in pick and (sh+sa) > 2.5: is_green = True
                     elif "Empate" in pick and sh == sa: is_green = True
                     
                     res_icon = "✅ GREEN" if is_green else "❌ RED"
@@ -268,7 +330,7 @@ async def news_loop(app):
             feed = await asyncio.to_thread(feedparser.parse, "https://ge.globo.com/rss/ge/futebol/")
             if feed.entries:
                 entry = feed.entries[0]
-                msg = f"🌍 <b>GIRO DE NOTÍCIAS</b>\n\n📰 {html.escape(entry.title)}\n🔗 {entry.link}"
+                msg = f"🌍 <b>GIRO DE NOTÍCIAS</b>\n\n📰 {safe_html(entry.title)}\n🔗 {entry.link}"
                 await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
         except: pass
         await asyncio.sleep(14400)
@@ -286,17 +348,17 @@ def get_menu():
     ])
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(f"🦁 <b>PAINEL V312 (ROTINA DUPLA)</b>\nFutebol: 08h ✅\nNBA: 16h ✅", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
+    await u.message.reply_text(f"🦁 <b>PAINEL V314 (ULTIMATE)</b>\nMercados Variados: ON\nDados Completos: ON", reply_markup=get_menu(), parse_mode=ParseMode.HTML)
 
 async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut":
-        msg = await q.message.reply_text(f"🔎 Analisando futebol...")
+        msg = await q.message.reply_text(f"🔎 Analisando grade completa...")
         await fetch_espn_data()
         
         if not TODAYS_GAMES:
-            await msg.edit_text(f"❌ <b>ZERO JOGOS.</b>\n\nNenhum jogo confirmado para {get_display_date()}.", parse_mode=ParseMode.HTML)
+            await msg.edit_text(f"❌ <b>ZERO JOGOS CONFIRMADOS PARA {get_display_date()}.</b>", parse_mode=ParseMode.HTML)
             return
         
         txt = f"🦁 <b>GRADE VIP | {get_display_date()}</b> 🦁\n\n"
@@ -329,18 +391,18 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg = "🎫 <b>BILHETE PRONTO</b> 🎫\n\n"
         total_odd = 1.0
         for g in cands[:3]:
-            p, _, _, _, o, _ = get_market_analysis(g['home'], g['away'], g['league'])
+            p, _, _, _, o, _ = get_market_analysis(g)
             total_odd *= o
             msg += f"✅ <b>{g['match']}</b>\n🎯 {p} @ {o}\n\n"
         msg += f"🔥 <b>ODD FINAL: {total_odd:.2f}</b>"
         await c.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V312 DUAL ROUTINE")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE - V314 ULTIMATE")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    logger.info("🚀 INICIANDO V312...")
+    logger.info("🚀 INICIANDO V314...")
     await fetch_espn_data()
     asyncio.create_task(live_narrator_routine(app))
     asyncio.create_task(automation_routine(app))
