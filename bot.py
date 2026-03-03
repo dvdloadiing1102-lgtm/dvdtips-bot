@@ -1,4 +1,4 @@
-# ================= BOT V335 (O RESGATE DA V327 + ALERTAS SEGUROS) =================
+# ================= BOT V336 (AUDITADA: GRADE FORÇADA + TODAS AUTOMAÇÕES + LOGS) =================
 import os
 import logging
 import asyncio
@@ -8,7 +8,6 @@ import random
 from datetime import datetime, timezone, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-# Importações Seguras
 try:
     import httpx
     import feedparser
@@ -29,16 +28,17 @@ PORT = int(os.getenv("PORT", 10000))
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- VARIÁVEIS GLOBAIS (CACHE) ---
+# --- VARIÁVEIS GLOBAIS ---
 TODAYS_GAMES = []
 TODAYS_NBA = []
 TODAYS_UFC = []
 ALERT_MEMORY = {}
 
-# --- 2. HELPERS MATEMÁTICOS (DA V327 - FUNCIONANDO) ---
+# --- 2. HELPERS MATEMÁTICOS ---
 
 def american_to_decimal(american_str):
     try:
+        if "EV" in str(american_str).upper(): return 2.00
         val = float(american_str)
         if val == 0: return 1.0
         if val < 0: return round((100 / abs(val)) + 1, 2)
@@ -78,7 +78,6 @@ def parse_odds_string(details_str, home_name, away_name):
             if "-" in number_str: return f"Favorito: {abbr}", odd_decimal, "🔥", True
             return pick, odd_decimal, icon, False
 
-        # SE TIVER MENOS (-), É FAVORITO
         if "-" in number_str:
             pick = f"Vitória do {team_focused}"
             icon = "🏠" if type_team == "HOME" else "🔥"
@@ -117,13 +116,11 @@ def format_ufc_card(fight):
 def format_nba_card(game):
     return f"🏀 <b>NBA | {game['clock']}</b>\n⚔️ <b>{safe_html(game['match'])}</b>\n{game['tv']}\n✅ {safe_html(game['pick'])}\n📊 Spread: {safe_html(game['odds'])}\n━━━━━━━━━━━━━━━━━━━━\n"
 
-# --- 4. MOTORES DE BUSCA (A VOLTA DO MODO V327) ---
+# --- 4. MOTORES DE BUSCA (FORÇA BRUTA) ---
 
 async def fetch_espn_soccer():
     global TODAYS_GAMES
     date_str = get_api_date_str()
-    print(f"🔄 BUSCANDO FUTEBOL NA API PARA: {date_str}") # Log no console
-    
     leagues = {'bra.1': '🇧🇷 Brasileirão', 'uefa.champions': '🇪🇺 UCL', 'eng.1': '🇬🇧 Premier', 'esp.1': '🇪🇸 La Liga', 'ita.1': '🇮🇹 Serie A', 'ger.1': '🇩🇪 Bundesliga', 'bra.copa_do_brasil': '🏆 Copa BR'}
     found_games = []
     br_tz = timezone(timedelta(hours=-3))
@@ -160,12 +157,10 @@ async def fetch_espn_soccer():
 
     found_games.sort(key=lambda x: x['time'])
     TODAYS_GAMES = found_games
-    print(f"✅ FUTEBOL ENCONTRADO: {len(TODAYS_GAMES)} JOGOS") # Log
     return found_games
 
 async def fetch_espn_ufc():
     global TODAYS_UFC
-    print("🔄 BUSCANDO UFC...")
     ufc_list = []
     br_tz = timezone(timedelta(hours=-3))
     try:
@@ -182,11 +177,10 @@ async def fetch_espn_ufc():
                             "red": red, "blue": blue, "time": dt.strftime("%d/%m %H:%M"),
                             "venue": comp.get('venue', {}).get('fullName', '-'),
                             "card": comp.get('card', 'main'), "title": comp.get('type', {}).get('slug') == 'title-fight',
-                            "red_odds": "-200", "blue_odds": "+150" # Placeholder, API as vezes falha odd
+                            "red_odds": "-200", "blue_odds": "+150"
                         })
     except: pass
     TODAYS_UFC = ufc_list
-    print(f"✅ UFC ENCONTRADO: {len(TODAYS_UFC)} LUTAS")
     return ufc_list
 
 async def fetch_espn_nba():
@@ -217,51 +211,98 @@ async def fetch_espn_nba():
     TODAYS_NBA = nba_list
     return nba_list
 
-# --- 5. LOOP DE ALERTAS (NARRADOR) - INDEPENDENTE ---
+# --- 5. O CÉREBRO: ALERTAS E AUTOMAÇÕES (UNIFICADO) ---
 
-async def alert_loop(app):
-    print("🎙️ SISTEMA DE ALERTAS INICIADO (SEGUNDO PLANO)")
+async def master_automation_loop(app):
+    print("🤖 MASTER LOOP ATIVADO: Vigiando Gols e Horários...")
     global ALERT_MEMORY
+    
     while True:
-        await asyncio.sleep(60) # Checa a cada minuto
+        await asyncio.sleep(60) # Checa a cada 1 minuto exato
         try:
-            # Não faz fetch aqui se a lista já estiver populada recentemente, ou faz fetch silencioso
-            # Para garantir, usamos fetch silencioso
-            games = await fetch_espn_soccer() 
+            # 1. ATUALIZA DADOS
+            games = await fetch_espn_soccer()
+            now = datetime.now(timezone(timedelta(hours=-3)))
             
+            # ==========================================
+            # AQUI ESTÃO OS ALERTAS AO VIVO (GOL E GREEN)
+            # ==========================================
             for game in games:
                 gid = game['id']; status = game['status']
                 sh = game['score_home']; sa = game['score_away']
+                clock = game['clock']
                 
                 if gid not in ALERT_MEMORY:
                     ALERT_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
                     continue
                 old = ALERT_MEMORY[gid]
                 
-                # GOL
+                # --- GATILHO: GOL ---
                 if status == 'in' and (sh > old['h'] or sa > old['a']):
                     scorer = game['home'] if sh > old['h'] else game['away']
-                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {game['clock']}\n🔢 {sh} - {sa}"
+                    print(f"🚨 [ALERTA] GOL DETECTADO: {scorer} ({sh}-{sa})") # Vai aparecer no Log
+                    msg = f"⚽ <b>GOOOOOOL DO {scorer.upper()}!</b>\n\n🏟️ {game['match']}\n⏱️ {clock}\n🔢 {sh} - {sa}"
                     try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                     except: pass
                 
-                # GREEN/RED
+                # --- GATILHO: ALERTA DE PRESSÃO (Oportunidade) ---
+                if status == 'in' and ("7" in clock or "8" in clock) and 'alerted' not in old:
+                    # Se o jogo estiver empatado no fim, ele avisa
+                    if sh == sa:
+                        print(f"🔥 [ALERTA] PRESSÃO DETECTADA NO JOGO: {game['match']}") # Vai aparecer no Log
+                        msg = f"🔥 <b>ALERTA DE PRESSÃO!</b>\n\n🏟️ {game['match']}\n⏱️ {clock} | Empate!\n💡 <i>Fique atento para gol no final!</i>"
+                        try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
+                        except: pass
+                        old['alerted'] = True
+                
+                # --- GATILHO: GREEN / RED ---
                 if status == 'post' and old['status'] == 'in':
                     odds_list = game['raw']['competitions'][0].get('odds', [])
                     details = odds_list[0].get('details', '-') if odds_list else '-'
                     pick, _, _, is_fav = parse_odds_string(details, game['home'], game['away'])
                     if is_fav:
+                        print(f"✅ [ALERTA] FIM DE JOGO: {game['match']}") # Vai aparecer no Log
                         msg = f"🏁 <b>FINALIZADO</b>\n\n⚽ {game['match']}\n🔢 {sh} - {sa}\n🎯 Pick: {pick}"
                         try: await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
                         except: pass
                 
-                ALERT_MEMORY[gid] = {'h': sh, 'a': sa, 'status': status}
+                # Salva o novo placar na memória
+                old['h'] = sh; old['a'] = sa; old['status'] = status
+                ALERT_MEMORY[gid] = old
+
+            # ==========================================
+            # AQUI ESTÃO AS AUTOMAÇÕES DE HORÁRIO FIXO
+            # ==========================================
+            
+            # GATILHO 08:00 -> Manda a Grade de Futebol no Canal
+            if now.hour == 8 and now.minute == 0:
+                print("⏰ [AUTOMAÇÃO] DISPARANDO GRADE DAS 08:00...") # Vai aparecer no Log
+                if TODAYS_GAMES:
+                    txt = f"🦁 <b>BOM DIA! GRADE VIP | {get_display_date()}</b> 🦁\n\n"
+                    for g in TODAYS_GAMES:
+                        card = format_card(g, g['raw'])
+                        if len(txt)+len(card) > 4000:
+                            await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML); txt = ""
+                        txt += card
+                    if txt: await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+
+            # GATILHO 16:00 -> Manda a Grade da NBA no Canal
+            if now.hour == 16 and now.minute == 0:
+                print("⏰ [AUTOMAÇÃO] DISPARANDO NBA DAS 16:00...") # Vai aparecer no Log
+                await fetch_espn_nba()
+                if TODAYS_NBA:
+                    txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
+                    for g in TODAYS_NBA: txt += format_nba_card(g)
+                    await app.bot.send_message(CHANNEL_ID, txt, parse_mode=ParseMode.HTML)
+
         except Exception as e:
-            print(f"⚠️ Erro no Alerta: {e}")
+            print(f"⚠️ ERRO NO MASTER LOOP: {e}")
 
 async def news_loop(app):
+    print("📰 LOOP DE NOTÍCIAS ATIVADO")
     while True:
-        await asyncio.sleep(14400) # 4h
+        await asyncio.sleep(14400) # De 4 em 4 horas
+        print("📰 [AUTOMAÇÃO] BUSCANDO NOTÍCIAS DO GE...")
         try:
             feed = await asyncio.to_thread(feedparser.parse, "https://ge.globo.com/rss/ge/futebol/")
             if feed.entries:
@@ -270,10 +311,10 @@ async def news_loop(app):
                 await app.bot.send_message(CHANNEL_ID, msg, parse_mode=ParseMode.HTML)
         except: pass
 
-# --- 6. MENU (O SEGREDO DA V335) ---
+# --- 6. MENU INTERATIVO ---
 
 async def start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text("🦁 <b>PAINEL V335 (HÍBRIDO REAL)</b>\nSe a grade não aparecer, clique de novo que ele força a busca.", reply_markup=InlineKeyboardMarkup([
+    await u.message.reply_text("🦁 <b>PAINEL V336 (AUDITADA)</b>\nTudo Ativo. Logs no Servidor habilitados.", reply_markup=InlineKeyboardMarkup([
         [InlineKeyboardButton("⚽ Grade VIP", callback_data="fut"), InlineKeyboardButton("🥊 UFC", callback_data="ufc")],
         [InlineKeyboardButton("🎫 Bilhete", callback_data="ticket"), InlineKeyboardButton("🏀 NBA", callback_data="nba")]
     ]), parse_mode=ParseMode.HTML)
@@ -282,13 +323,12 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
     q = u.callback_query; await q.answer()
     
     if q.data == "fut":
-        # ESTRATÉGIA V335: SE ESTIVER VAZIO, BUSCA AGORA!
-        if not TODAYS_GAMES:
-            await q.message.reply_text("🔄 Buscando jogos na ESPN...")
-            await fetch_espn_soccer()
+        # Na V336, se você apertar, ele sempre atualiza na hora. Zero choro.
+        await q.message.reply_text("🔄 Buscando jogos na ESPN agora...")
+        await fetch_espn_soccer()
         
         if not TODAYS_GAMES:
-            await q.message.reply_text("❌ A ESPN não retornou jogos para hoje.")
+            await q.message.reply_text("❌ A API da ESPN não retornou jogos para hoje.")
             return
 
         txt = f"🦁 <b>GRADE VIP | {get_display_date()}</b> 🦁\n\n"
@@ -301,9 +341,10 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.message.delete()
 
     elif q.data == "ufc":
-        if not TODAYS_UFC: await fetch_espn_ufc()
+        await q.message.reply_text("🔄 Buscando Lutas...")
+        await fetch_espn_ufc()
         if not TODAYS_UFC:
-            await q.message.reply_text("❌ Sem UFC hoje.")
+            await q.message.reply_text("❌ Sem UFC hoje na API.")
             return
         txt = "🥊 <b>CARD UFC</b>\n\n"
         for f in TODAYS_UFC: txt += format_ufc_card(f)
@@ -311,7 +352,11 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await q.message.delete()
 
     elif q.data == "nba":
-        if not TODAYS_NBA: await fetch_espn_nba()
+        await q.message.reply_text("🔄 Buscando NBA...")
+        await fetch_espn_nba()
+        if not TODAYS_NBA:
+            await q.message.reply_text("❌ Sem NBA na API.")
+            return
         txt = f"🏀 <b>NBA | {get_display_date()}</b>\n\n"
         for g in TODAYS_NBA: txt += format_nba_card(g)
         await c.bot.send_message(q.message.chat_id, txt, parse_mode=ParseMode.HTML)
@@ -328,7 +373,7 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
             if fav and 1.20 <= o <= 2.20: valid.append({'m': g['match'], 'p': p, 'o': o})
         
         if len(valid) < 2:
-            await q.message.reply_text("❌ Jogos insuficientes.")
+            await q.message.reply_text("❌ Jogos seguros insuficientes para gerar a múltipla.")
             return
         random.shuffle(valid)
         msg = "🎫 <b>BILHETE DE OURO</b> 🎫\n\n"
@@ -339,15 +384,15 @@ async def menu(u: Update, c: ContextTypes.DEFAULT_TYPE):
         msg += f"🔥 <b>TOTAL: {t:.2f}</b>"
         await c.bot.send_message(q.message.chat_id, msg, parse_mode=ParseMode.HTML)
 
-# --- SERVER ---
+# --- SERVER PARA O RENDER ---
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE V335")
+    def do_GET(self): self.send_response(200); self.wfile.write(b"ONLINE V336")
 def run_server(): HTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 
 async def post_init(app: Application):
-    print("🚀 BOT INICIADO!")
-    # Inicia loops em background
-    asyncio.create_task(alert_loop(app))
+    print("🚀 BOT V336 INICIADO!")
+    # Dá a partida no motor de alertas e automações
+    asyncio.create_task(master_automation_loop(app))
     asyncio.create_task(news_loop(app))
 
 def main():
